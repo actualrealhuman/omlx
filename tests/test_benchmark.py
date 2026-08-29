@@ -1356,289 +1356,36 @@ class TestUploadModelName:
 
 class TestUploadToOmlxAi:
     @pytest.mark.asyncio
-    async def test_upload_success(self):
-        """Test successful upload sends correct SSE events."""
+    async def test_upload_is_disabled(self):
+        """Community results stay local and the UI receives a terminal skip event."""
         from omlx.admin.benchmark import _upload_to_omlx_ai
 
+        flags = [{"key": "dflash", "label": "DFlash"}]
         run = BenchmarkRun(
             bench_id="test-bench",
             request=BenchmarkRequest(
                 model_id="Qwen3-30B-4bit",
                 prompt_lengths=[1024],
             ),
+            feature_flags=flags,
         )
-        run.results = [
-            {
-                "test_type": "single",
-                "pp": 1024,
-                "tg": 128,
-                "processing_tps": 500.0,
-                "gen_tps": 50.0,
-                "ttft_ms": 100.0,
-                "peak_memory_bytes": 8 * 1024**3,
-            },
-        ]
-
-        mock_entry = MagicMock()
-        mock_entry.model_path = "/models/Qwen3-30B-4bit"
         mock_pool = MagicMock()
-        mock_pool.get_entry.return_value = mock_entry
-        mock_pool._settings_manager = None
 
-        mock_response = MagicMock()
-        mock_response.status_code = 201
-        mock_response.json.return_value = {
-            "id": "abc12345",
-            "url": "https://omlx.ai/benchmarks/abc12345",
-        }
-
-        mock_to_thread = AsyncMock(return_value=mock_response)
-
-        with patch("asyncio.to_thread", mock_to_thread):
+        with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
             await _upload_to_omlx_ai(run, mock_pool)
 
-        # Collect all events from the replay log.
-        events = list(run.events)
-
-        # Should have: progress, upload, upload_done
-        event_types = [e["type"] for e in events]
-        assert "progress" in event_types
-        assert "upload" in event_types
-        assert "upload_done" in event_types
-
-        upload_event = next(e for e in events if e["type"] == "upload")
-        assert upload_event["data"]["context_length"] == 1024
-        assert upload_event["data"]["id"] == "abc12345"
-
-        done_event = next(e for e in events if e["type"] == "upload_done")
-        assert done_event["data"]["success"] == 1
-        assert done_event["data"]["failed"] == 0
-
-    @pytest.mark.asyncio
-    async def test_upload_duplicate(self):
-        """Test 409 duplicate response is handled as success."""
-        from omlx.admin.benchmark import _upload_to_omlx_ai
-
-        run = BenchmarkRun(
-            bench_id="test-bench",
-            request=BenchmarkRequest(
-                model_id="Qwen3-30B-4bit",
-                prompt_lengths=[1024],
-            ),
-        )
-        run.results = [
+        mock_to_thread.assert_not_awaited()
+        assert mock_pool.mock_calls == []
+        assert run.upload_state["phase"] == "skipped"
+        assert run.upload_state["skipped_reason"] == "disabled"
+        assert run.events == [
             {
-                "test_type": "single",
-                "pp": 1024,
-                "tg": 128,
-                "processing_tps": 500.0,
-                "gen_tps": 50.0,
-                "ttft_ms": 100.0,
-                "peak_memory_bytes": 0,
-            },
+                "type": "upload_skipped",
+                "reason": "disabled",
+                "features": flags,
+            }
         ]
-
-        mock_entry = MagicMock()
-        mock_entry.model_path = "/models/Qwen3-30B-4bit"
-        mock_pool = MagicMock()
-        mock_pool.get_entry.return_value = mock_entry
-        mock_pool._settings_manager = None
-
-        mock_response = MagicMock()
-        mock_response.status_code = 409
-        mock_response.json.return_value = {
-            "error": "Duplicate",
-            "existing_id": "xyz789",
-            "existing_url": "https://omlx.ai/benchmarks/xyz789",
-        }
-
-        mock_to_thread = AsyncMock(return_value=mock_response)
-
-        with patch("asyncio.to_thread", mock_to_thread):
-            await _upload_to_omlx_ai(run, mock_pool)
-
-        events = list(run.events)
-
-        upload_event = next(e for e in events if e["type"] == "upload")
-        assert upload_event["data"]["duplicate"] is True
-        assert upload_event["data"]["id"] == "xyz789"
-
-        done_event = next(e for e in events if e["type"] == "upload_done")
-        assert done_event["data"]["success"] == 1
-
-    @pytest.mark.asyncio
-    async def test_upload_skips_unmeasurable_generation_results(self):
-        """Rows without a measured decode rate are not uploaded."""
-        from omlx.admin.benchmark import _upload_to_omlx_ai
-
-        run = BenchmarkRun(
-            bench_id="test-bench",
-            request=BenchmarkRequest(
-                model_id="Qwen3-30B-4bit",
-                prompt_lengths=[1024, 8192],
-            ),
-        )
-        run.results = [
-            {
-                "test_type": "single",
-                "pp": 1024,
-                "tg": 128,
-                "processing_tps": 500.0,
-                "gen_tps": 0.0,
-                "ttft_ms": 100.0,
-                "peak_memory_bytes": 0,
-            },
-            {
-                "test_type": "single",
-                "pp": 8192,
-                "tg": 128,
-                "processing_tps": 500.0,
-                "gen_tps": 50.0,
-                "ttft_ms": 500.0,
-                "peak_memory_bytes": 0,
-            },
-        ]
-
-        mock_entry = MagicMock()
-        mock_entry.model_path = "/models/Qwen3-30B-4bit"
-        mock_pool = MagicMock()
-        mock_pool.get_entry.return_value = mock_entry
-        mock_pool._settings_manager = None
-
-        mock_response = MagicMock()
-        mock_response.status_code = 201
-        mock_response.json.return_value = {
-            "id": "abc12345",
-            "url": "https://omlx.ai/benchmarks/abc12345",
-        }
-        mock_to_thread = AsyncMock(return_value=mock_response)
-
-        with patch("asyncio.to_thread", mock_to_thread):
-            await _upload_to_omlx_ai(run, mock_pool)
-
-        assert mock_to_thread.await_count == 1
-
-        upload_events = [e for e in run.events if e["type"] == "upload"]
-        assert [e["data"]["context_length"] for e in upload_events] == [8192]
-
-        done_event = next(e for e in run.events if e["type"] == "upload_done")
-        assert done_event["data"]["total"] == 1
-        assert done_event["data"]["success"] == 1
-        assert done_event["data"]["failed"] == 0
-        assert done_event["data"]["skipped"] == 1
-
-    @pytest.mark.asyncio
-    async def test_upload_proceeds_when_acceleration_is_active(self):
-        """Accelerated runs upload too, carrying their flags."""
-        from omlx.admin.benchmark import _upload_to_omlx_ai
-
-        run = BenchmarkRun(
-            bench_id="test-bench",
-            request=BenchmarkRequest(
-                model_id="Qwen3-30B-4bit",
-                prompt_lengths=[1024],
-            ),
-            experimental_features=["dflash", "turboquant"],
-            feature_flags=[
-                {"key": "dflash", "label": "DFlash"},
-                {"key": "turboquant_kv_4bit", "label": "TurboQuant KV 4-bit"},
-            ],
-            model_settings_snapshot={"dflash_enabled": True},
-        )
-        run.results = [
-            {
-                "test_type": "single",
-                "pp": 1024,
-                "tg": 128,
-                "processing_tps": 500.0,
-                "gen_tps": 50.0,
-                "ttft_ms": 100.0,
-                "peak_memory_bytes": 8 * 1024**3,
-                "system_metrics": {"sample_count": 4, "interval_s": 1.0},
-            },
-        ]
-
-        mock_entry = MagicMock()
-        mock_entry.model_path = "/models/Qwen3-30B-4bit"
-        mock_pool = MagicMock()
-        mock_pool.get_entry.return_value = mock_entry
-        mock_pool._settings_manager = None
-
-        mock_response = MagicMock()
-        mock_response.status_code = 201
-        mock_response.json.return_value = {"id": "abc", "url": "https://omlx.ai/b/abc"}
-        mock_to_thread = AsyncMock(return_value=mock_response)
-
-        with patch("asyncio.to_thread", mock_to_thread):
-            await _upload_to_omlx_ai(run, mock_pool)
-
-        mock_to_thread.assert_awaited_once()
-        payload = mock_to_thread.await_args.kwargs["json"]
-        assert payload["feature_flags"] == [
-            {"key": "dflash", "label": "DFlash"},
-            {"key": "turboquant_kv_4bit", "label": "TurboQuant KV 4-bit"},
-        ]
-        assert payload["context_profile"] == "code_python"
-        assert payload["model_settings"] == {
-            "benchmark_context": "Code (Python)",
-            "dflash_enabled": True,
-        }
-        assert payload["system_metrics"] == {"sample_count": 4, "interval_s": 1.0}
-
-        event_types = [e["type"] for e in run.events]
-        assert "upload_done" in event_types
-        assert "upload_skipped" not in event_types
-        assert run.upload_state["phase"] == "done"
-        assert run.upload_state["feature_flags"] == run.feature_flags
-
-    @pytest.mark.asyncio
-    async def test_payload_carries_new_fields_when_unaccelerated(self):
-        """A plain run still sends the new keys, with empty/None values."""
-        from omlx.admin.benchmark import _upload_to_omlx_ai
-
-        run = BenchmarkRun(
-            bench_id="test-bench",
-            request=BenchmarkRequest(
-                model_id="qwen3.6-35b-a3b-8bit-mlx",
-                prompt_lengths=[1024],
-            ),
-        )
-        run.results = [
-            {
-                "test_type": "single",
-                "pp": 1024,
-                "tg": 128,
-                "processing_tps": 500.0,
-                "gen_tps": 50.0,
-                "ttft_ms": 100.0,
-                "peak_memory_bytes": 8 * 1024**3,
-            },
-        ]
-
-        mock_entry = MagicMock()
-        mock_entry.model_path = "/models/qwen3.6-35b-a3b-8bit-mlx"
-        mock_pool = MagicMock()
-        mock_pool.get_entry.return_value = mock_entry
-        mock_pool._settings_manager = None
-
-        mock_response = MagicMock()
-        mock_response.status_code = 201
-        mock_response.json.return_value = {"id": "abc", "url": "https://omlx.ai/b/abc"}
-        mock_to_thread = AsyncMock(return_value=mock_response)
-
-        with patch("asyncio.to_thread", mock_to_thread):
-            await _upload_to_omlx_ai(run, mock_pool)
-
-        payload = mock_to_thread.await_args.kwargs["json"]
-        # The full id reaches the leaderboard, suffixes intact.
-        assert payload["model_name"] == "qwen3.6-35b-a3b-8bit-mlx"
-        assert payload["feature_flags"] == []
-        assert payload["context_profile"] == "code_python"
-        assert payload["model_settings"] == {"benchmark_context": "Code (Python)"}
-        # Null rather than a zero-filled object, so the site does not average
-        # fabricated measurements.
-        assert payload["system_metrics"] is None
-        assert "peak_footprint_gb" in payload
+        assert run.terminal is True
 
 
 _CF_INTERSTITIAL = (
