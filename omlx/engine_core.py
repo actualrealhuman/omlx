@@ -540,6 +540,7 @@ class EngineCore:
         vlm_image_hash: Optional[str] = None,
         vlm_cache_key_start: int = 0,
         vlm_cache_key_ranges: Optional[List[Tuple[int, str]]] = None,
+        cache_inspection_media: tuple[dict[str, Any], ...] = (),
         specprefill: Optional[bool] = None,
         specprefill_keep_pct: Optional[float] = None,
         specprefill_threshold: Optional[int] = None,
@@ -574,6 +575,10 @@ class EngineCore:
         if sampling_params is None:
             sampling_params = SamplingParams()
 
+        if vlm_extra_kwargs and "_cache_inspection_media" in vlm_extra_kwargs:
+            vlm_extra_kwargs = dict(vlm_extra_kwargs)
+            cache_inspection_media = vlm_extra_kwargs.pop("_cache_inspection_media")
+
         request = Request(
             request_id=request_id,
             prompt=prompt,
@@ -586,6 +591,7 @@ class EngineCore:
             vlm_image_hash=vlm_image_hash,
             vlm_cache_key_start=vlm_cache_key_start,
             vlm_cache_key_ranges=vlm_cache_key_ranges,
+            cache_inspection_media=cache_inspection_media,
             skip_cache_store=skip_cache_store,
             benchmark_trace=benchmark_trace,
             benchmark_ane_sequence_length=benchmark_ane_sequence_length,
