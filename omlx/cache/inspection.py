@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Any
 
 FORMAT_VERSION = 1
-RENDERER_VERSION = 1
+RENDERER_VERSION = 2
 
 
 def display_text(value: str) -> str:
@@ -175,10 +175,19 @@ class InspectionRenderer:
         }
         with self._lock:
             body = self._body(block.token_ids)
+        # Model identifiers are labels, not decoded content. Keep the header
+        # on one line even if an identifier contains whitespace or controls.
+        model_label = (
+            display_text(self.model_name).replace("\n", "\\n").replace("\t", "\\t")
+        )
         lines = [
-            "oMLX cache inspection — annotated, lossy (renderer v1)",
+            f"oMLX cache inspection — annotated, lossy (renderer v{RENDERER_VERSION})",
+            f"Model: {model_label}",
             f"Block: {block_hash.hex()}",
+            f"Parent block: {block.parent_hash or 'none (root)'}",
+            f"Tokens in this block: {len(block.token_ids)}",
             f"Token range: [{block.token_start}, {block.token_start + len(block.token_ids)})",
+            "Token positions are zero-based; start is inclusive, end is exclusive.",
             "⟦…⟧ marks oMLX annotations; literal delimiters and controls are escaped.",
             "Block boundaries may split characters; .tokens contains the exact IDs.",
         ]

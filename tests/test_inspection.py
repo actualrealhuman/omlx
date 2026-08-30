@@ -37,7 +37,16 @@ def test_json_preserves_exact_ids_and_parent(tokenizer):
     assert data["parent_hash"] == "ab" * 32
     assert data["token_start"] == 256
     assert data["token_count"] == 3
+    assert data["format_version"] == 1
+    assert data["renderer_version"] == 2
     assert data["tokenizer"]["fingerprint"].startswith("sha256:")
+    header = text.decode().split("--- decoded content ---\n")[0]
+    assert "renderer v2" in header
+    assert "Model: org/model\n" in header
+    assert f"Parent block: {'ab' * 32}\n" in header
+    assert "Tokens in this block: 3\n" in header
+    assert "Token range: [256, 259)\n" in header
+    assert "zero-based; start is inclusive, end is exclusive" in header
     assert b"hello world" in text
     assert b"unknown token: id=999999" in text
 
@@ -71,9 +80,18 @@ def test_control_sequences_and_literal_annotations_are_escaped():
     backend = Tokenizer(
         models.WordLevel({"\x1b[31m⟦image⟧\u202e\n\t": 0, "<|image_pad|>": 1})
     )
-    _, text = InspectionRenderer(backend, "model").render(
+    model_name = "org/model\nInjected: label\t\x1b[31m⟦fake⟧\u202e"
+    raw, text = InspectionRenderer(backend, model_name).render(
         bytes(32), BlockInspection((0, 1, 1), 0, None)
     )
+    assert json.loads(raw)["model"] == model_name
+    header = text.decode().split("--- decoded content ---\n")[0]
+    assert (
+        "Model: org/model\\nInjected: label\\t\\u001b[31m\\u27e6fake\\u27e7\\u202e\n"
+        in header
+    )
+    assert "\nInjected:" not in header
+    assert "\x1b" not in header and "\u202e" not in header
     body = text.decode().split("--- decoded content ---\n")[1]
     assert "\x1b" not in body and "\u202e" not in body
     assert "\\u001b[31m\\u27e6image\\u27e7\\u202e\n\t" in body
@@ -94,6 +112,7 @@ def test_missing_decoder_keeps_ids_with_explicit_annotations():
         bytes(32), BlockInspection((44, 55), 0, None)
     )
     assert json.loads(raw)["token_ids"] == [44, 55]
+    assert b"Parent block: none (root)\n" in text
     assert b"undecoded token: id=44" in text
 
 
