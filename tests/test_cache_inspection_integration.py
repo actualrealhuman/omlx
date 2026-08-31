@@ -136,11 +136,34 @@ async def test_engine_removes_transport_metadata_from_model_kwargs(
             engine.scheduler.add_request = MagicMock()
             media = ({"kind": "image", "key_start": 0},)
             original = {"_cache_inspection_media": media, "position_ids": "retained"}
-            await engine.add_request([1, 2], vlm_extra_kwargs=original)
+            # Preserve the pre-existing positional arguments after the VLM
+            # fields when adding optional inspection metadata to this API.
+            await engine.add_request(
+                [1, 2],
+                None,  # sampling_params
+                None,  # request_id
+                None,  # images
+                None,  # videos
+                None,  # vlm_inputs_embeds
+                original,
+                None,  # vlm_image_hash
+                0,  # vlm_cache_key_start
+                None,  # vlm_cache_key_ranges
+                True,  # specprefill
+                0.75,  # specprefill_keep_pct
+                0.5,  # specprefill_threshold
+                1,  # specprefill_system_end
+                True,  # skip_cache_store
+            )
             request = engine.scheduler.add_request.call_args.args[0]
             assert request.cache_inspection_media == media
             assert request.vlm_extra_kwargs == {"position_ids": "retained"}
             assert "_cache_inspection_media" in original
+            assert request._specprefill_enabled is True
+            assert request._specprefill_keep_pct == 0.75
+            assert request._specprefill_threshold == 0.5
+            assert request.specprefill_system_end == 1
+            assert request.skip_cache_store is True
         finally:
             engine.close()
 

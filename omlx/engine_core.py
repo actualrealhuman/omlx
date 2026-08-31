@@ -540,7 +540,6 @@ class EngineCore:
         vlm_image_hash: Optional[str] = None,
         vlm_cache_key_start: int = 0,
         vlm_cache_key_ranges: Optional[List[Tuple[int, str]]] = None,
-        cache_inspection_media: tuple[dict[str, Any], ...] = (),
         specprefill: Optional[bool] = None,
         specprefill_keep_pct: Optional[float] = None,
         specprefill_threshold: Optional[int] = None,
@@ -549,6 +548,7 @@ class EngineCore:
         benchmark_trace: bool = False,
         benchmark_ane_sequence_length: int = 0,
         tools: list[dict[str, Any]] | None = None,
+        cache_inspection_media: tuple[dict[str, Any], ...] = (),
     ) -> str:
         """
         Add a request for processing.
