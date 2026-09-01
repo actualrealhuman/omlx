@@ -9,6 +9,7 @@ This module provides HTTP routes for the admin panel including:
 """
 
 import asyncio
+import copy
 import inspect
 import json
 import logging
@@ -260,6 +261,28 @@ class GlobalSettingsRequest(BaseModel):
     preserve_mid_system_cache: bool | None = None
     distributed_inference_enabled: bool | None = None
     max_audio_upload_size: str | None = None
+
+    # Battery-aware inference power management
+    power_enabled: bool | None = None
+    power_charge_floor_percent: float | None = None
+    power_recovery_hysteresis_percent: float | None = None
+    power_target_charge_watts: float | None = None
+    power_ac_stabilization_seconds: float | None = None
+    power_sample_interval_seconds: float | None = None
+    power_notification_poll_interval_seconds: float | None = None
+    power_telemetry_stale_seconds: float | None = None
+    power_charge_filter_seconds: float | None = None
+    power_charge_deadband_watts: float | None = None
+    power_charge_deadband_min_watts: float | None = None
+    power_charge_deadband_max_watts: float | None = None
+    power_reduction_confirmation_seconds: float | None = None
+    power_restoration_confirmation_seconds: float | None = None
+    power_duty_reduction_step: float | None = None
+    power_duty_restoration_step: float | None = None
+    power_duty_cycle_period_seconds: float | None = None
+    power_paused_probe_duty: float | None = None
+    power_paused_probe_interval_seconds: float | None = None
+    power_max_cooperative_pause_latency_seconds: float | None = None
 
     # Model settings
     model_dirs: list[str] | None = None
@@ -3578,6 +3601,19 @@ async def get_global_settings(is_admin: bool = Depends(require_admin)):
             ),
             "max_audio_upload_size": global_settings.server.max_audio_upload_size,
         },
+        "power": {
+            **global_settings.power.to_dict(),
+            "effective_chunked_prefill": bool(
+                global_settings.scheduler.chunked_prefill
+                or global_settings.power.enabled
+            ),
+            "status": (
+                asdict(server_state.power_manager.status())
+                if server_state is not None
+                and getattr(server_state, "power_manager", None) is not None
+                else None
+            ),
+        },
         "model": {
             "model_dirs": [
                 str(d)
@@ -3742,6 +3778,8 @@ async def update_global_settings(
     runtime_applied: list[str] = []
     pending_embedding_batch_size: int | None = None
     previous_embedding_batch_size: int | None = None
+    power_changed = False
+    previous_power_settings = copy.copy(global_settings.power)
 
     # Apply server settings
     if request.host is not None:
@@ -3865,6 +3903,43 @@ async def update_global_settings(
         global_settings.server.server_aliases = cleaned
         runtime_applied.append("server_aliases")
 
+    power_fields = {
+        "power_enabled": "enabled",
+        "power_charge_floor_percent": "charge_floor_percent",
+        "power_recovery_hysteresis_percent": "recovery_hysteresis_percent",
+        "power_target_charge_watts": "target_charge_watts",
+        "power_ac_stabilization_seconds": "ac_stabilization_seconds",
+        "power_sample_interval_seconds": "sample_interval_seconds",
+        "power_notification_poll_interval_seconds": (
+            "notification_poll_interval_seconds"
+        ),
+        "power_telemetry_stale_seconds": "telemetry_stale_seconds",
+        "power_charge_filter_seconds": "charge_filter_seconds",
+        "power_charge_deadband_watts": "charge_deadband_watts",
+        "power_charge_deadband_min_watts": "charge_deadband_min_watts",
+        "power_charge_deadband_max_watts": "charge_deadband_max_watts",
+        "power_reduction_confirmation_seconds": "reduction_confirmation_seconds",
+        "power_restoration_confirmation_seconds": (
+            "restoration_confirmation_seconds"
+        ),
+        "power_duty_reduction_step": "duty_reduction_step",
+        "power_duty_restoration_step": "duty_restoration_step",
+        "power_duty_cycle_period_seconds": "duty_cycle_period_seconds",
+        "power_paused_probe_duty": "paused_probe_duty",
+        "power_paused_probe_interval_seconds": "paused_probe_interval_seconds",
+        "power_max_cooperative_pause_latency_seconds": (
+            "max_cooperative_pause_latency_seconds"
+        ),
+    }
+    for request_field, setting_field in power_fields.items():
+        if request_field not in request.model_fields_set:
+            continue
+        value = getattr(request, request_field)
+        if value is None and request_field != "power_charge_deadband_watts":
+            continue
+        setattr(global_settings.power, setting_field, value)
+        power_changed = True
+
     # Apply model settings
     new_dirs = None
     if request.model_dirs is not None:
@@ -3957,13 +4032,16 @@ async def update_global_settings(
         global_settings.scheduler.chunked_prefill = request.chunked_prefill
         from ..server import _server_state
 
+        effective_chunked_prefill = bool(
+            request.chunked_prefill or global_settings.power.enabled
+        )
         pool = _server_state.engine_pool
         if pool is not None:
             # Engines loaded from now on build their Scheduler from the
             # pool's stored config (same gap as prefill_priority had).
             pool_config = getattr(pool, "_scheduler_config", None)
             if pool_config is not None:
-                pool_config.chunked_prefill = request.chunked_prefill
+                pool_config.chunked_prefill = effective_chunked_prefill
             for mid, entry in pool._entries.items():
                 if entry is None or entry.engine is None:
                     continue
@@ -3977,7 +4055,7 @@ async def update_global_settings(
                     getattr(core, "scheduler", None) if core is not None else None
                 )
                 if scheduler is not None and hasattr(scheduler, "config"):
-                    scheduler.config.chunked_prefill = request.chunked_prefill
+                    scheduler.config.chunked_prefill = effective_chunked_prefill
         runtime_applied.append("chunked_prefill")
         logger.info(
             f"Chunked prefill {'enabled' if request.chunked_prefill else 'disabled'}"
@@ -4606,6 +4684,8 @@ async def update_global_settings(
             global_settings.scheduler.embedding_batch_size = (
                 previous_embedding_batch_size
             )
+        if power_changed:
+            global_settings.power = previous_power_settings
         raise HTTPException(status_code=400, detail=errors)
 
     # Persist to file
@@ -4616,7 +4696,32 @@ async def update_global_settings(
             global_settings.scheduler.embedding_batch_size = (
                 previous_embedding_batch_size
             )
+        if power_changed:
+            global_settings.power = previous_power_settings
         raise HTTPException(status_code=500, detail=f"Failed to save settings: {e}")
+
+    if power_changed:
+        from ..server import _server_state
+
+        manager = _server_state.power_manager
+        if manager is not None:
+            manager.apply_settings(global_settings.power)
+        effective_chunked_prefill = bool(
+            global_settings.scheduler.chunked_prefill
+            or global_settings.power.enabled
+        )
+        pool = _server_state.engine_pool
+        if pool is not None:
+            pool_config = getattr(pool, "_scheduler_config", None)
+            if pool_config is not None:
+                pool_config.chunked_prefill = effective_chunked_prefill
+            for entry in pool._entries.values():
+                async_core = getattr(getattr(entry, "engine", None), "_engine", None)
+                core = getattr(async_core, "engine", None)
+                scheduler = getattr(core, "scheduler", None)
+                if scheduler is not None and hasattr(scheduler, "config"):
+                    scheduler.config.chunked_prefill = effective_chunked_prefill
+        runtime_applied.append("power")
 
     if pending_embedding_batch_size is not None:
         from ..server import _server_state

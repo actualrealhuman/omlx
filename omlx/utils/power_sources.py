@@ -23,6 +23,7 @@ PowerSource = Literal["ac", "battery", "ups", "unknown"]
 
 _CF_STRING_ENCODING_UTF8 = 0x08000100
 _CF_NUMBER_SINT64_TYPE = 4
+_POWER_SOURCE_NOTIFY_KEY = b"com.apple.system.powersources.source"
 
 
 @dataclass(frozen=True)
@@ -415,6 +416,58 @@ class PowerSourceReader:
             ),
             adapter_watts=adapter_watts,
         )
+
+
+class PowerSourceChangeNotifier:
+    """Cheap edge detector for the public IOPowerSources notification key.
+
+    Darwin's ``notify(3)`` check API is intentionally polled: it carries no
+    Python callback across a C thread boundary and sampling still reconciles
+    periodically in case a notification is coalesced.
+    """
+
+    def __init__(self) -> None:
+        self._lib: ctypes.CDLL | None = None
+        self._token = ctypes.c_int(-1)
+        if sys.platform != "darwin":
+            return
+        try:
+            lib = ctypes.CDLL("/usr/lib/system/libsystem_notify.dylib")
+            lib.notify_register_check.argtypes = [
+                ctypes.c_char_p,
+                ctypes.POINTER(ctypes.c_int),
+            ]
+            lib.notify_register_check.restype = ctypes.c_uint32
+            lib.notify_check.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_int)]
+            lib.notify_check.restype = ctypes.c_uint32
+            lib.notify_cancel.argtypes = [ctypes.c_int]
+            lib.notify_cancel.restype = ctypes.c_uint32
+            if lib.notify_register_check(
+                _POWER_SOURCE_NOTIFY_KEY, ctypes.byref(self._token)
+            ) == 0:
+                self._lib = lib
+        except (AttributeError, OSError):
+            self._lib = None
+            self._token.value = -1
+
+    @property
+    def available(self) -> bool:
+        return self._lib is not None and self._token.value >= 0
+
+    def changed(self) -> bool:
+        lib = self._lib
+        if lib is None or self._token.value < 0:
+            return False
+        state = ctypes.c_int(0)
+        if lib.notify_check(self._token.value, ctypes.byref(state)) != 0:
+            return False
+        return state.value != 0
+
+    def close(self) -> None:
+        lib, self._lib = self._lib, None
+        token, self._token.value = self._token.value, -1
+        if lib is not None and token >= 0:
+            lib.notify_cancel(token)
 
 
 def _main() -> int:

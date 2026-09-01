@@ -48,7 +48,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Optional, Union
@@ -262,6 +262,7 @@ class ServerState:
     hf_downloader: Optional[object] = None  # HFDownloader
     ms_downloader: Optional[object] = None  # MSDownloader
     process_memory_enforcer: Optional[object] = None  # ProcessMemoryEnforcer
+    power_manager: Optional[object] = None  # BatteryPowerManager
     responses_store: ResponseStore = field(default_factory=ResponseStore)
     oq_manager: Optional[object] = None  # OQManager
     hf_uploader: Optional[object] = None  # HFUploader
@@ -421,6 +422,15 @@ async def lifespan(app: FastAPI):
             logger.warning("Server alias auto-detection failed: %s", exc)
 
     _reset_boundary_snapshots_for_server()
+
+    # Start battery policy before any pinned-model preload can submit inference
+    # work. Unsupported platforms degrade to an open gate.
+    if _server_state.global_settings is not None:
+        from .power_management import BatteryPowerManager
+
+        power_manager = BatteryPowerManager(_server_state.global_settings.power)
+        _server_state.power_manager = power_manager
+        power_manager.start()
 
     # Publish the interpreter another Mac's coordinator discovers over SSH.
     # Without it a packaged-app peer fails every discovery candidate and gets
@@ -597,6 +607,10 @@ async def lifespan(app: FastAPI):
         await _server_state.engine_pool.shutdown()
         _reset_boundary_snapshots_for_server()
         logger.info("Engine pool shutdown")
+    if _server_state.power_manager is not None:
+        await _server_state.power_manager.stop()
+        _server_state.power_manager = None
+        logger.info("Battery power manager stopped")
 
 
 app = FastAPI(
@@ -2506,11 +2520,15 @@ async def health(response: Response):
     loading = not _server_state.pinned_preload_complete
     if loading:
         response.status_code = 503
+    power_status = None
+    if _server_state.power_manager is not None:
+        power_status = asdict(_server_state.power_manager.status())
     return {
         "status": "loading" if loading else "healthy",
         "default_model": _server_state.default_model,
         "engine_pool": pool_status,
         "mcp": mcp_info,
+        "power": power_status,
     }
 
 

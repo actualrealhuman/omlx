@@ -25,6 +25,7 @@ from omlx.settings import (
     MemorySettings,
     ModelSettings,
     NetworkSettings,
+    PowerManagementSettings,
     SamplingSettings,
     SchedulerSettings,
     ServerSettings,
@@ -193,6 +194,44 @@ class TestServerSettings:
         assert settings.port == 9000
         assert settings.log_level == "info"  # default
         assert settings.cors_origins == ["*"]  # default
+
+
+class TestPowerManagementSettings:
+    def test_defaults_are_safe_and_individually_serialized(self):
+        settings = PowerManagementSettings()
+
+        assert settings.enabled is True
+        assert settings.battery_behavior == "pause"
+        assert settings.target_charge_watts == 10.0
+        assert settings.ac_stabilization_seconds == 8.0
+        assert settings.charge_deadband_watts is None
+        assert settings.to_dict()["duty_restoration_step"] == 0.05
+
+    def test_global_settings_round_trip(self, tmp_path):
+        settings = GlobalSettings(base_path=tmp_path)
+        settings.power.charge_floor_percent = 31.5
+        settings.power.target_charge_watts = 12.0
+        settings.power.charge_deadband_watts = 2.25
+        # Directory discovery imports optional MLX model detectors; persistence
+        # itself is independent and is the behavior under test here.
+        with patch.object(GlobalSettings, "ensure_directories"):
+            settings.save()
+
+        restored = GlobalSettings.load(base_path=tmp_path)
+
+        assert restored.power.charge_floor_percent == 31.5
+        assert restored.power.target_charge_watts == 12.0
+        assert restored.power.charge_deadband_watts == 2.25
+
+    def test_power_management_forces_effective_chunked_prefill(self):
+        settings = GlobalSettings()
+        settings.scheduler.chunked_prefill = False
+        settings.power.enabled = True
+
+        assert settings.to_scheduler_config().chunked_prefill is True
+
+        settings.power.enabled = False
+        assert settings.to_scheduler_config().chunked_prefill is False
 
 
 class TestBurstDecodeEnv:

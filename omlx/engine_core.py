@@ -42,6 +42,7 @@ from .exceptions import (
 )
 from .model_registry import get_registry
 from .output_collector import RequestOutputCollector, RequestStreamState
+from .power_management import get_process_inference_gate
 from .request import Request, RequestOutput, SamplingParams
 from .scheduler import Scheduler, SchedulerConfig, _sync_and_clear_cache
 from .utils.fatal import FATAL_TEARDOWN_TIMEOUT_S, fatal_exit
@@ -180,6 +181,9 @@ class EngineConfig:
     step_interval: float = 0.05  # Idle wait timeout; requests wake the loop
     stream_interval: int = 1  # Tokens to batch before streaming (1=every token)
     prefill_eviction_callback: Optional[Callable[[Any], Awaitable[bool]]] = None
+    # Process-wide cooperative pause gate. None selects the server singleton;
+    # tests and embedding applications may inject an isolated gate.
+    inference_gate: Any | None = None
     # Decode burst: run several scheduler.step() calls per run_in_executor
     # hand-off instead of one. Each decode token otherwise bounces back to the
     # event loop, ping-ponging the GIL with the asyncio loop + uvicorn on the
@@ -243,6 +247,9 @@ class EngineCore:
         self.model = model
         self.tokenizer = tokenizer
         self.config = config or EngineConfig()
+        self._inference_gate = (
+            self.config.inference_gate or get_process_inference_gate()
+        )
         self._engine_id = engine_id or str(uuid.uuid4())
         self._owns_model = False
         self._closed = False
@@ -364,6 +371,10 @@ class EngineCore:
 
         Runs on the MLX executor thread. Returns the SchedulerOutputs in order.
         """
+        gate = self._inference_gate
+        if gate.is_paused():
+            return []
+
         max_steps = self.config.decode_burst_max_steps
         outputs = [self.scheduler.step()]
         if max_steps <= 1:
@@ -387,6 +398,7 @@ class EngineCore:
                 or not self.scheduler.has_requests()
                 or last.prefill_eviction_request is not None
                 or time.monotonic() >= deadline
+                or gate.is_paused()
             ):
                 break
             outputs.append(self.scheduler.step())
@@ -415,9 +427,20 @@ class EngineCore:
                     self._reap_orphaned_collectors(now)
 
                 if self.scheduler.has_requests():
+                    # Preserve every request and all scheduler/KV state while
+                    # battery policy is closed. The manager wakes this waiter
+                    # directly on AC restoration; no MLX executor is occupied.
+                    await self._inference_gate.wait_until_resumed()
+                    if not self._running:
+                        continue
                     step_outputs = await loop.run_in_executor(
                         self._mlx_executor, self._step_burst
                     )
+                    # The source can change between the async gate check and
+                    # executor dispatch. In that race _step_burst declines to
+                    # submit a scheduler step and we simply re-enter the gate.
+                    if not step_outputs:
+                        continue
                     self._steps_executed += len(step_outputs)
 
                     # Distribute every step's outputs to collectors (one or
