@@ -283,6 +283,7 @@ class GlobalSettingsRequest(BaseModel):
     power_paused_probe_duty: float | None = None
     power_paused_probe_interval_seconds: float | None = None
     power_max_cooperative_pause_latency_seconds: float | None = None
+    power_prefill_pause_fallback_tokens: int | None = None
 
     # Model settings
     model_dirs: list[str] | None = None
@@ -3747,6 +3748,19 @@ async def get_global_settings(is_admin: bool = Depends(require_admin)):
     }
 
 
+@router.get("/api/power-status")
+async def get_power_status(is_admin: bool = Depends(require_admin)):
+    """Return the lightweight live battery-policy status for the settings UI."""
+
+    server_state = _get_server_state() if _get_server_state is not None else None
+    manager = (
+        getattr(server_state, "power_manager", None)
+        if server_state is not None
+        else None
+    )
+    return asdict(manager.status()) if manager is not None else None
+
+
 @router.post("/api/global-settings")
 async def update_global_settings(
     request: GlobalSettingsRequest,
@@ -3930,6 +3944,7 @@ async def update_global_settings(
         "power_max_cooperative_pause_latency_seconds": (
             "max_cooperative_pause_latency_seconds"
         ),
+        "power_prefill_pause_fallback_tokens": "prefill_pause_fallback_tokens",
     }
     for request_field, setting_field in power_fields.items():
         if request_field not in request.model_fields_set:
@@ -4710,17 +4725,37 @@ async def update_global_settings(
             global_settings.scheduler.chunked_prefill
             or global_settings.power.enabled
         )
+        cooperative_pause_latency = (
+            global_settings.power.max_cooperative_pause_latency_seconds
+            if global_settings.power.enabled
+            else None
+        )
+        cooperative_fallback_tokens = (
+            global_settings.power.prefill_pause_fallback_tokens
+        )
         pool = _server_state.engine_pool
         if pool is not None:
             pool_config = getattr(pool, "_scheduler_config", None)
             if pool_config is not None:
                 pool_config.chunked_prefill = effective_chunked_prefill
+                pool_config.cooperative_pause_latency_seconds = (
+                    cooperative_pause_latency
+                )
+                pool_config.cooperative_prefill_fallback_tokens = (
+                    cooperative_fallback_tokens
+                )
             for entry in pool._entries.values():
                 async_core = getattr(getattr(entry, "engine", None), "_engine", None)
                 core = getattr(async_core, "engine", None)
                 scheduler = getattr(core, "scheduler", None)
                 if scheduler is not None and hasattr(scheduler, "config"):
                     scheduler.config.chunked_prefill = effective_chunked_prefill
+                    scheduler.config.cooperative_pause_latency_seconds = (
+                        cooperative_pause_latency
+                    )
+                    scheduler.config.cooperative_prefill_fallback_tokens = (
+                        cooperative_fallback_tokens
+                    )
         runtime_applied.append("power")
 
     if pending_embedding_batch_size is not None:

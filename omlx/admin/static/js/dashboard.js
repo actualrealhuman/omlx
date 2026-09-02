@@ -122,6 +122,7 @@
             globalSettings: {
                 base_path: '',
                 server: { host: '127.0.0.1', port: 8000, log_level: 'info', sse_keepalive_mode: 'chunk', burst_decode_mode: 'balanced', preserve_mid_system_cache: true, distributed_inference_enabled: false, distributed_inference_active: false, max_audio_upload_size: '100MB' },
+                power: { enabled: true, battery_behavior: 'pause', charge_floor_percent: 50, recovery_hysteresis_percent: 2, target_charge_watts: 10, ac_stabilization_seconds: 8, sample_interval_seconds: 0.25, notification_poll_interval_seconds: 0.05, telemetry_stale_seconds: 2, charge_filter_seconds: 2, charge_deadband_watts: null, charge_deadband_min_watts: 1, charge_deadband_max_watts: 5, reduction_confirmation_seconds: 0.5, restoration_confirmation_seconds: 3, duty_reduction_step: 0.2, duty_restoration_step: 0.05, duty_cycle_period_seconds: 2, paused_probe_duty: 0.05, paused_probe_interval_seconds: 10, max_cooperative_pause_latency_seconds: 0.25, prefill_pause_fallback_tokens: 128, effective_chunked_prefill: true, status: null },
                 model: { model_dirs: [''], model_fallback: false, hide_helper_models: false },
                 memory: { prefill_memory_guard: true, memory_guard_tier: 'balanced', memory_guard_custom_ceiling_gb: 0 },
                 scheduler: { max_concurrent_requests: 8, embedding_batch_size: 32, chunked_prefill: false, prefill_priority: 'context', decode_fairness: true },
@@ -894,12 +895,15 @@
                     if (document.hidden) {
                         this.stopStatsRefresh();
                         this.stopClusterRefresh();
+                        this.stopPowerStatusRefresh();
                     } else if (this.mainTab === 'status') {
                         this.loadStats();
                         this.startStatsRefresh();
                     } else if (this.mainTab === 'cluster') {
                         this.refreshClusterExperience();
                         this.startClusterRefresh();
+                    } else if (this.mainTab === 'settings') {
+                        this.startPowerStatusRefresh();
                     }
                 });
             },
@@ -916,6 +920,12 @@
                     this.startLogRefresh();
                 } else {
                     this.stopLogRefresh();
+                }
+                if (value === 'settings') {
+                    await this.loadPowerStatus();
+                    this.startPowerStatusRefresh();
+                } else {
+                    this.stopPowerStatusRefresh();
                 }
                 if (value === 'models') {
                     const loads = [this.loadHFModels(), this.loadHFTasks(), this.loadOQTasks()];
@@ -6597,6 +6607,7 @@
                             ...this.globalSettings,
                             ...data,
                             server: { ...this.globalSettings.server, ...data.server },
+                            power: { ...this.globalSettings.power, ...data.power },
                             model: { ...this.globalSettings.model, ...data.model, model_dirs: modelDirs },
                             memory: { ...this.globalSettings.memory, ...data.memory },
                             scheduler: { ...this.globalSettings.scheduler, ...data.scheduler },
@@ -6655,6 +6666,35 @@
                 }
             },
 
+            async loadPowerStatus() {
+                try {
+                    const response = await fetch('/admin/api/power-status');
+                    if (response.ok) {
+                        const status = await response.json();
+                        this.globalSettings.power = {
+                            ...this.globalSettings.power,
+                            status,
+                        };
+                    }
+                } catch (err) {
+                    console.error('Failed to load power status:', err);
+                }
+            },
+
+            startPowerStatusRefresh() {
+                this.stopPowerStatusRefresh();
+                this._powerStatusTimer = setInterval(() => {
+                    this.loadPowerStatus();
+                }, 500);
+            },
+
+            stopPowerStatusRefresh() {
+                if (this._powerStatusTimer) {
+                    clearInterval(this._powerStatusTimer);
+                    this._powerStatusTimer = null;
+                }
+            },
+
             async saveGlobalSettings() {
                 this.saving = true;
                 this.saveSuccess = false;
@@ -6709,6 +6749,27 @@
                             preserve_mid_system_cache: this.globalSettings.server.preserve_mid_system_cache,
                             distributed_inference_enabled: this.globalSettings.server.distributed_inference_enabled,
                             max_audio_upload_size: this.globalSettings.server.max_audio_upload_size,
+                            power_enabled: this.globalSettings.power.enabled,
+                            power_charge_floor_percent: this.globalSettings.power.charge_floor_percent,
+                            power_recovery_hysteresis_percent: this.globalSettings.power.recovery_hysteresis_percent,
+                            power_target_charge_watts: this.globalSettings.power.target_charge_watts,
+                            power_ac_stabilization_seconds: this.globalSettings.power.ac_stabilization_seconds,
+                            power_sample_interval_seconds: this.globalSettings.power.sample_interval_seconds,
+                            power_notification_poll_interval_seconds: this.globalSettings.power.notification_poll_interval_seconds,
+                            power_telemetry_stale_seconds: this.globalSettings.power.telemetry_stale_seconds,
+                            power_charge_filter_seconds: this.globalSettings.power.charge_filter_seconds,
+                            power_charge_deadband_watts: this.globalSettings.power.charge_deadband_watts,
+                            power_charge_deadband_min_watts: this.globalSettings.power.charge_deadband_min_watts,
+                            power_charge_deadband_max_watts: this.globalSettings.power.charge_deadband_max_watts,
+                            power_reduction_confirmation_seconds: this.globalSettings.power.reduction_confirmation_seconds,
+                            power_restoration_confirmation_seconds: this.globalSettings.power.restoration_confirmation_seconds,
+                            power_duty_reduction_step: this.globalSettings.power.duty_reduction_step,
+                            power_duty_restoration_step: this.globalSettings.power.duty_restoration_step,
+                            power_duty_cycle_period_seconds: this.globalSettings.power.duty_cycle_period_seconds,
+                            power_paused_probe_duty: this.globalSettings.power.paused_probe_duty,
+                            power_paused_probe_interval_seconds: this.globalSettings.power.paused_probe_interval_seconds,
+                            power_max_cooperative_pause_latency_seconds: this.globalSettings.power.max_cooperative_pause_latency_seconds,
+                            power_prefill_pause_fallback_tokens: this.globalSettings.power.prefill_pause_fallback_tokens,
                             model_dirs: this.globalSettings.model.model_dirs.filter(d => d.trim()),
                             model_fallback: this.globalSettings.model.model_fallback,
                             hide_helper_models: this.globalSettings.model.hide_helper_models,
