@@ -223,7 +223,7 @@ class PowerManagementSettings:
 
     enabled: bool = True
     battery_behavior: Literal["pause"] = "pause"
-    charge_floor_percent: float = 20.0
+    charge_floor_percent: float = 50.0
     recovery_hysteresis_percent: float = 2.0
     target_charge_watts: float = 10.0
     ac_stabilization_seconds: float = 8.0
@@ -242,6 +242,7 @@ class PowerManagementSettings:
     paused_probe_duty: float = 0.05
     paused_probe_interval_seconds: float = 10.0
     max_cooperative_pause_latency_seconds: float = 0.25
+    prefill_pause_fallback_tokens: int = 128
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -254,7 +255,7 @@ class PowerManagementSettings:
         return cls(
             enabled=bool(data.get("enabled", True)),
             battery_behavior=behavior,
-            charge_floor_percent=float(data.get("charge_floor_percent", 20.0)),
+            charge_floor_percent=float(data.get("charge_floor_percent", 50.0)),
             recovery_hysteresis_percent=float(
                 data.get("recovery_hysteresis_percent", 2.0)
             ),
@@ -298,6 +299,9 @@ class PowerManagementSettings:
             ),
             max_cooperative_pause_latency_seconds=float(
                 data.get("max_cooperative_pause_latency_seconds", 0.25)
+            ),
+            prefill_pause_fallback_tokens=int(
+                data.get("prefill_pause_fallback_tokens", 128)
             ),
         )
 
@@ -1677,6 +1681,8 @@ class GlobalSettings:
         ):
             if float(getattr(self.power, name)) <= 0.0:
                 errors.append(f"power.{name} must be positive")
+        if self.power.prefill_pause_fallback_tokens <= 0:
+            errors.append("power.prefill_pause_fallback_tokens must be positive")
         if (
             self.power.charge_deadband_watts is not None
             and self.power.charge_deadband_watts < 0.0
@@ -1860,6 +1866,14 @@ class GlobalSettings:
             # chunks. Preserve the user's scheduler preference while forcing
             # the effective runtime value on whenever power management is on.
             chunked_prefill=(self.scheduler.chunked_prefill or self.power.enabled),
+            cooperative_pause_latency_seconds=(
+                self.power.max_cooperative_pause_latency_seconds
+                if self.power.enabled
+                else None
+            ),
+            cooperative_prefill_fallback_tokens=(
+                self.power.prefill_pause_fallback_tokens
+            ),
             prefill_speed_priority=(self.scheduler.prefill_priority == "speed"),
             decode_fairness=self.scheduler.decode_fairness,
             initial_cache_blocks=self.cache.initial_cache_blocks,

@@ -202,10 +202,12 @@ class TestPowerManagementSettings:
 
         assert settings.enabled is True
         assert settings.battery_behavior == "pause"
+        assert settings.charge_floor_percent == 50.0
         assert settings.target_charge_watts == 10.0
         assert settings.ac_stabilization_seconds == 8.0
         assert settings.charge_deadband_watts is None
         assert settings.to_dict()["duty_restoration_step"] == 0.05
+        assert settings.to_dict()["prefill_pause_fallback_tokens"] == 128
 
     def test_global_settings_round_trip(self, tmp_path):
         settings = GlobalSettings(base_path=tmp_path)
@@ -229,9 +231,18 @@ class TestPowerManagementSettings:
         settings.power.enabled = True
 
         assert settings.to_scheduler_config().chunked_prefill is True
+        assert (
+            settings.to_scheduler_config().cooperative_pause_latency_seconds
+            == 0.25
+        )
+        assert (
+            settings.to_scheduler_config().cooperative_prefill_fallback_tokens
+            == 128
+        )
 
         settings.power.enabled = False
         assert settings.to_scheduler_config().chunked_prefill is False
+        assert settings.to_scheduler_config().cooperative_pause_latency_seconds is None
 
 
 class TestBurstDecodeEnv:

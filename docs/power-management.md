@@ -10,6 +10,7 @@ When AC power is available and charge is below a configurable floor, oMLX may
 pace inference to preserve a configurable minimum net battery charging rate.
 Every numeric policy value is persisted and hot-applicable. Values that can be
 derived at runtime support both automatic selection and a fixed user override.
+The version-one default charge floor is **50%**.
 
 ## Version-one policy
 
@@ -97,7 +98,8 @@ Behavioral settings include:
 - charge-rate filtering, deadband, and confirmation windows;
 - duty reduction and restoration limits;
 - paused probe size and interval; and
-- maximum cooperative pause latency / prefill chunk-duration target.
+- maximum cooperative pause latency / prefill chunk-duration target; and
+- the conservative initial prefill token cap used before throughput is known.
 
 Automatic values are bounded by documented minimum and maximum settings. User
 overrides replace one derived value without disabling unrelated auto-tuning.
@@ -119,6 +121,8 @@ that power-source telemetry is intrinsically slow.
 
 Before enabling control, a read-only probe records telemetry cadence and the
 latency from a power-source event to completion of the current work quantum.
+The live policy status also reports the most recently observed interval from a
+pause request to the first inference boundary that acknowledged it.
 Validation covers:
 
 - starting on battery;

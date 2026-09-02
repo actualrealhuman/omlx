@@ -17,6 +17,7 @@ import concurrent.futures
 import gc
 import logging
 import os
+import threading
 import time
 import uuid
 from contextlib import suppress
@@ -281,6 +282,9 @@ class EngineCore:
             config=scheduler_config,
             stream=self._mlx_stream,
         )
+        self._inference_stop_event = threading.Event()
+        self.scheduler._inference_gate = self._inference_gate
+        self.scheduler._inference_stop_event = self._inference_stop_event
 
         # Output collectors for low-latency streaming (vLLM pattern)
         self._output_collectors: Dict[str, RequestOutputCollector] = {}
@@ -316,6 +320,7 @@ class EngineCore:
 
         self._loop = asyncio.get_running_loop()
         self._wake_event = asyncio.Event()
+        self._inference_stop_event.clear()
         self._running = True
         self._start_time = time.time()
         self._task = asyncio.create_task(self._engine_loop())
@@ -324,6 +329,7 @@ class EngineCore:
     async def stop(self) -> None:
         """Stop the engine loop."""
         self._running = False
+        self._inference_stop_event.set()
         if self._wake_event is not None:
             self._wake_event.set()
         if self._task:
@@ -373,10 +379,14 @@ class EngineCore:
         """
         gate = self._inference_gate
         if gate.is_paused():
+            gate.acknowledge_pause_boundary()
             return []
 
         max_steps = self.config.decode_burst_max_steps
         outputs = [self.scheduler.step()]
+        if gate.is_paused():
+            gate.acknowledge_pause_boundary()
+            return outputs
         if max_steps <= 1:
             return outputs
         # Adaptive budget: single active request -> aggressive (nothing else to
@@ -388,17 +398,22 @@ class EngineCore:
             if single
             else self.config.decode_burst_budget_s
         )
+        pause_budget = gate.max_work_quantum_seconds
+        if pause_budget is not None:
+            budget = min(budget, pause_budget)
         if budget <= 0:
             return outputs
         deadline = time.monotonic() + budget
         while len(outputs) < max_steps:
             last = outputs[-1]
+            if gate.is_paused():
+                gate.acknowledge_pause_boundary()
+                break
             if (
                 not last.has_work  # throttled/idle: stop and let the loop wait
                 or not self.scheduler.has_requests()
                 or last.prefill_eviction_request is not None
                 or time.monotonic() >= deadline
-                or gate.is_paused()
             ):
                 break
             outputs.append(self.scheduler.step())
@@ -1162,6 +1177,8 @@ class EngineCore:
         """
         if self._closed:
             return
+
+        self._inference_stop_event.set()
 
         # Release model ownership BEFORE setting _closed
         # (_release_model checks not self._closed)

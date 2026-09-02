@@ -1538,6 +1538,11 @@ class SchedulerConfig:
     # interleaved with decode steps for already-running requests. This
     # reduces TTFT for concurrent requests but adds per-step overhead.
     chunked_prefill: bool = False
+    # When set, cap every chunked prefill forward pass to approximately this
+    # wall time so an external pause request reaches a cooperative boundary.
+    # The fixed token cap is used conservatively until throughput is measured.
+    cooperative_pause_latency_seconds: float | None = None
+    cooperative_prefill_fallback_tokens: int = 128
     # When True, the memory guard never shrinks prefill chunks: admission
     # charges the full prefill_step_size and prompts that would only fit
     # via throttled floor-size chunks are rejected upfront instead.
@@ -1950,6 +1955,7 @@ class Scheduler:
         # steering it; rates are bucketed over >=100ms of decode wall time
         # because MTP queue-pop steps emit in microseconds.
         self._prefill_tps_best: float | None = None
+        self._cooperative_prefill_tps_floor: float | None = None
         self._solo_decode_tps_ema: float | None = None
         self._contended_decode_tps_ema: float | None = None
         self._decode_rate_acc: dict[bool, list[float]] = {
@@ -3785,6 +3791,21 @@ class Scheduler:
                     max(0.0, _trace_total_ms - _trace_model_ms),
                 )
 
+            # VLM prefills currently remain inside one scheduler.step() so
+            # their multimodal position/cache state stays intact. Block this
+            # executor at the same bounded chunk boundary rather than trying
+            # to serialize and requeue that state. Text chunked-prefill exits
+            # step() after each chunk and is gated by EngineCore instead.
+            inference_gate = getattr(self, "_inference_gate", None)
+            if (
+                input_arr.shape[1] > 0
+                and inference_gate is not None
+                and not inference_gate.wait_until_resumed_sync(
+                    getattr(self, "_inference_stop_event", None)
+                )
+            ):
+                raise RuntimeError("Inference engine stopped while power-paused")
+
         # Emit final boundary snapshot if prompt lands exactly on boundary.
         if boundary_enabled:
             total_tokens = base_size + processed_tokens
@@ -4865,6 +4886,30 @@ class Scheduler:
             )
         return _CONTENDED_PREFILL_CHUNK
 
+    def _cooperative_prefill_cap(self) -> int:
+        """Return a chunk cap that bounds response time to a pause request.
+
+        The first chunk uses a conservative user-tunable token cap. Later
+        chunks use the slowest throughput observed by this scheduler, with a
+        small safety margin. Unlike decode fairness this applies even when no
+        decode is running because AC can disappear at any time.
+        """
+        target = getattr(self.config, "cooperative_pause_latency_seconds", None)
+        if target is None or float(target) <= 0.0:
+            return 0
+
+        tps = self._cooperative_prefill_tps_floor
+        if tps is None or tps <= 0.0:
+            cap = int(
+                getattr(self.config, "cooperative_prefill_fallback_tokens", 128)
+                or 128
+            )
+        else:
+            cap = max(1, int(float(target) * tps * 0.85))
+            if cap >= _CONTENDED_CHUNK_GRID:
+                cap = (cap // _CONTENDED_CHUNK_GRID) * _CONTENDED_CHUNK_GRID
+        return max(1, min(cap, int(self.config.prefill_step_size)))
+
     def _prefill_hold_deadline(self) -> float:
         """Effective hold deadline: own deadline or the shared one.
 
@@ -4994,14 +5039,17 @@ class Scheduler:
     ) -> int:
         """Return the scheduler prefill chunk size for the current progress."""
         size = self._base_prefill_step_size(processed_tokens, remaining_tokens)
-        cap = self._contended_prefill_cap()
+        fairness_cap = self._contended_prefill_cap()
+        cooperative_cap = self._cooperative_prefill_cap()
+        caps = [cap for cap in (fairness_cap, cooperative_cap) if cap > 0]
+        cap = min(caps) if caps else 0
         if cap and size > cap:
             logger.debug(
-                "[fairness] prefill chunk capped %d -> %d (decode running "
-                "on %s engine)",
+                "Prefill chunk capped %d -> %d (fairness=%d cooperative=%d)",
                 size,
                 cap,
-                "this" if self.running else "another",
+                fairness_cap,
+                cooperative_cap,
             )
             size = cap
         return size
@@ -5321,6 +5369,19 @@ class Scheduler:
             rate = n / chunk_dt
             if self._prefill_tps_best is None or rate > self._prefill_tps_best:
                 self._prefill_tps_best = rate
+        if (
+            chunk_dt > 0.0
+            and n >= 16
+            and n == min(prefill_step_size, remaining)
+            and getattr(self.config, "cooperative_pause_latency_seconds", None)
+            is not None
+        ):
+            rate = n / chunk_dt
+            if (
+                self._cooperative_prefill_tps_floor is None
+                or rate < self._cooperative_prefill_tps_floor
+            ):
+                self._cooperative_prefill_tps_floor = rate
         self._accrue_decode_debt(chunk_dt)
         return state.tokens_remaining.shape[1] == 0
 
@@ -10437,11 +10498,18 @@ class Scheduler:
                     and vlm_embeds is None
                     and (self._decode_contention() or bool(self.prefilling))
                 )
+                cooperative_chunk = (
+                    vlm_embeds is None
+                    and getattr(
+                        self.config, "cooperative_pause_latency_seconds", None
+                    )
+                    is not None
+                )
                 chunk_threshold = (
                     self._prefill_step_size_for_progress(
                         0, len(tokens_to_process)
                     )
-                    if force_chunk
+                    if force_chunk or cooperative_chunk
                     else self.config.prefill_step_size
                 )
                 if (

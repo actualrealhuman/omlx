@@ -47,6 +47,7 @@ from ..cache.vision_feature_cache import VisionFeatureSSDCache
 from ..exceptions import InvalidRequestError
 from ..models.vlm import VLMModelAdapter
 from ..patches.mlx_vlm_pixtral_torch_free import apply_pixtral_torch_free_patch
+from ..power_management import get_process_inference_gate
 from ..reasoning_effort import apply_chat_template_with_reasoning_effort_fallback
 from ..utils.image import (
     compute_image_hash,
@@ -3463,6 +3464,7 @@ class VLMBatchedEngine(BaseEngine):
         """Generate a complete response (non-streaming)."""
         if not self._loaded:
             await self.start()
+        await get_process_inference_gate().wait_until_resumed()
 
         if self.is_diffusion_model:
             full_text = ""
@@ -3570,6 +3572,7 @@ class VLMBatchedEngine(BaseEngine):
         """Stream generation token by token."""
         if not self._loaded:
             await self.start()
+        await get_process_inference_gate().wait_until_resumed()
 
         if self.is_diffusion_model:
             if (
@@ -3714,6 +3717,7 @@ class VLMBatchedEngine(BaseEngine):
         """Chat completion with vision support (non-streaming)."""
         if not self._loaded:
             await self.start()
+        await get_process_inference_gate().wait_until_resumed()
 
         if self.is_diffusion_model:
             full_text = ""
@@ -3932,6 +3936,7 @@ class VLMBatchedEngine(BaseEngine):
         """Stream chat completion with vision support."""
         if not self._loaded:
             await self.start()
+        await get_process_inference_gate().wait_until_resumed()
 
         if self.is_diffusion_model:
             self._validate_diffusion_request(
@@ -4495,6 +4500,10 @@ class VLMBatchedEngine(BaseEngine):
                     ):
                         _put(item)
                         if cancel_event.is_set():
+                            break
+                        if not get_process_inference_gate().wait_until_resumed_sync(
+                            cancel_event
+                        ):
                             break
                 except BaseException as e:
                     _put(e)

@@ -33,6 +33,7 @@ from ..memory_monitor import (
     raise_if_prefill_exceeds,
     set_model_info_from_model,
 )
+from ..power_management import get_process_inference_gate
 from ..reasoning_effort import apply_chat_template_with_reasoning_effort_fallback
 from ..utils.generation_config import load_generation_config_token_ids
 from ..utils.model_loading import maybe_apply_pre_load_patches
@@ -1288,6 +1289,10 @@ class DFlashEngine(ActivityTrackingMixin, BaseEngine):
                 if stop_event.is_set():
                     logger.info("DFlash generation aborted by client")
                     break
+                if not get_process_inference_gate().wait_until_resumed_sync(
+                    stop_event
+                ):
+                    break
 
                 if isinstance(event, TokenEvent):
                     token_id = int(event.token_id)
@@ -1502,6 +1507,10 @@ class DFlashEngine(ActivityTrackingMixin, BaseEngine):
                 for event in event_iter:
                     if stop_event.is_set():
                         logger.info("DFlash generation aborted by client")
+                        break
+                    if not get_process_inference_gate().wait_until_resumed_sync(
+                        stop_event
+                    ):
                         break
                     if isinstance(event, TokenEvent):
                         if first_token_at is None:

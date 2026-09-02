@@ -1738,6 +1738,7 @@ class TestStepBurst:
 
             assert len(engine._step_burst()) == 1
             assert engine.scheduler.step.call_count == 1
+            assert gate.last_pause_response_seconds is not None
         finally:
             engine.close()
 

@@ -198,6 +198,7 @@ class TestAdaptiveChunkCap:
         s._prefill_tps_best = 1000.0
         assert s._contended_prefill_cap() == 448
 
+
     def test_cap_stays_on_64_grid(self):
         s = _make_scheduler()
         s.running = {"r1": MagicMock()}
@@ -249,6 +250,37 @@ class TestAdaptiveChunkCap:
         # A contended (slower) measurement must not shrink the cap.
         s._prefill_tps_best = max(s._prefill_tps_best, 400.0)
         assert s._contended_prefill_cap() == 448
+
+
+class TestCooperativePauseChunkCap:
+    def test_disabled_has_no_cap(self):
+        s = _make_scheduler()
+        assert s._cooperative_prefill_cap() == 0
+
+    def test_fallback_caps_solo_prefill_before_measurement(self):
+        s = _make_scheduler(
+            cooperative_pause_latency_seconds=0.25,
+            cooperative_prefill_fallback_tokens=128,
+        )
+        assert s._cooperative_prefill_cap() == 128
+        assert s._prefill_step_size_for_progress(0, 100_000) == 128
+
+    def test_measured_rate_sizes_cap_below_wall_time_target(self):
+        s = _make_scheduler(
+            cooperative_pause_latency_seconds=0.25,
+            cooperative_prefill_fallback_tokens=128,
+        )
+        s._cooperative_prefill_tps_floor = 1000.0
+        # 250 tokens, with 15% margin, rounded down to the 64-token grid.
+        assert s._cooperative_prefill_cap() == 192
+
+    def test_stricter_of_fairness_and_pause_caps_wins(self):
+        s = _make_scheduler(
+            cooperative_pause_latency_seconds=0.25,
+            cooperative_prefill_fallback_tokens=128,
+        )
+        s.running = {"r1": MagicMock()}
+        assert s._prefill_step_size_for_progress(0, 100_000) == 128
 
 
 class TestConditionalChunkClear:
