@@ -16,6 +16,7 @@ import mlx.core as mx
 
 from ..engine_core import get_mlx_executor
 from ..models.embedding import EmbeddingOutput, MLXEmbeddingModel
+from ..power_management import get_process_inference_gate
 from .base import BaseNonStreamingEngine
 
 logger = logging.getLogger(__name__)
@@ -167,6 +168,7 @@ class EmbeddingEngine(BaseNonStreamingEngine):
             ordered_items = [input_items[i] for i in order]
 
             for start in range(0, len(ordered_items), batch_size):
+                await get_process_inference_gate().wait_until_resumed()
                 batch = ordered_items[start:start + batch_size]
 
                 def _embed_sync():

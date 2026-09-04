@@ -17,6 +17,7 @@ import mlx.core as mx
 
 from ..engine_core import get_mlx_executor
 from ..models.reranker import MLXRerankerModel, RerankOutput
+from ..power_management import get_process_inference_gate
 from .base import BaseNonStreamingEngine
 
 logger = logging.getLogger(__name__)
@@ -140,6 +141,7 @@ class RerankerEngine(BaseNonStreamingEngine):
             metadata={"document_count": len(documents)},
         )
         try:
+            await get_process_inference_gate().wait_until_resumed()
             loop = asyncio.get_running_loop()
             output = await loop.run_in_executor(
                 get_mlx_executor(), _rerank_sync

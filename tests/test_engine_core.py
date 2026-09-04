@@ -26,6 +26,7 @@ from omlx.engine_core import (
 )
 from omlx.exceptions import PrefillMemoryAbortedError, PrefillMemoryExceededError
 from omlx.output_collector import RequestOutputCollector
+from omlx.power_management import InferencePauseGate
 from omlx.request import RequestOutput, SamplingParams
 from omlx.scheduler import SchedulerConfig, SchedulerOutput
 
@@ -1689,6 +1690,55 @@ class TestStepBurst:
             outs = engine._step_burst()
             assert len(outs) == 1
             assert engine.scheduler.step.call_count == 1
+        finally:
+            engine.close()
+
+    def test_closed_power_gate_submits_no_scheduler_step(
+        self, mock_model, mock_tokenizer
+    ):
+        gate = InferencePauseGate()
+        gate.set_paused(True, "battery")
+        with patch("omlx.engine_core.get_registry") as mock_registry:
+            mock_registry.return_value.acquire.return_value = True
+            engine = EngineCore(
+                model=mock_model,
+                tokenizer=mock_tokenizer,
+                config=EngineConfig(inference_gate=gate),
+            )
+        try:
+            engine.scheduler.step = MagicMock()
+
+            assert engine._step_burst() == []
+            engine.scheduler.step.assert_not_called()
+        finally:
+            engine.close()
+
+    def test_power_gate_stops_burst_at_next_step_boundary(
+        self, mock_model, mock_tokenizer
+    ):
+        gate = InferencePauseGate()
+        with patch("omlx.engine_core.get_registry") as mock_registry:
+            mock_registry.return_value.acquire.return_value = True
+            engine = EngineCore(
+                model=mock_model,
+                tokenizer=mock_tokenizer,
+                config=EngineConfig(
+                    inference_gate=gate,
+                    decode_burst_max_steps=8,
+                    decode_burst_budget_single_s=10.0,
+                ),
+            )
+        try:
+            def step():
+                gate.set_paused(True, "battery")
+                return SchedulerOutput(has_work=True)
+
+            engine.scheduler.step = MagicMock(side_effect=step)
+            engine.scheduler.has_requests = MagicMock(return_value=True)
+
+            assert len(engine._step_burst()) == 1
+            assert engine.scheduler.step.call_count == 1
+            assert gate.last_pause_response_seconds is not None
         finally:
             engine.close()
 

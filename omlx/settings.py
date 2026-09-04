@@ -213,6 +213,100 @@ class ServerSettings:
 
 
 @dataclass
+class PowerManagementSettings:
+    """Battery-aware inference policy.
+
+    Numeric policy values live here instead of in the controller so they can
+    be persisted, exposed by the settings API, and hot-applied independently.
+    ``None`` selects an automatically learned value where documented.
+    """
+
+    enabled: bool = True
+    battery_behavior: Literal["pause"] = "pause"
+    charge_floor_percent: float = 50.0
+    recovery_hysteresis_percent: float = 2.0
+    target_charge_watts: float = 10.0
+    ac_stabilization_seconds: float = 8.0
+    sample_interval_seconds: float = 0.25
+    notification_poll_interval_seconds: float = 0.05
+    telemetry_stale_seconds: float = 2.0
+    charge_filter_seconds: float = 2.0
+    charge_deadband_watts: float | None = None
+    charge_deadband_min_watts: float = 1.0
+    charge_deadband_max_watts: float = 5.0
+    reduction_confirmation_seconds: float = 0.5
+    restoration_confirmation_seconds: float = 3.0
+    duty_reduction_step: float = 0.20
+    duty_restoration_step: float = 0.05
+    duty_cycle_period_seconds: float = 2.0
+    paused_probe_duty: float = 0.05
+    paused_probe_interval_seconds: float = 10.0
+    max_cooperative_pause_latency_seconds: float = 0.25
+    prefill_pause_fallback_tokens: int = 128
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> PowerManagementSettings:
+        behavior = data.get("battery_behavior", "pause")
+        if behavior != "pause":
+            behavior = "pause"
+        return cls(
+            enabled=bool(data.get("enabled", True)),
+            battery_behavior=behavior,
+            charge_floor_percent=float(data.get("charge_floor_percent", 50.0)),
+            recovery_hysteresis_percent=float(
+                data.get("recovery_hysteresis_percent", 2.0)
+            ),
+            target_charge_watts=float(data.get("target_charge_watts", 10.0)),
+            ac_stabilization_seconds=float(
+                data.get("ac_stabilization_seconds", 8.0)
+            ),
+            sample_interval_seconds=float(
+                data.get("sample_interval_seconds", 0.25)
+            ),
+            notification_poll_interval_seconds=float(
+                data.get("notification_poll_interval_seconds", 0.05)
+            ),
+            telemetry_stale_seconds=float(data.get("telemetry_stale_seconds", 2.0)),
+            charge_filter_seconds=float(data.get("charge_filter_seconds", 2.0)),
+            charge_deadband_watts=(
+                None
+                if data.get("charge_deadband_watts") is None
+                else float(data["charge_deadband_watts"])
+            ),
+            charge_deadband_min_watts=float(
+                data.get("charge_deadband_min_watts", 1.0)
+            ),
+            charge_deadband_max_watts=float(
+                data.get("charge_deadband_max_watts", 5.0)
+            ),
+            reduction_confirmation_seconds=float(
+                data.get("reduction_confirmation_seconds", 0.5)
+            ),
+            restoration_confirmation_seconds=float(
+                data.get("restoration_confirmation_seconds", 3.0)
+            ),
+            duty_reduction_step=float(data.get("duty_reduction_step", 0.20)),
+            duty_restoration_step=float(data.get("duty_restoration_step", 0.05)),
+            duty_cycle_period_seconds=float(
+                data.get("duty_cycle_period_seconds", 2.0)
+            ),
+            paused_probe_duty=float(data.get("paused_probe_duty", 0.05)),
+            paused_probe_interval_seconds=float(
+                data.get("paused_probe_interval_seconds", 10.0)
+            ),
+            max_cooperative_pause_latency_seconds=float(
+                data.get("max_cooperative_pause_latency_seconds", 0.25)
+            ),
+            prefill_pause_fallback_tokens=int(
+                data.get("prefill_pause_fallback_tokens", 128)
+            ),
+        )
+
+
+@dataclass
 class ModelSettings:
     """Model configuration settings."""
 
@@ -948,6 +1042,7 @@ class GlobalSettings:
 
     base_path: Path = field(default_factory=lambda: DEFAULT_BASE_PATH)
     server: ServerSettings = field(default_factory=ServerSettings)
+    power: PowerManagementSettings = field(default_factory=PowerManagementSettings)
     model: ModelSettings = field(default_factory=ModelSettings)
     memory: MemorySettings = field(default_factory=MemorySettings)
     scheduler: SchedulerSettings = field(default_factory=SchedulerSettings)
@@ -1030,6 +1125,8 @@ class GlobalSettings:
             # Load each section
             if "server" in data:
                 self.server = ServerSettings.from_dict(data["server"])
+            if "power" in data:
+                self.power = PowerManagementSettings.from_dict(data["power"])
             if "model" in data:
                 self.model = ModelSettings.from_dict(data["model"])
             if "memory" in data:
@@ -1390,6 +1487,7 @@ class GlobalSettings:
         data = {
             "version": SETTINGS_VERSION,
             "server": self.server.to_dict(),
+            "power": self.power.to_dict(),
             "model": self.model.to_dict(),
             "memory": self.memory.to_dict(),
             "scheduler": self.scheduler.to_dict(),
@@ -1559,6 +1657,59 @@ class GlobalSettings:
                 f"{self.scheduler.embedding_batch_size} (must be > 0)"
             )
 
+        # Battery power-management validation
+        if not 0.0 <= self.power.charge_floor_percent <= 100.0:
+            errors.append("power.charge_floor_percent must be in [0, 100]")
+        if not 0.0 <= self.power.recovery_hysteresis_percent <= 100.0:
+            errors.append("power.recovery_hysteresis_percent must be in [0, 100]")
+        if (
+            self.power.charge_floor_percent
+            + self.power.recovery_hysteresis_percent
+            > 100.0
+        ):
+            errors.append(
+                "power charge floor plus recovery hysteresis must not exceed 100"
+            )
+        if self.power.target_charge_watts < 0.0:
+            errors.append("power.target_charge_watts must be non-negative")
+        if self.power.ac_stabilization_seconds < 0.0:
+            errors.append("power.ac_stabilization_seconds must be non-negative")
+        for name in (
+            "sample_interval_seconds",
+            "notification_poll_interval_seconds",
+            "telemetry_stale_seconds",
+            "charge_filter_seconds",
+            "charge_deadband_min_watts",
+            "charge_deadband_max_watts",
+            "reduction_confirmation_seconds",
+            "restoration_confirmation_seconds",
+            "duty_cycle_period_seconds",
+            "paused_probe_interval_seconds",
+            "max_cooperative_pause_latency_seconds",
+        ):
+            if float(getattr(self.power, name)) <= 0.0:
+                errors.append(f"power.{name} must be positive")
+        if self.power.prefill_pause_fallback_tokens <= 0:
+            errors.append("power.prefill_pause_fallback_tokens must be positive")
+        if (
+            self.power.charge_deadband_watts is not None
+            and self.power.charge_deadband_watts < 0.0
+        ):
+            errors.append("power.charge_deadband_watts must be non-negative or null")
+        if self.power.charge_deadband_min_watts > self.power.charge_deadband_max_watts:
+            errors.append(
+                "power.charge_deadband_min_watts must not exceed "
+                "power.charge_deadband_max_watts"
+            )
+        for name in (
+            "duty_reduction_step",
+            "duty_restoration_step",
+            "paused_probe_duty",
+        ):
+            value = float(getattr(self.power, name))
+            if not 0.0 < value <= 1.0:
+                errors.append(f"power.{name} must be in (0, 1]")
+
         # Cache validation
         if self.cache.gdn_ssd_split_enabled is True and self.cache.hot_cache_only:
             errors.append(
@@ -1719,7 +1870,18 @@ class GlobalSettings:
             max_num_seqs=self.scheduler.max_concurrent_requests,
             completion_batch_size=self.scheduler.max_concurrent_requests,
             embedding_batch_size=self.scheduler.embedding_batch_size,
-            chunked_prefill=self.scheduler.chunked_prefill,
+            # Battery policy needs a cooperative boundary between long-prompt
+            # chunks. Preserve the user's scheduler preference while forcing
+            # the effective runtime value on whenever power management is on.
+            chunked_prefill=(self.scheduler.chunked_prefill or self.power.enabled),
+            cooperative_pause_latency_seconds=(
+                self.power.max_cooperative_pause_latency_seconds
+                if self.power.enabled
+                else None
+            ),
+            cooperative_prefill_fallback_tokens=(
+                self.power.prefill_pause_fallback_tokens
+            ),
             prefill_speed_priority=(self.scheduler.prefill_priority == "speed"),
             decode_fairness=self.scheduler.decode_fairness,
             initial_cache_blocks=self.cache.initial_cache_blocks,
