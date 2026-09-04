@@ -174,6 +174,31 @@ def test_tailwind_contains_new_chat_ui_utilities():
     assert ".z-\\[200\\]{" in css
 
 
+def test_inline_message_editor_autosizes_to_its_full_content():
+    html = _template()
+    styles = _section(html, "    .inline-edit-textarea {", "    .inline-edit-actions {")
+    editor = _section(
+        html,
+        '                                        <textarea x-model="editContent"',
+        "                                        <div class=\"inline-edit-actions\">",
+    )
+    helper = _section(
+        html,
+        "    resizeEditTextarea(el) {",
+        "    resetTextareaHeight(el) {",
+    )
+
+    assert "max-height" not in styles
+    assert "resize: none" in styles
+    assert "overflow: hidden" in styles
+    assert '@input="resizeEditTextarea($el)"' in editor
+    assert '@resize.window.debounce.100ms="resizeEditTextarea($el)"' in editor
+    assert "resizeEditTextarea($el);" in editor
+    assert "el.style.height = 'auto'" in helper
+    assert "el.style.height = el.scrollHeight + 'px'" in helper
+    assert "Math.min" not in helper
+
+
 def test_empty_thinking_content_is_not_rendered_or_replayed():
     html = _template()
     helper = _section(
