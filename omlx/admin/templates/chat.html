@@ -629,9 +629,9 @@
         width: 100%;
         min-width: 280px;
         min-height: 80px;
-        max-height: 300px;
         box-sizing: border-box;
-        resize: vertical;
+        resize: none;
+        overflow: hidden;
         padding: 12px 16px;
         border: 2px solid var(--border-normal);
         border-radius: 16px;
@@ -1333,9 +1333,11 @@
                                             </template>
                                         </div>
                                         <textarea x-model="editContent"
+                                            @input="resizeEditTextarea($el)"
+                                            @resize.window.debounce.100ms="resizeEditTextarea($el)"
                                             @keydown.enter.ctrl="if (!$event.isComposing && $event.keyCode !== 229) saveEdit(index)"
                                             @keydown.escape="cancelEdit" class="inline-edit-textarea"
-                                            x-init="$nextTick(() => { $el.focus(); $el.setSelectionRange($el.value.length, $el.value.length); })"></textarea>
+                                            x-init="$nextTick(() => { $el.focus(); $el.setSelectionRange($el.value.length, $el.value.length); resizeEditTextarea($el); })"></textarea>
                                         <div class="inline-edit-actions">
                                             <button @click="cancelEdit"
                                                 class="px-3 py-1.5 text-sm border rounded-lg hover:bg-surface-muted"
@@ -7769,6 +7771,12 @@
     autoResize(el) {
         el.style.height = 'auto';
         el.style.height = Math.min(el.scrollHeight, 128) + 'px';
+    },
+
+    resizeEditTextarea(el) {
+        if (!el) return;
+        el.style.height = 'auto';
+        el.style.height = el.scrollHeight + 'px';
     },
 
     resetTextareaHeight(el) {
