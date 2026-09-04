@@ -11,6 +11,7 @@ branches that are developed independently for possible upstream contribution.
 | Battery and power management | Upstreamable feature | `feature/battery-power-management` | Planned |
 | Live dashboard context usage | Upstreamable feature | `feature/dashboard-context-usage` / `260c66fd` | Implemented and tested; PR not opened |
 | Autosizing chat message editor | Upstreamable feature | `feature/chat-edit-autosize` / `20dba1ca` | Implemented and tested; PR not opened |
+| Preserve interrupted chat output | Upstreamable fix | `feature/chat-preserve-interrupted-output` / `86fd1d63` | Implemented and tested; PR not opened |
 
 ## Branch policy
 
