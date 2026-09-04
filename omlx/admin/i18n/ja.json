@@ -1002,6 +1002,7 @@
   "chat.rename_cancel_tooltip": "名前の変更をキャンセル",
   "chat.delete_tooltip": "チャットを削除",
   "chat.assistant_label": "アシスタント",
+  "chat.generation_interrupted": "生成が中断されました",
   "chat.confirm_delete_chat": "このチャットを削除しますか？",
   "chat.confirm_clear_all": "すべてのチャット履歴を削除しますか？この操作は元に戻せません。",
   "chat.error.incorrect_api_key": "APIキーが正しくありません。再入力してください。",

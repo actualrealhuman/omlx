@@ -1002,6 +1002,7 @@
   "chat.rename_cancel_tooltip": "Отменить переименование",
   "chat.delete_tooltip": "Удалить чат",
   "chat.assistant_label": "Ассистент",
+  "chat.generation_interrupted": "Генерация прервана",
   "chat.confirm_delete_chat": "Вы уверены, что хотите удалить этот чат?",
   "chat.confirm_clear_all": "Вы уверены, что хотите удалить ВСЮ историю чатов? Это нельзя отменить.",
   "chat.error.incorrect_api_key": "API-ключ неверен. Пожалуйста, введите его снова.",

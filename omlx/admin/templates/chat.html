@@ -1479,6 +1479,13 @@
                                         class="text-[10px] px-1.5 py-0.5 rounded-full bg-surface-muted border border-line"
                                         style="color: var(--text-tertiary);"
                                         x-text="variantProfileLabel(msg)"></span>
+                                    <span x-show="msg._interrupted" x-cloak
+                                        class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border"
+                                        style="color: var(--text-danger); border-color: var(--text-danger);"
+                                        :title="msg._interruptionReason || window.t('chat.generation_interrupted')">
+                                        <i data-lucide="circle-alert" class="w-3 h-3"></i>
+                                        <span x-text="window.t('chat.generation_interrupted')"></span>
+                                    </span>
                                 </div>
                                 <div class="flex gap-1" x-data="{ contextOpen: false }">
                                     <!-- Timeline toggle: only visible when timeline data is attached -->
@@ -3831,6 +3838,49 @@
                     thinking_tokens: stream?._thinkTokens || 0,
                     total_tokens: usage.completion_tokens ?? 0,
                 };
+            },
+
+            commitAccumulatedStream(context, chatSession, stream, requestModel, interruption = null) {
+                const content = (stream._toolRoundContent || '') + (stream.streamingContent || '');
+                if (!content && !stream.streamingThinking) return null;
+
+                const assistantId = stream.targetMessageId || this.newMessageId();
+                const assistantMsg = {
+                    id: assistantId,
+                    role: 'assistant',
+                    content,
+                    reasoning_content: this.hasVisibleThinking(stream.streamingThinking)
+                        ? stream.streamingThinking : null,
+                    model: requestModel,
+                    meta: this.captureGenerationContext(
+                        requestModel,
+                        context.systemPrompt,
+                        context._profile,
+                        context._generationOverride
+                    ),
+                    _perfVisible: false,
+                    _thinkingOpen: false,
+                };
+                if (interruption) {
+                    assistantMsg._interrupted = true;
+                    assistantMsg._interruptionReason = String(
+                        interruption.message || interruption
+                    ).slice(0, 500);
+                }
+                this.attachThinkingToAssistantMessage(assistantMsg, stream.streamingThinking);
+                this.attachProfileToAssistantMessage(assistantMsg, context._profile);
+                chatSession.messages.push(assistantMsg);
+                this._setActiveVariant(chatSession, assistantId, context._variantUserIndex);
+                this.saveCurrentChat(
+                    context.chatId,
+                    chatSession.messages,
+                    chatSession.model,
+                    context.systemPrompt
+                );
+                if (this.currentChatId === context.chatId) {
+                    this.scheduleEnhanceMessages();
+                }
+                return assistantMsg;
             },
 
             cancelStreamTransport(stream) {
@@ -6515,23 +6565,30 @@
 
         } catch (error) {
             console.log('[streamResponse] catch error:', error.name, error.message);
+            // Whether the reader was stopped deliberately or the connection
+            // failed, reasoning is no longer actively streaming.
+            if (stream.thinkingState.isInThinking) {
+                stream.thinkingState.isInThinking = false;
+                stream.thinkingState.thinkingStartTime = null;
+            }
             if (error.name === 'AbortError') {
                 console.log('[streamResponse] AbortError caught - stream stopped by user');
-                // Reset thinking state (reasoning now lives in streamingThinking, not streamingContent)
-                if (stream.thinkingState.isInThinking) {
-                    stream.thinkingState.isInThinking = false;
-                    stream.thinkingState.thinkingStartTime = null;
-                }
                 // Stream was stopped by user — push whatever was accumulated,
                 // including response text set aside when tool calls began.
-                if (stream._toolRoundContent || stream.streamingContent || stream.streamingThinking) {
+                this.commitAccumulatedStream(context, chatSession, stream, requestModel);
+            } else {
+                console.error('Streaming error:', error);
+                const partial = this.commitAccumulatedStream(
+                    context, chatSession, stream, requestModel, error
+                );
+                // With no received output there is nothing to recover, so keep
+                // the existing error-message behavior.
+                if (!partial) {
                     const assistantId = stream.targetMessageId || this.newMessageId();
-                    const assistantMsg = {
+                    const errorMsg = {
                         id: assistantId,
                         role: 'assistant',
-                        content: (stream._toolRoundContent || '') + (stream.streamingContent || ''),
-                        reasoning_content: this.hasVisibleThinking(stream.streamingThinking)
-                            ? stream.streamingThinking : null,
+                        content: `Error: ${error.message}`,
                         model: requestModel,
                         meta: this.captureGenerationContext(
                             requestModel,
@@ -6540,39 +6597,14 @@
                             context._generationOverride
                         ),
                         _perfVisible: false,
-                        _thinkingOpen: false,
                     };
-                    this.attachThinkingToAssistantMessage(assistantMsg, stream.streamingThinking);
-                    this.attachProfileToAssistantMessage(assistantMsg, context._profile);
-                    chatSession.messages.push(assistantMsg);
+                    this.attachProfileToAssistantMessage(errorMsg, context._profile);
+                    chatSession.messages.push(errorMsg);
                     this._setActiveVariant(chatSession, assistantId, context._variantUserIndex);
                     this.saveCurrentChat(context.chatId, chatSession.messages, chatSession.model, context.systemPrompt);
                     if (this.currentChatId === context.chatId) {
                         this.scheduleEnhanceMessages();
                     }
-                }
-            } else {
-                console.error('Streaming error:', error);
-                const assistantId = stream.targetMessageId || this.newMessageId();
-                const errorMsg = {
-                    id: assistantId,
-                    role: 'assistant',
-                    content: `Error: ${error.message}`,
-                    model: requestModel,
-                    meta: this.captureGenerationContext(
-                        requestModel,
-                        context.systemPrompt,
-                        context._profile,
-                        context._generationOverride
-                    ),
-                    _perfVisible: false,
-                };
-                this.attachProfileToAssistantMessage(errorMsg, context._profile);
-                chatSession.messages.push(errorMsg);
-                this._setActiveVariant(chatSession, assistantId, context._variantUserIndex);
-                this.saveCurrentChat(context.chatId, chatSession.messages, chatSession.model, context.systemPrompt);
-                if (this.currentChatId === context.chatId) {
-                    this.scheduleEnhanceMessages();
                 }
             }
         } finally {

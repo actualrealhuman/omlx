@@ -1002,6 +1002,7 @@
   "chat.rename_cancel_tooltip": "Cancelar renomear",
   "chat.delete_tooltip": "Apagar conversa",
   "chat.assistant_label": "Assistente",
+  "chat.generation_interrupted": "Geração interrompida",
   "chat.confirm_delete_chat": "Tem certeza de que deseja apagar esta conversa?",
   "chat.confirm_clear_all": "Tem certeza de que deseja apagar TODO o histórico de conversa? Esta ação não pode ser desfeita.",
   "chat.error.incorrect_api_key": "Chave de API incorreta. Insira novamente sua chave de API.",
