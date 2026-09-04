@@ -10,6 +10,7 @@ branches that are developed independently for possible upstream contribution.
 | Cache inspection sidecars | Upstreamable feature | `feature/cache-inspection-sidecars` | Draft PR #3326 |
 | Battery and power management | Upstreamable feature | `feature/battery-power-management` | Planned |
 | Live dashboard context usage | Upstreamable feature | `feature/dashboard-context-usage` / `260c66fd` | Implemented and tested; PR not opened |
+| Autosizing chat message editor | Upstreamable feature | `feature/chat-edit-autosize` / `20dba1ca` | Implemented and tested; PR not opened |
 
 ## Branch policy
 
