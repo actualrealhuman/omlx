@@ -289,7 +289,14 @@
                                                         <span class="w-2 h-2 rounded-full flex-shrink-0 bg-green-400 animate-pulse"></span>
                                                         <span class="text-[10px] text-green-600 font-medium" x-text="window.t('status.active_models.generating')"></span>
                                                     </span>
-                                                    <span class="text-[10px] text-neutral-400 w-16 whitespace-nowrap ml-2" x-text="formatTokenCount(gen.generated_tokens || 0) + ' tok'"></span>
+                                                    <template x-if="gen.prompt_tokens != null && gen.max_context_window > 0">
+                                                        <span class="inline-flex items-baseline text-[10px] text-neutral-400 tabular-nums whitespace-nowrap ml-2">
+                                                            <span x-text="formatTokenCount(gen.prompt_tokens)"></span><span>+</span><strong class="font-bold text-neutral-600" x-text="formatTokenCount(gen.generated_tokens || 0)"></strong><span>=</span><span x-text="formatTokenCount(gen.prompt_tokens + (gen.generated_tokens || 0))"></span><span>/</span><span x-text="formatTokenCount(gen.max_context_window)"></span>
+                                                        </span>
+                                                    </template>
+                                                    <template x-if="gen.prompt_tokens == null || !(gen.max_context_window > 0)">
+                                                        <span class="text-[10px] text-neutral-400 w-16 whitespace-nowrap ml-2" x-text="formatTokenCount(gen.generated_tokens || 0) + ' tok'"></span>
+                                                    </template>
                                                     <span x-show="gen.tokens_per_second > 0" class="text-[10px] text-neutral-400 w-20 whitespace-nowrap"
                                                           x-text="gen.tokens_per_second.toFixed(1) + ' tok/s'"></span>
                                                     <span x-show="gen.last_activity_age_seconds >= 3" class="text-[10px] text-neutral-400 whitespace-nowrap" x-text="formatActivityAge(gen.last_activity_age_seconds)"></span>
@@ -309,7 +316,14 @@
                                                         <span class="w-2 h-2 rounded-full flex-shrink-0" :class="activityDotClass(activity.last_activity_age_seconds)"></span>
                                                         <span class="text-[10px] text-green-600 font-medium" x-text="activity.detail || activity.kind || window.t('status.active_models.active')"></span>
                                                     </span>
-                                                    <span x-show="formatActivityMetadata(activity)" class="text-[10px] text-neutral-400 whitespace-nowrap ml-2" x-text="formatActivityMetadata(activity)"></span>
+                                                    <template x-if="activity.kind === 'generate' && activity.prompt_tokens != null && activity.token_count != null && activity.max_context_window > 0">
+                                                        <span class="inline-flex items-baseline text-[10px] text-neutral-400 tabular-nums whitespace-nowrap ml-2">
+                                                            <span x-text="formatTokenCount(activity.prompt_tokens)"></span><span>+</span><strong class="font-bold text-neutral-600" x-text="formatTokenCount(activity.token_count)"></strong><span>=</span><span x-text="formatTokenCount(activity.prompt_tokens + activity.token_count)"></span><span>/</span><span x-text="formatTokenCount(activity.max_context_window)"></span>
+                                                        </span>
+                                                    </template>
+                                                    <template x-if="activity.kind !== 'generate' || activity.prompt_tokens == null || activity.token_count == null || !(activity.max_context_window > 0)">
+                                                        <span x-show="formatActivityMetadata(activity)" class="text-[10px] text-neutral-400 whitespace-nowrap ml-2" x-text="formatActivityMetadata(activity)"></span>
+                                                    </template>
                                                     <span x-show="activity.elapsed_seconds != null" class="text-[10px] text-neutral-400 whitespace-nowrap ml-1" x-text="formatDurationShort(activity.elapsed_seconds)"></span>
                                                 </div>
                                             </template>

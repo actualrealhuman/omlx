@@ -1455,6 +1455,7 @@ class DFlashEngine(ActivityTrackingMixin, BaseEngine):
 
         tools = kwargs.pop("tools", None)
         seed = kwargs.pop("seed", None)
+        max_context_window = kwargs.pop("max_context_window", None)
         repetition_context_size = kwargs.pop("repetition_context_size", None)
         if repetition_context_size is None:
             repetition_context_size = 20
@@ -1465,7 +1466,14 @@ class DFlashEngine(ActivityTrackingMixin, BaseEngine):
         stop_event = threading.Event()
         # Admin visibility: DFlash bypasses the scheduler, so the Active
         # Models card reads this activity instead of a scheduler snapshot.
-        activity_id = self._begin_activity("generate", detail="generating")
+        activity_id = self._begin_activity(
+            "generate",
+            detail="generating",
+            metadata={
+                "prompt_tokens": len(prompt_tokens),
+                "max_context_window": max_context_window,
+            },
+        )
 
         def _run():
             from dflash_mlx.engine.events import SummaryEvent, TokenEvent
@@ -1681,6 +1689,7 @@ class DFlashEngine(ActivityTrackingMixin, BaseEngine):
 
         tools = kwargs.pop("tools", None)
         seed = kwargs.pop("seed", None)
+        max_context_window = kwargs.pop("max_context_window", None)
         repetition_context_size = kwargs.pop("repetition_context_size", None)
         if repetition_context_size is None:
             repetition_context_size = 20
@@ -1708,7 +1717,14 @@ class DFlashEngine(ActivityTrackingMixin, BaseEngine):
 
         # Admin visibility: DFlash bypasses the scheduler, so the Active
         # Models card reads this activity instead of a scheduler snapshot.
-        activity_id = self._begin_activity("generate", detail="generating")
+        activity_id = self._begin_activity(
+            "generate",
+            detail="generating",
+            metadata={
+                "prompt_tokens": len(prompt_tokens),
+                "max_context_window": max_context_window,
+            },
+        )
         self._active_request = True
         future = loop.run_in_executor(
             get_mlx_executor(),

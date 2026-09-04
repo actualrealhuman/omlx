@@ -193,8 +193,7 @@ class TestValidateContextWindow:
 
         state = self._make_server_state(global_max_ctx=1000)
         with patch("omlx.server._server_state", state):
-            # Should not raise
-            validate_context_window(500)
+            assert validate_context_window(500) == 1000
 
     def test_passes_at_exact_limit(self):
         """Test no exception when token count equals limit."""
@@ -202,8 +201,7 @@ class TestValidateContextWindow:
 
         state = self._make_server_state(global_max_ctx=1000)
         with patch("omlx.server._server_state", state):
-            # Should not raise (equal is OK)
-            validate_context_window(1000)
+            assert validate_context_window(1000) == 1000
 
     def test_raises_when_over_limit(self):
         """Test HTTPException raised when token count exceeds limit."""
