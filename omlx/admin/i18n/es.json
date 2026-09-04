@@ -1000,6 +1000,7 @@
   "chat.rename_cancel_tooltip": "Cancelar cambio de nombre",
   "chat.delete_tooltip": "Eliminar chat",
   "chat.assistant_label": "Asistente",
+  "chat.generation_interrupted": "Generación interrumpida",
   "chat.confirm_delete_chat": "¿Estás seguro de que quieres eliminar este chat?",
   "chat.confirm_clear_all": "¿Estás seguro de que quieres eliminar TODO el historial de chat? Esto no se puede deshacer.",
   "chat.error.incorrect_api_key": "La clave API es incorrecta. Por favor ingrésala nuevamente.",
