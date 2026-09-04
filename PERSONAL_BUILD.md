@@ -9,7 +9,7 @@ branches that are developed independently for possible upstream contribution.
 | Disable community benchmark uploads | Temporary downstream patch | `patch/telemetry-upload-disabled` / `e2e9e189` | Replace with an opt-in setting; uploads off by default |
 | Cache inspection sidecars | Upstreamable feature | `feature/cache-inspection-sidecars` | Draft PR #3326 |
 | Battery and power management | Upstreamable feature | `feature/battery-power-management` | Planned |
-| Live dashboard context usage | Upstreamable feature | `feature/dashboard-context-usage` | Planned |
+| Live dashboard context usage | Upstreamable feature | `feature/dashboard-context-usage` / `260c66fd` | Implemented and tested; PR not opened |
 
 ## Branch policy
 
