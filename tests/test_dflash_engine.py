@@ -1510,10 +1510,16 @@ class TestDFlashActivityTracking:
         assert engine.get_activity_snapshot()["active_requests"] == 0
         assert engine.has_active_requests() is False
 
-        activity_id = engine._begin_activity("generate", detail="generating")
+        activity_id = engine._begin_activity(
+            "generate",
+            detail="generating",
+            metadata={"prompt_tokens": 120_200, "max_context_window": 1_000_000},
+        )
         snapshot = engine.get_activity_snapshot()
         assert snapshot["active_requests"] == 1
         assert snapshot["activities"][0]["detail"] == "generating"
+        assert snapshot["activities"][0]["prompt_tokens"] == 120_200
+        assert snapshot["activities"][0]["max_context_window"] == 1_000_000
         assert engine.has_active_requests() is True
 
         engine._update_activity(activity_id, token_count=42)

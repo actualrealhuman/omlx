@@ -144,6 +144,17 @@ class TestRequest:
         assert request.status == RequestStatus.WAITING
         assert request.output_token_ids == []
         assert request.output_text == ""
+        assert request.max_context_window is None
+
+    def test_retains_effective_context_window(self):
+        request = Request(
+            request_id="test-context-window",
+            prompt="Hello",
+            sampling_params=SamplingParams(),
+            max_context_window=1_000_000,
+        )
+
+        assert request.max_context_window == 1_000_000
 
     def test_creation_with_token_ids(self):
         """Test request creation with token IDs as prompt."""

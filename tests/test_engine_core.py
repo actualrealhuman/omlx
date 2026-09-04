@@ -361,6 +361,33 @@ class TestEngineCoreAddRequest:
                 engine.close()
 
     @pytest.mark.asyncio
+    async def test_add_request_retains_effective_context_window(
+        self, mock_model, mock_tokenizer
+    ):
+        with patch("omlx.engine_core.get_registry") as mock_registry:
+            mock_registry.return_value.acquire.return_value = True
+            engine = EngineCore(model=mock_model, tokenizer=mock_tokenizer)
+            captured = {}
+            original_add_request = engine.scheduler.add_request
+
+            def capture_request(request):
+                captured["request"] = request
+                return original_add_request(request)
+
+            engine.scheduler.add_request = capture_request
+            try:
+                await engine.start()
+                await engine.add_request(
+                    prompt="Hello",
+                    max_context_window=1_000_000,
+                )
+
+                assert captured["request"].max_context_window == 1_000_000
+            finally:
+                await engine.stop()
+                engine.close()
+
+    @pytest.mark.asyncio
     async def test_add_request_cleans_up_if_scheduler_insert_fails(
         self, mock_model, mock_tokenizer
     ):

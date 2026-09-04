@@ -232,6 +232,10 @@ class Request:
     # Request-scoped tool schemas used by protocol output parsers.
     tools: list[dict[str, Any]] | None = None
 
+    # Effective limit that validated this request. Appended to preserve the
+    # positional constructor contract while adding live admin observability.
+    max_context_window: Optional[int] = None
+
     @property
     def num_output_tokens(self) -> int:
         """Number of output tokens generated so far."""

@@ -5564,6 +5564,9 @@ def _build_active_models_data() -> dict:
                     "tokens_per_second": tokens_per_second,
                     "last_activity_age_seconds": last_activity_age,
                     "prompt_tokens": getattr(req, "num_prompt_tokens", 0) if req else 0,
+                    "max_context_window": (
+                        getattr(req, "max_context_window", None) if req else None
+                    ),
                     "max_tokens": getattr(req, "max_tokens", None) if req else None,
                 }
             )

@@ -1852,11 +1852,14 @@ def get_embedding_max_length(
 
 def validate_context_window(
     num_prompt_tokens: int, model_id: str | None = None
-) -> None:
+) -> int | None:
     """
     Validate that prompt token count does not exceed max context window.
 
     Raises HTTPException 400 if the prompt is too long.
+
+    Returns the effective limit used for validation so request observability
+    can retain the exact alias/profile-aware value.
     """
     max_ctx = get_max_context_window(model_id)
     if max_ctx and num_prompt_tokens > max_ctx:
@@ -1867,6 +1870,7 @@ def validate_context_window(
                 f"max context window of {max_ctx} tokens"
             ),
         )
+    return max_ctx
 
 
 def init_server(
@@ -1878,7 +1882,7 @@ def init_server(
     """
     Initialize server with model directories for multi-model serving.
 
-    Args:
+        Args:
         model_dirs: Path or list of paths to directories containing model subdirectories
         scheduler_config: Scheduler config for BatchedEngine
         api_key: API key for authentication (optional)
@@ -3371,10 +3375,13 @@ async def create_completion(
 
         # Validate context window for each prompt
         prompt_token_ids_by_prompt = []
+        max_context_window = None
         for prompt in prompts:
             prompt_token_ids = list(engine.tokenizer.encode(prompt))
             prompt_token_ids_by_prompt.append(prompt_token_ids)
-            validate_context_window(len(prompt_token_ids), request.model)
+            max_context_window = validate_context_window(
+                len(prompt_token_ids), request.model
+            )
 
         # Pre-flight prefill memory guard — see create_chat_completion for
         # the reason this must precede any StreamingResponse return.
@@ -3403,6 +3410,7 @@ async def create_completion(
                             prompt_token_ids=prompt_token_ids_by_prompt[0],
                             resolved_model=resolved_model,
                             response_id=response_id,
+                            max_context_window=max_context_window,
                         ),
                         http_request=http_request,
                         keepalive_chunk=keepalive,
@@ -3447,7 +3455,7 @@ async def create_completion(
                 req_xtc_threshold=getattr(request, "xtc_threshold", None),
             )
 
-            gen_kwargs = {}
+            gen_kwargs = {"max_context_window": max_context_window}
             thinking_budget = _resolve_thinking_budget(request, request.model)
             if thinking_budget is not None:
                 gen_kwargs["thinking_budget"] = thinking_budget
@@ -3790,7 +3798,7 @@ async def create_chat_completion(
             ):
                 raise HTTPException(status_code=400, detail=f"Chat template error: {e}")
             raise
-        validate_context_window(num_prompt_tokens, request.model)
+        max_context_window = validate_context_window(num_prompt_tokens, request.model)
 
         # Prepare kwargs
         (
@@ -3819,6 +3827,7 @@ async def create_chat_completion(
         )
         chat_kwargs = {
             "max_tokens": max_tokens,
+            "max_context_window": max_context_window,
             "temperature": temperature,
             "top_p": top_p,
             "top_k": top_k,
@@ -4500,6 +4509,7 @@ async def stream_completion(
     prompt_token_ids: list[int] | None = None,
     resolved_model: str | None = None,
     response_id: str | None = None,
+    max_context_window: int | None = None,
 ) -> AsyncIterator[str]:
     """Stream completion response."""
     response_id = response_id or f"cmpl-{uuid.uuid4().hex[:8]}"
@@ -4537,7 +4547,7 @@ async def stream_completion(
         req_xtc_probability=getattr(request, "xtc_probability", None),
         req_xtc_threshold=getattr(request, "xtc_threshold", None),
     )
-    gen_kwargs = {}
+    gen_kwargs = {"max_context_window": max_context_window}
     thinking_budget = _resolve_thinking_budget(request, request.model)
     if thinking_budget is not None:
         gen_kwargs["thinking_budget"] = thinking_budget
@@ -5854,7 +5864,8 @@ async def create_anthropic_message(
             ):
                 raise HTTPException(status_code=400, detail=f"Chat template error: {e}")
             raise
-        validate_context_window(num_prompt_tokens, request.model)
+        max_context_window = validate_context_window(num_prompt_tokens, request.model)
+        chat_kwargs["max_context_window"] = max_context_window
 
         # Add stop sequences
         if request.stop_sequences:
@@ -6289,7 +6300,7 @@ async def create_response(
             ):
                 raise HTTPException(status_code=400, detail=f"Chat template error: {e}")
             raise
-        validate_context_window(num_prompt_tokens, request.model)
+        max_context_window = validate_context_window(num_prompt_tokens, request.model)
 
         # Build sampling kwargs
         (
@@ -6313,6 +6324,7 @@ async def create_response(
         )
         chat_kwargs = {
             "max_tokens": max_tokens,
+            "max_context_window": max_context_window,
             "temperature": temperature,
             "top_p": top_p,
             "top_k": top_k,

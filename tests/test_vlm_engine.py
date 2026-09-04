@@ -103,8 +103,10 @@ class FakeStreamingCore:
 
     def __init__(self):
         self.aborted_request_id = None
+        self.add_request_kwargs = None
 
     async def add_request(self, **kwargs):
+        self.add_request_kwargs = kwargs
         return "vlm-request-1"
 
     async def stream_outputs(self, request_id):
@@ -182,6 +184,21 @@ class TestVLMStreamingCleanup:
         assert len(outputs) == 1
         assert outputs[0].generated_at == 10.0
         assert outputs[0].generated_until == 12.0
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(
+        not HAS_MLX, reason="mlx is required to import VLMBatchedEngine"
+    )
+    async def test_stream_forwards_effective_context_window(self):
+        fake_engine = FakeStreamingCore()
+        engine = _make_loaded_engine(model_type="test-vlm")
+        engine._engine = fake_engine
+
+        stream = engine.stream_generate("hello", max_context_window=1_000_000)
+        await stream.__anext__()
+        await stream.aclose()
+
+        assert fake_engine.add_request_kwargs["max_context_window"] == 1_000_000
 
 
 class TestVLMToolForwarding:

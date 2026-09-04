@@ -361,6 +361,21 @@ class TestBatchedEngineStreamingCleanup:
 
         assert fake_engine.add_request_kwargs["tools"] == tools
 
+    @pytest.mark.asyncio
+    async def test_stream_generate_forwards_effective_context_window(self):
+        from omlx.engine.batched import BatchedEngine
+
+        fake_engine = FakeStreamingCore()
+        engine = BatchedEngine(model_name="test-model")
+        engine._loaded = True
+        engine._engine = fake_engine
+
+        stream = engine.stream_generate("hello", max_context_window=1_000_000)
+        await stream.__anext__()
+        await stream.aclose()
+
+        assert fake_engine.add_request_kwargs["max_context_window"] == 1_000_000
+
 
 class TestBatchedEngineApplyChatTemplate:
     """Tests for BatchedEngine._apply_chat_template()."""

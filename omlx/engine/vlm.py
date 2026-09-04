@@ -3562,6 +3562,7 @@ class VLMBatchedEngine(BaseEngine):
         output = await self._engine.generate(
             prompt=prompt,
             sampling_params=sampling_params,
+            max_context_window=kwargs.get("max_context_window"),
             vlm_inputs_embeds=vlm_inputs_embeds,
             vlm_extra_kwargs=vlm_extra_kwargs,
             vlm_image_hash=vlm_image_hash,
@@ -3676,6 +3677,7 @@ class VLMBatchedEngine(BaseEngine):
         request_id = await engine.add_request(
             prompt=prompt,
             sampling_params=sampling_params,
+            max_context_window=kwargs.get("max_context_window"),
             vlm_inputs_embeds=vlm_inputs_embeds,
             vlm_extra_kwargs=vlm_extra_kwargs,
             vlm_image_hash=vlm_image_hash,

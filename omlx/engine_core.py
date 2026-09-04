@@ -611,6 +611,7 @@ class EngineCore:
         benchmark_ane_sequence_length: int = 0,
         tools: list[dict[str, Any]] | None = None,
         cache_inspection_media: tuple[dict[str, Any], ...] = (),
+        max_context_window: int | None = None,
     ) -> str:
         """
         Add a request for processing.
@@ -627,6 +628,8 @@ class EngineCore:
             specprefill: Per-request SpecPrefill override (True/False/None)
             specprefill_keep_pct: Per-request keep rate override
             specprefill_threshold: Per-request threshold override (min tokens)
+            cache_inspection_media: Media descriptors for cache sidecars
+            max_context_window: Effective context limit used to validate the request
 
         Returns:
             The request ID
@@ -645,6 +648,7 @@ class EngineCore:
             request_id=request_id,
             prompt=prompt,
             sampling_params=sampling_params,
+            max_context_window=max_context_window,
             tools=tools,
             images=images,
             videos=videos,

@@ -46,6 +46,7 @@ def test_active_models_generation_includes_activity_and_waiting_rows():
         last_activity_at=109.5,
         num_output_tokens=20,
         num_prompt_tokens=12,
+        max_context_window=1_000_000,
         max_tokens=64,
     )
     waiting_request = SimpleNamespace(
@@ -93,6 +94,7 @@ def test_active_models_generation_includes_activity_and_waiting_rows():
             "tokens_per_second": 2.0,
             "last_activity_age_seconds": 0.5,
             "prompt_tokens": 12,
+            "max_context_window": 1_000_000,
             "max_tokens": 64,
         }
     ]
@@ -616,3 +618,18 @@ def test_dflash_dashboard_localizes_metrics_and_shows_session_fallbacks():
     for locale_path in i18n_dir.glob("*.json"):
         locale = json.loads(locale_path.read_text(encoding="utf-8"))
         assert not keys - locale.keys(), f"{locale_path.name} is missing DFlash keys"
+
+
+def test_dashboard_generation_rows_show_live_context_usage():
+    root = Path(__file__).resolve().parents[1]
+    template = (
+        root / "omlx/admin/templates/dashboard/_status.html"
+    ).read_text(encoding="utf-8")
+
+    assert "gen.prompt_tokens + (gen.generated_tokens || 0)" in template
+    assert "formatTokenCount(gen.max_context_window)" in template
+    assert 'x-text="formatTokenCount(gen.generated_tokens || 0)"' in template
+    assert '<strong class="font-bold text-neutral-600"' in template
+    assert "activity.prompt_tokens + activity.token_count" in template
+    assert "formatTokenCount(activity.max_context_window)" in template
+    assert "formatTokenCount(gen.generated_tokens || 0) + ' tok'" in template
