@@ -174,6 +174,18 @@ def test_tailwind_contains_new_chat_ui_utilities():
     assert ".z-\\[200\\]{" in css
 
 
+def test_escape_does_not_discard_inline_message_edits():
+    html = _template()
+    editor = _section(
+        html,
+        '                                        <textarea x-model="editContent"',
+        "                                <template x-if=\"getTurnVariantsForUser(index).length > 1\">",
+    )
+
+    assert "@keydown.escape" not in editor
+    assert '@click="cancelEdit"' in editor
+
+
 def test_empty_thinking_content_is_not_rendered_or_replayed():
     html = _template()
     helper = _section(
