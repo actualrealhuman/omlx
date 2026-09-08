@@ -1336,7 +1336,7 @@
                                             @input="resizeEditTextarea($el)"
                                             @resize.window.debounce.100ms="resizeEditTextarea($el)"
                                             @keydown.enter.ctrl="if (!$event.isComposing && $event.keyCode !== 229) saveEdit(index)"
-                                            @keydown.escape="cancelEdit" class="inline-edit-textarea"
+                                            class="inline-edit-textarea"
                                             x-init="$nextTick(() => { $el.focus(); $el.setSelectionRange($el.value.length, $el.value.length); resizeEditTextarea($el); })"></textarea>
                                         <div class="inline-edit-actions">
                                             <button @click="cancelEdit"
