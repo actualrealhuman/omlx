@@ -413,9 +413,21 @@ apps/omlx-mac/Scripts/build.sh release --rebuild-donor
 
 # Stage with optional GLM-5.2 / MiniMax M3 native custom kernels
 apps/omlx-mac/Scripts/build.sh release --with-custom-kernel
+
+# Gracefully replace the running menu-bar app with the staged build
+apps/omlx-mac/Scripts/activate_build.py
+
+# With the staged app running, verify the dashboard restart path end to end
+apps/omlx-mac/Scripts/verify_restart.py
 ```
 
 First cold build takes 10–20 minutes (venvstacks Python layer assembly). Subsequent builds reuse the cached `packaging/_export/` and finish in about 4 minutes. See [packaging/README.md](packaging/README.md) for the layer configuration and [apps/omlx-mac/](apps/omlx-mac/) for the Swift sources.
+
+The activation and restart-verification helpers are local-only. Activation
+stops the existing server gracefully before replacing the menu-bar app, then
+waits for the staged server to become healthy. The restart verifier uses the
+configured admin key without printing it, waits for a real down-then-up
+transition, and confirms that the menu-bar supervisor owns a new server PID.
 
 ## Contributing
 
