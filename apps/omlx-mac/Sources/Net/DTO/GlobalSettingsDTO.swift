@@ -30,6 +30,7 @@ extension PatchOptionalInt: Encodable {
 struct GlobalSettingsDTO: Codable, Equatable, Sendable {
     let basePath: String?
     let server: ServerSettings
+    let benchmarkUploads: BenchmarkUploadSettings?
     let model: ModelSettings?
     let memory: MemorySettings?
     let scheduler: SchedulerSettings?
@@ -60,6 +61,12 @@ struct GlobalSettingsDTO: Codable, Equatable, Sendable {
         let sseKeepaliveMode: String?
         let autoStartOnLaunch: Bool?
         let maxAudioUploadSize: String?
+    }
+
+    struct BenchmarkUploadSettings: Codable, Equatable, Sendable {
+        let enabled: Bool
+        let throughputEnabled: Bool
+        let accuracyEnabled: Bool
     }
 
     struct ModelSettings: Codable, Equatable, Sendable {
@@ -224,6 +231,12 @@ struct GlobalSettingsPatch: Encodable, Equatable, Sendable {
     var autoStartOnLaunch: Bool? = nil
     /// Human-readable cap such as `100MB` or `1GB`. Applied immediately.
     var maxAudioUploadSize: String? = nil
+
+    // Privacy: automatic community benchmark submissions. The global switch
+    // is a master gate; per-kind values are retained while it is off.
+    var benchmarkUploadsEnabled: Bool? = nil
+    var benchmarkUploadsThroughputEnabled: Bool? = nil
+    var benchmarkUploadsAccuracyEnabled: Bool? = nil
 
     // Claude Code (PR 9)
     var claudeCodeContextScalingEnabled: Bool? = nil

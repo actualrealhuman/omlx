@@ -10,16 +10,10 @@ import AppKit
 struct AboutScreen: View {
     @Environment(\.omlxTheme) private var theme
 
-    private var version: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
-    }
-    private var build: String {
-        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—"
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HeroCard(version: version, build: build)
+            HeroCard()
+            BuildFeaturesSection()
             ProjectSection()
             LicenseSection()
             CreditsSection()
@@ -30,9 +24,6 @@ struct AboutScreen: View {
 // MARK: - Hero
 
 private struct HeroCard: View {
-    let version: String
-    let build: String
-
     @Environment(\.omlxTheme) private var theme
 
     var body: some View {
@@ -59,7 +50,7 @@ private struct HeroCard: View {
                     .font(.omlxText(12))
                     .foregroundStyle(theme.textSecondary)
                 Text(String(localized: "about.hero.version",
-                            defaultValue: "Version \(version) · build \(build)",
+                            defaultValue: "Version \(BuildIdentity.compactVersion)",
                             comment: "Version + build line on the About screen hero card; placeholders are the bundle short version string and bundle version"))
                     .font(.omlxMono(11))
                     .foregroundStyle(theme.textTertiary)
@@ -76,6 +67,54 @@ private struct HeroCard: View {
         )
         .padding(.horizontal, 14)
         .padding(.bottom, 14)
+    }
+}
+
+private struct BuildFeaturesSection: View {
+    @Environment(\.omlxTheme) private var theme
+
+    var body: some View {
+        SectionHeader(
+            String(localized: "about.section.build_identity",
+                   defaultValue: "Build Identity",
+                   comment: "Section header above downstream build metadata"),
+            subtitle: BuildIdentity.branch
+        )
+        ListGroup {
+            FreeRow(isLast: true) {
+                VStack(alignment: .leading, spacing: 9) {
+                    HStack(spacing: 6) {
+                        buildTag(BuildIdentity.channel, emphasized: true)
+                        if let revision = BuildIdentity.revision {
+                            buildTag(revision, emphasized: false)
+                        }
+                    }
+                    if !BuildIdentity.features.isEmpty {
+                        LazyVGrid(
+                            columns: [GridItem(.adaptive(minimum: 110), spacing: 6)],
+                            alignment: .leading,
+                            spacing: 6
+                        ) {
+                            ForEach(BuildIdentity.features, id: \.self) { feature in
+                                buildTag(feature, emphasized: false)
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private func buildTag(_ value: String, emphasized: Bool) -> some View {
+        Text(value)
+            .font(.omlxMono(10.5, weight: emphasized ? .semibold : .regular))
+            .foregroundStyle(emphasized ? theme.text : theme.textSecondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(emphasized ? theme.accent.opacity(0.16) : theme.groupBg)
+            .clipShape(Capsule())
+            .overlay(Capsule().strokeBorder(theme.groupBorder, lineWidth: 0.5))
     }
 }
 

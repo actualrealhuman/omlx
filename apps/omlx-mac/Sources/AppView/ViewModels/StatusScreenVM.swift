@@ -33,11 +33,7 @@ final class StatusScreenVM {
     }
 
     var versionText: String {
-        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
-        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—"
-        return String(localized: "status.version.text",
-                      defaultValue: "\(v) · build \(b)",
-                      comment: "Version row value combining marketing version and build number; placeholders are the version string and build string")
+        BuildIdentity.compactVersion
     }
 
     var uptimeText: String {

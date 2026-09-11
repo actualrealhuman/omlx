@@ -372,6 +372,11 @@ class GlobalSettingsRequest(BaseModel):
     distributed_inference_enabled: bool | None = None
     max_audio_upload_size: str | None = None
 
+    # Automatic community benchmark submissions (live-applied privacy policy)
+    benchmark_uploads_enabled: bool | None = None
+    benchmark_uploads_throughput_enabled: bool | None = None
+    benchmark_uploads_accuracy_enabled: bool | None = None
+
     # Battery-aware inference power management
     power_enabled: bool | None = None
     power_charge_floor_percent: float | None = None
@@ -3950,6 +3955,7 @@ async def get_global_settings(is_admin: bool = Depends(require_admin)):
             ),
             "max_audio_upload_size": global_settings.server.max_audio_upload_size,
         },
+        "benchmark_uploads": global_settings.benchmark_uploads.to_dict(),
         "power": {
             **global_settings.power.to_dict(),
             "effective_chunked_prefill": bool(
@@ -4244,6 +4250,18 @@ async def update_global_settings(
             )
         global_settings.server.max_audio_upload_size = request.max_audio_upload_size
         runtime_applied.append("max_audio_upload_size")
+
+    benchmark_upload_fields = {
+        "benchmark_uploads_enabled": "enabled",
+        "benchmark_uploads_throughput_enabled": "throughput_enabled",
+        "benchmark_uploads_accuracy_enabled": "accuracy_enabled",
+    }
+    for request_field, setting_field in benchmark_upload_fields.items():
+        value = getattr(request, request_field)
+        if value is None:
+            continue
+        setattr(global_settings.benchmark_uploads, setting_field, value)
+        runtime_applied.append(request_field)
 
     if request.server_aliases is not None:
         from ..utils.network import is_valid_alias

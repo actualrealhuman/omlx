@@ -375,7 +375,9 @@
                                     <template x-if="r.upload && r.upload.skipped">
                                         <span class="inline-flex items-center gap-1.5 text-neutral-400">
                                             <i data-lucide="info" class="w-3.5 h-3.5 flex-shrink-0"></i>
-                                            <span>{{ t('acc_bench.upload.skipped_min') }}</span>
+                                            <span x-text="r.upload.skipped === 'disabled'
+                                                ? 'Not uploaded (disabled in Settings)'
+                                                : `{{ t('acc_bench.upload.skipped_min') }}`"></span>
                                         </span>
                                     </template>
                                 </div>

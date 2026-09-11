@@ -21,6 +21,18 @@ def _extract_cli_wrapper_script() -> str:
     return _extract_wrapper_script("CLI_WRAPPER")
 
 
+def test_build_script_embeds_downstream_identity_metadata():
+    script = Path("apps/omlx-mac/Scripts/build.sh").read_text()
+
+    assert 'OMLX_BUILD_CHANNEL:-$DEFAULT_BUILD_CHANNEL' in script
+    assert "_build_manifest.json" in script
+    assert 'BUILD_FEATURES="${BUILD_FEATURES},custom-kernels"' in script
+    assert 'cat > "$RESOURCES_DIR/omlx/_build_info.py"' in script
+    assert "OMLXBuildChannel" in script
+    assert "OMLXBuildFeatures" in script
+    assert "OMLXSourceRevision" in script
+
+
 def _write_fake_python(path: Path) -> None:
     path.parent.mkdir(parents=True)
     path.write_text(

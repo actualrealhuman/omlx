@@ -174,8 +174,8 @@ struct BenchUploadStateDTO: Codable, Equatable, Sendable {
     let failedCount: Int
     /// Display owner hash (verify char stripped). Populated on phase=done.
     let ownerHash: String?
-    /// Set when phase=skipped. Only external-endpoint runs skip now —
-    /// accelerated runs upload and are tagged instead.
+    /// Set when phase=skipped (for example, an external endpoint or a
+    /// disabled automatic-upload policy).
     let skippedReason: String?
     /// Retained for wire compatibility; the server always sends it empty.
     let skippedFeatures: [String]

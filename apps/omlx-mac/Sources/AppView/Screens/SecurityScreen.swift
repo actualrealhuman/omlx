@@ -25,11 +25,72 @@ struct SecurityScreen: View {
         VStack(alignment: .leading, spacing: 0) {
             APIKeySection(vm: vm, client: services.client)
             AuthenticationSection(vm: vm, client: services.client)
+            BenchmarkPrivacySection(vm: vm, client: services.client)
             SubKeysSection(vm: vm, client: services.client)
 
             FooterBar(error: vm.lastError)
         }
         .task { await vm.load(client: services.client) }
+    }
+}
+
+// MARK: - Benchmark privacy
+
+private struct BenchmarkPrivacySection: View {
+    @Bindable var vm: SecurityScreenVM
+    let client: OMLXClient
+
+    var body: some View {
+        SectionHeader(
+            String(localized: "security.section.benchmark_privacy",
+                   defaultValue: "Benchmark Privacy",
+                   comment: "Section header for automatic community benchmark upload controls"),
+            subtitle: String(localized: "security.section.benchmark_privacy.sub",
+                             defaultValue: "Choose whether completed local benchmarks may be submitted to omlx.ai",
+                             comment: "Subtitle for automatic community benchmark upload controls")
+        )
+
+        ListGroup {
+            Row(
+                label: String(localized: "security.benchmark_uploads.master",
+                              defaultValue: "Automatic Benchmark Uploads",
+                              comment: "Master toggle for automatic community benchmark submissions"),
+                sublabel: String(localized: "security.benchmark_uploads.master.sub",
+                                 defaultValue: "Master permission for all automatic benchmark submissions. Off by default in this private build.",
+                                 comment: "Description of the master automatic benchmark upload toggle")
+            ) {
+                RowSwitch(isOn: vm.bind($vm.benchmarkUploadsEnabled, save: {
+                    Task { await vm.saveBenchmarkUploadsEnabled(client: client) }
+                }))
+            }
+            Row(
+                label: String(localized: "security.benchmark_uploads.throughput",
+                              defaultValue: "Throughput Results",
+                              comment: "Toggle for throughput benchmark community submissions"),
+                sublabel: String(localized: "security.benchmark_uploads.throughput.sub",
+                                 defaultValue: "Submit prompt-processing, generation-speed, and system-metric results.",
+                                 comment: "Description of the throughput benchmark upload toggle")
+            ) {
+                RowSwitch(isOn: vm.bind($vm.throughputUploadsEnabled, save: {
+                    Task { await vm.saveThroughputUploadsEnabled(client: client) }
+                }))
+                .disabled(!vm.benchmarkUploadsEnabled)
+            }
+            Row(
+                label: String(localized: "security.benchmark_uploads.accuracy",
+                              defaultValue: "Accuracy and Intelligence Results",
+                              comment: "Toggle for accuracy benchmark community submissions"),
+                sublabel: String(localized: "security.benchmark_uploads.accuracy.sub",
+                                 defaultValue: "Submit eligible accuracy summaries and associated question-level results.",
+                                 comment: "Description of the accuracy benchmark upload toggle"),
+                isLast: true
+            ) {
+                RowSwitch(isOn: vm.bind($vm.accuracyUploadsEnabled, save: {
+                    Task { await vm.saveAccuracyUploadsEnabled(client: client) }
+                }))
+                .disabled(!vm.benchmarkUploadsEnabled)
+            }
+        }
     }
 }
 

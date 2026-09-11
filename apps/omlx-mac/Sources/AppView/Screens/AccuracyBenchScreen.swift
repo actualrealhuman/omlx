@@ -764,7 +764,15 @@ private struct UploadStatusRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            if upload.skipped != nil {
+            if upload.skipped == "disabled" {
+                Image(systemName: "lock.shield")
+                    .foregroundStyle(theme.textTertiary)
+                Text(String(localized: "bench.accuracy.upload.disabled",
+                            defaultValue: "Not uploaded (disabled in Security settings)",
+                            comment: "Accuracy result card status when automatic uploads are disabled"))
+                    .font(.omlxText(11.5))
+                    .foregroundStyle(theme.textSecondary)
+            } else if upload.skipped != nil {
                 Image(systemName: "info.circle")
                     .font(.system(size: 11))
                     .foregroundStyle(theme.textTertiary)

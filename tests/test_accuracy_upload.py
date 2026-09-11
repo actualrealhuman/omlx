@@ -15,6 +15,15 @@ from omlx.admin.accuracy_upload import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _enable_accuracy_upload_policy(monkeypatch):
+    """Uploader unit tests exercise transport after the policy gate."""
+    monkeypatch.setattr(
+        "omlx.settings.automatic_benchmark_upload_allowed",
+        lambda kind: kind == "accuracy",
+    )
+
+
 def _question(i: int = 0, raw: str = "B", **overrides) -> dict:
     q = {
         "id": str(i),
@@ -210,6 +219,22 @@ def _response(status_code: int, body: dict) -> MagicMock:
 
 
 class TestUploadIntelligenceResult:
+    @pytest.mark.asyncio
+    async def test_disabled_policy_never_calls_transport(self, monkeypatch):
+        monkeypatch.setattr(
+            "omlx.settings.automatic_benchmark_upload_allowed",
+            lambda kind: False,
+        )
+        transport = AsyncMock()
+        monkeypatch.setattr(accuracy_upload, "_do_upload", transport)
+
+        outcome = await upload_intelligence_result(
+            object(), {"unused": True}, {"total": 100}
+        )
+
+        assert outcome == {"skipped": "disabled"}
+        transport.assert_not_awaited()
+
     @pytest.mark.asyncio
     async def test_success_uploads_summary_then_raw(self):
         post_resp = _response(201, {"id": "abc12345", "url": "https://omlx.ai/benchmarks/intelligence/abc12345"})

@@ -1,0 +1,12 @@
+{
+  "channel": "private",
+  "features": [
+    "benchmark-upload-controls",
+    "cache-inspection",
+    "battery-power",
+    "live-context",
+    "chat-edit-autosize",
+    "stream-recovery",
+    "safe-edit-cancel"
+  ]
+}

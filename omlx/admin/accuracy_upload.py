@@ -205,6 +205,10 @@ async def upload_intelligence_result(
     run: Any, ctx: dict, result_data: dict
 ) -> dict:
     """Upload one suite result. Never raises; returns the outcome dict."""
+    from ..settings import automatic_benchmark_upload_allowed
+
+    if not automatic_benchmark_upload_allowed("accuracy"):
+        return {"skipped": "disabled"}
     if result_data.get("total", 0) < _MIN_UPLOAD_QUESTIONS:
         return {"skipped": "min_questions"}
     try:

@@ -446,9 +446,8 @@ struct ServerHeroCard: View {
     }
 
     private var title: String {
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
-        let trimmed = version?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? "oMLX" : "oMLX \(trimmed)"
+        let suffix = BuildIdentity.channel == "upstream" ? "" : " [\(BuildIdentity.channel)]"
+        return "oMLX \(BuildIdentity.version)\(suffix)"
     }
 }
 
@@ -760,5 +759,4 @@ private struct ServerAdvancedSection: View {
         }
     }
 }
-
 

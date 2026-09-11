@@ -941,6 +941,10 @@ private struct SkippedBanner: View {
 
     private func body(reason: String?) -> String {
         switch reason {
+        case "disabled":
+            return String(localized: "bench.throughput.upload.skipped.disabled",
+                          defaultValue: "Automatic throughput uploads are disabled in Security settings. Results remain on this Mac.",
+                          comment: "Skipped-upload reason when automatic throughput benchmark uploads are disabled")
         case "external_endpoint":
             return String(localized: "bench.throughput.upload.skipped.external",
                           defaultValue: "External endpoint results are not submitted because they measure remote hardware.",

@@ -213,6 +213,41 @@ class ServerSettings:
 
 
 @dataclass
+class BenchmarkUploadSettings:
+    """Privacy controls for automatic community benchmark submissions.
+
+    The master switch defaults off in the private distribution.  Per-kind
+    switches default on so a user who deliberately enables automatic uploads
+    gets the upstream behavior for both benchmark families, while still being
+    able to narrow consent to either throughput or accuracy results.
+    """
+
+    enabled: bool = False
+    throughput_enabled: bool = True
+    accuracy_enabled: bool = True
+
+    def allows(self, kind: Literal["throughput", "accuracy"]) -> bool:
+        if not self.enabled:
+            return False
+        return (
+            self.throughput_enabled
+            if kind == "throughput"
+            else self.accuracy_enabled
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> BenchmarkUploadSettings:
+        return cls(
+            enabled=bool(data.get("enabled", False)),
+            throughput_enabled=bool(data.get("throughput_enabled", True)),
+            accuracy_enabled=bool(data.get("accuracy_enabled", True)),
+        )
+
+
+@dataclass
 class PowerManagementSettings:
     """Battery-aware inference policy.
 
@@ -1060,6 +1095,9 @@ class GlobalSettings:
 
     base_path: Path = field(default_factory=lambda: DEFAULT_BASE_PATH)
     server: ServerSettings = field(default_factory=ServerSettings)
+    benchmark_uploads: BenchmarkUploadSettings = field(
+        default_factory=BenchmarkUploadSettings
+    )
     power: PowerManagementSettings = field(default_factory=PowerManagementSettings)
     model: ModelSettings = field(default_factory=ModelSettings)
     memory: MemorySettings = field(default_factory=MemorySettings)
@@ -1144,6 +1182,10 @@ class GlobalSettings:
             # Load each section
             if "server" in data:
                 self.server = ServerSettings.from_dict(data["server"])
+            if "benchmark_uploads" in data:
+                self.benchmark_uploads = BenchmarkUploadSettings.from_dict(
+                    data["benchmark_uploads"]
+                )
             if "power" in data:
                 self.power = PowerManagementSettings.from_dict(data["power"])
             if "model" in data:
@@ -1517,6 +1559,7 @@ class GlobalSettings:
         data = {
             "version": SETTINGS_VERSION,
             "server": self.server.to_dict(),
+            "benchmark_uploads": self.benchmark_uploads.to_dict(),
             "power": self.power.to_dict(),
             "model": self.model.to_dict(),
             "memory": self.memory.to_dict(),
@@ -1974,6 +2017,17 @@ def get_settings() -> GlobalSettings:
     if _global_settings is None:
         raise RuntimeError("Settings not initialized. Call init_settings() first.")
     return _global_settings
+
+
+def automatic_benchmark_upload_allowed(
+    kind: Literal["throughput", "accuracy"],
+) -> bool:
+    """Return the live automatic-upload policy, failing closed before init."""
+    try:
+        settings = get_settings()
+    except RuntimeError:
+        return False
+    return settings.benchmark_uploads.allows(kind)
 
 
 def init_settings(

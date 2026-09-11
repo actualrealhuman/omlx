@@ -126,6 +126,47 @@
                                               class="block w-5 h-5 bg-white rounded-full shadow-sm transform transition-transform duration-300 absolute top-0.5 left-0.5"></span>
                                     </button>
                                 </div>
+                                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-4 sm:px-6 py-4">
+                                    <div>
+                                        <label class="text-sm text-neutral-700">Automatic Benchmark Uploads</label>
+                                        <p class="text-xs text-neutral-400 mt-0.5">Master permission for automatic submissions to omlx.ai. Off by default in this private build.</p>
+                                    </div>
+                                    <button type="button"
+                                            @click="globalSettings.benchmark_uploads.enabled = !globalSettings.benchmark_uploads.enabled"
+                                            :class="globalSettings.benchmark_uploads.enabled ? 'bg-black' : 'bg-neutral-200'"
+                                            class="relative w-11 h-6 rounded-full transition-colors duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black">
+                                        <span :class="globalSettings.benchmark_uploads.enabled ? 'translate-x-5' : 'translate-x-0'"
+                                              class="block w-5 h-5 bg-white rounded-full shadow-sm transform transition-transform duration-300 absolute top-0.5 left-0.5"></span>
+                                    </button>
+                                </div>
+                                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-4 sm:px-6 py-4"
+                                     :class="globalSettings.benchmark_uploads.enabled ? '' : 'opacity-50'">
+                                    <div>
+                                        <label class="text-sm text-neutral-700">Throughput Results</label>
+                                        <p class="text-xs text-neutral-400 mt-0.5">Prompt-processing, generation-speed, and system-metric results.</p>
+                                    </div>
+                                    <button type="button" :disabled="!globalSettings.benchmark_uploads.enabled"
+                                            @click="globalSettings.benchmark_uploads.throughput_enabled = !globalSettings.benchmark_uploads.throughput_enabled"
+                                            :class="globalSettings.benchmark_uploads.throughput_enabled ? 'bg-black' : 'bg-neutral-200'"
+                                            class="relative w-11 h-6 rounded-full transition-colors duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black disabled:cursor-not-allowed">
+                                        <span :class="globalSettings.benchmark_uploads.throughput_enabled ? 'translate-x-5' : 'translate-x-0'"
+                                              class="block w-5 h-5 bg-white rounded-full shadow-sm transform transition-transform duration-300 absolute top-0.5 left-0.5"></span>
+                                    </button>
+                                </div>
+                                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-4 sm:px-6 py-4"
+                                     :class="globalSettings.benchmark_uploads.enabled ? '' : 'opacity-50'">
+                                    <div>
+                                        <label class="text-sm text-neutral-700">Accuracy and Intelligence Results</label>
+                                        <p class="text-xs text-neutral-400 mt-0.5">Eligible accuracy summaries and associated question-level results.</p>
+                                    </div>
+                                    <button type="button" :disabled="!globalSettings.benchmark_uploads.enabled"
+                                            @click="globalSettings.benchmark_uploads.accuracy_enabled = !globalSettings.benchmark_uploads.accuracy_enabled"
+                                            :class="globalSettings.benchmark_uploads.accuracy_enabled ? 'bg-black' : 'bg-neutral-200'"
+                                            class="relative w-11 h-6 rounded-full transition-colors duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black disabled:cursor-not-allowed">
+                                        <span :class="globalSettings.benchmark_uploads.accuracy_enabled ? 'translate-x-5' : 'translate-x-0'"
+                                              class="block w-5 h-5 bg-white rounded-full shadow-sm transform transition-transform duration-300 absolute top-0.5 left-0.5"></span>
+                                    </button>
+                                </div>
                                 <!-- Sub Keys Section -->
                                 <div class="px-6 py-4">
                                     <div class="flex items-center justify-between mb-3">

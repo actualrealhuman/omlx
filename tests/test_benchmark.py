@@ -1371,7 +1371,13 @@ class TestUploadToOmlxAi:
         )
         mock_pool = MagicMock()
 
-        with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+        with (
+            patch(
+                "omlx.settings.automatic_benchmark_upload_allowed",
+                return_value=False,
+            ),
+            patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread,
+        ):
             await _upload_to_omlx_ai(run, mock_pool)
 
         mock_to_thread.assert_not_awaited()
@@ -1386,6 +1392,53 @@ class TestUploadToOmlxAi:
             }
         ]
         assert run.terminal is True
+
+    @pytest.mark.asyncio
+    async def test_upload_can_be_enabled(self):
+        """The same build restores upstream transport after explicit consent."""
+        from omlx.admin.benchmark import _upload_to_omlx_ai
+
+        run = BenchmarkRun(
+            bench_id="test-bench-enabled",
+            request=BenchmarkRequest(
+                model_id="Qwen3-30B-4bit",
+                prompt_lengths=[1024],
+            ),
+        )
+        run.results = [
+            {
+                "test_type": "single",
+                "pp": 1024,
+                "tg": 128,
+                "processing_tps": 500.0,
+                "gen_tps": 50.0,
+                "ttft_ms": 100.0,
+                "peak_memory_bytes": 0,
+            }
+        ]
+        mock_entry = MagicMock()
+        mock_entry.model_path = "/models/Qwen3-30B-4bit"
+        mock_pool = MagicMock()
+        mock_pool.get_entry.return_value = mock_entry
+        mock_pool._settings_manager = None
+        response = MagicMock(status_code=201)
+        response.json.return_value = {
+            "id": "abc123",
+            "url": "https://omlx.ai/benchmarks/abc123",
+        }
+
+        with (
+            patch(
+                "omlx.settings.automatic_benchmark_upload_allowed",
+                return_value=True,
+            ),
+            patch("asyncio.to_thread", new=AsyncMock(return_value=response)) as post,
+        ):
+            await _upload_to_omlx_ai(run, mock_pool)
+
+        post.assert_awaited_once()
+        assert run.upload_state["phase"] == "done"
+        assert run.upload_state["success_count"] == 1
 
 
 _CF_INTERSTITIAL = (

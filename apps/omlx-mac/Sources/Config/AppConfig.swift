@@ -24,6 +24,40 @@
 
 import Foundation
 
+enum BuildIdentity {
+    static var version: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
+    }
+
+    static var buildNumber: String {
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—"
+    }
+
+    static var channel: String {
+        Bundle.main.infoDictionary?["OMLXBuildChannel"] as? String ?? "upstream"
+    }
+
+    static var revision: String? {
+        let value = Bundle.main.infoDictionary?["OMLXSourceRevision"] as? String
+        return value?.isEmpty == false ? value : nil
+    }
+
+    static var branch: String? {
+        let value = Bundle.main.infoDictionary?["OMLXSourceBranch"] as? String
+        return value?.isEmpty == false ? value : nil
+    }
+
+    static var features: [String] {
+        Bundle.main.infoDictionary?["OMLXBuildFeatures"] as? [String] ?? []
+    }
+
+    static var compactVersion: String {
+        [version, "build \(buildNumber)", channel, revision]
+            .compactMap { $0 }
+            .joined(separator: " · ")
+    }
+}
+
 struct AppConfig: Sendable, Equatable, Codable {
     /// The raw bind address the user configured (e.g. `0.0.0.0`, `127.0.0.1`, `localhost`).
     var bindAddress: String

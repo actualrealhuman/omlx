@@ -6,13 +6,28 @@ branches that are developed independently for possible upstream contribution.
 
 | Change | Kind | Source branch or commit | Upstream status |
 | --- | --- | --- | --- |
-| Disable community benchmark uploads | Temporary downstream patch | `patch/telemetry-upload-disabled` / `e2e9e189` | Replace with an opt-in setting; uploads off by default |
+| Benchmark upload privacy controls | Downstream feature | `patch/telemetry-upload-disabled` / `e2e9e189` plus integration follow-up | Global and per-kind settings; master permission off by default |
 | Cache inspection sidecars | Upstreamable feature | `feature/cache-inspection-sidecars` | Draft PR #3326 |
 | Battery and power management | Upstreamable feature | `feature/battery-power-management` | Planned |
 | Live dashboard context usage | Upstreamable feature | `feature/dashboard-context-usage` / `260c66fd` | Implemented and tested; PR not opened |
 | Autosizing chat message editor | Upstreamable feature | `feature/chat-edit-autosize` / `20dba1ca` | Implemented and tested; PR not opened |
 | Explicit-only message edit cancellation | Upstreamable fix | `feature/chat-edit-safe-cancel` / `c26317ff` (`4294bd5e` integration) | Implemented and tested; PR not opened |
 | Preserve interrupted chat output | Upstreamable fix | `feature/chat-preserve-interrupted-output` / `86fd1d63` | Implemented and tested; PR not opened |
+
+## Build identity
+
+Packaged personal builds retain the canonical upstream semantic version for
+update comparisons and add separate identity metadata:
+
+- channel (`private` by default);
+- Git source revision and branch;
+- feature IDs for every downstream feature group in the package;
+- `custom-kernels` when the optional native-kernel build flag is used.
+
+The native About and Status screens, the server health/status JSON, and the
+CLI startup banner expose this metadata. Override the channel or base feature
+list for an intentional variant with `OMLX_BUILD_CHANNEL` and
+`OMLX_BUILD_FEATURES` when invoking `apps/omlx-mac/Scripts/build.sh`.
 
 ## Branch policy
 

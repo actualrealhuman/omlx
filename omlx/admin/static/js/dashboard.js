@@ -126,6 +126,7 @@
             globalSettings: {
                 base_path: '',
                 server: { host: '127.0.0.1', port: 8000, log_level: 'info', sse_keepalive_mode: 'chunk', burst_decode_mode: 'balanced', preserve_mid_system_cache: true, distributed_inference_enabled: false, distributed_inference_active: false, max_audio_upload_size: '100MB' },
+                benchmark_uploads: { enabled: false, throughput_enabled: true, accuracy_enabled: true },
                 power: { enabled: true, battery_behavior: 'pause', charge_floor_percent: 50, recovery_hysteresis_percent: 2, target_charge_watts: 10, ac_stabilization_seconds: 8, sample_interval_seconds: 0.25, notification_poll_interval_seconds: 0.05, telemetry_stale_seconds: 2, charge_filter_seconds: 2, charge_deadband_watts: null, charge_deadband_min_watts: 1, charge_deadband_max_watts: 5, reduction_confirmation_seconds: 0.5, restoration_confirmation_seconds: 3, duty_reduction_step: 0.2, duty_restoration_step: 0.05, duty_cycle_period_seconds: 2, paused_probe_duty: 0.05, paused_probe_interval_seconds: 10, max_cooperative_pause_latency_seconds: 0.25, prefill_pause_fallback_tokens: 128, effective_chunked_prefill: true, status: null },
                 model: { model_dirs: [''], model_fallback: false, hide_helper_models: false },
                 memory: { prefill_memory_guard: true, memory_guard_tier: 'balanced', memory_guard_custom_ceiling_gb: 0 },
@@ -568,7 +569,7 @@
             benchUploadResults: [],
             benchUploadDone: null,
             benchUploading: false,
-            benchUploadSkipped: null,  // { reason } — only external-endpoint runs skip now
+            benchUploadSkipped: null,  // { reason } — disabled policy or external endpoint
             benchUploadFlags: [],      // [{key, label}] acceleration active during the run
             // { bench_id, model_id } when the server reports a running bench
             // that is NOT the one this tab is displaying. Drives the "another
@@ -907,6 +908,10 @@
                             integrations: { ...this.globalSettings.integrations, ...data.integrations },
                             idle_timeout: { ...this.globalSettings.idle_timeout, ...data.idle_timeout },
                             system: { ...this.globalSettings.system, ...data.system },
+                            benchmark_uploads: {
+                                ...this.globalSettings.benchmark_uploads,
+                                ...data.benchmark_uploads,
+                            },
                         };
                         this.globalSettings.ui = data.ui || { language: 'en' };
                         if (
@@ -1035,6 +1040,9 @@
                             preserve_mid_system_cache: this.globalSettings.server.preserve_mid_system_cache,
                             distributed_inference_enabled: this.globalSettings.server.distributed_inference_enabled,
                             max_audio_upload_size: this.globalSettings.server.max_audio_upload_size,
+                            benchmark_uploads_enabled: this.globalSettings.benchmark_uploads.enabled,
+                            benchmark_uploads_throughput_enabled: this.globalSettings.benchmark_uploads.throughput_enabled,
+                            benchmark_uploads_accuracy_enabled: this.globalSettings.benchmark_uploads.accuracy_enabled,
                             power_enabled: this.globalSettings.power.enabled,
                             power_charge_floor_percent: this.globalSettings.power.charge_floor_percent,
                             power_recovery_hysteresis_percent: this.globalSettings.power.recovery_hysteresis_percent,

@@ -94,17 +94,25 @@ def serve_command(args):
 
     process_title.set_process_title()
 
-    try:
-        from ._build_info import build_number
-    except ImportError:
-        build_number = None
+    from .build_identity import get_build_identity
+
+    build_info = get_build_identity()
+    build_number = build_info["build_number"]
 
     # Print version banner
     print(f"\033[33moMLX - LLM inference, optimized for your Mac\033[0m")
     print(f"\033[33m├─ https://github.com/jundot/omlx\033[0m")
     if build_number:
         print(f"\033[33m├─ Version: {__version__}\033[0m")
-        print(f"\033[33m└─ Build: {build_number}\033[0m")
+        print(
+            f"\033[33m├─ Build: {build_number} · {build_info['channel']} · "
+            f"{build_info['source_revision']}\033[0m"
+        )
+        print(
+            "\033[33m└─ Features: "
+            + ", ".join(build_info["features"])
+            + "\033[0m"
+        )
     else:
         print(f"\033[33m└─ Version: {__version__}\033[0m")
     print()

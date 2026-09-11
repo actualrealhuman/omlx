@@ -601,6 +601,39 @@ class TestGetGlobalSettingsGdnSplit:
         assert result["cache"]["gdn_snapshot_storage"] == "ssd_sidecar"
         assert result["cache"]["gdn_ssd_pending_max_size"] == "768MB"
         assert result["server"]["max_audio_upload_size"] == "500MB"
+        assert result["benchmark_uploads"] == {
+            "enabled": False,
+            "throughput_enabled": True,
+            "accuracy_enabled": True,
+        }
+
+
+class TestUpdateGlobalSettingsBenchmarkUploads:
+    """The three privacy switches persist and apply without a restart."""
+
+    def test_saves_master_and_per_kind_switches(self):
+        gs = _make_global_settings()
+        request = GlobalSettingsRequest(
+            benchmark_uploads_enabled=True,
+            benchmark_uploads_throughput_enabled=False,
+            benchmark_uploads_accuracy_enabled=True,
+        )
+
+        with _patched_global_settings(gs):
+            result = asyncio.run(
+                admin_routes.update_global_settings(request=request, is_admin=True)
+            )
+
+        assert result["success"] is True
+        assert gs.benchmark_uploads.enabled is True
+        assert gs.benchmark_uploads.throughput_enabled is False
+        assert gs.benchmark_uploads.accuracy_enabled is True
+        assert set(result["runtime_applied"]) >= {
+            "benchmark_uploads_enabled",
+            "benchmark_uploads_throughput_enabled",
+            "benchmark_uploads_accuracy_enabled",
+        }
+        gs.save.assert_called_once()
 
 
 class TestUpdateGlobalSettingsAudioUpload:

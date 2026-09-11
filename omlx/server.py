@@ -62,6 +62,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from omlx._version import __version__
+from omlx.build_identity import get_build_identity
 
 from .api.anthropic_models import (
     MessagesRequest as AnthropicMessagesRequest,
@@ -2829,6 +2830,7 @@ async def health(response: Response):
         power_status = asdict(_server_state.power_manager.status())
     return {
         "status": "loading" if loading else "healthy",
+        "build": get_build_identity(),
         "default_model": _server_state.default_model,
         "engine_pool": pool_status,
         "mcp": mcp_info,
@@ -2892,6 +2894,7 @@ async def server_status(_: bool = Depends(verify_api_key)):
     return {
         "status": "ok",
         "version": __version__,
+        "build": get_build_identity(),
         "uptime_seconds": snapshot["uptime_seconds"],
         "models_discovered": models_discovered,
         "models_loaded": models_loaded,
