@@ -599,30 +599,15 @@ extension AppDelegate: AppControlHandling {
             )
 
         case .restart:
-            await server.stop()
-            do {
-                switch try server.start() {
-                case .started:
-                    return .success(status: "starting", state: server.state, server: server)
-                case .alreadyRunning:
-                    return .success(status: "running", state: server.state, server: server)
-                case .portConflict(let conflict):
-                    let pid = conflict.pid.map(String.init) ?? "unknown"
-                    return .failure(
-                        status: "port_conflict",
-                        state: server.state,
-                        server: server,
-                        message: "Port \(server.port) is in use by PID \(pid)."
-                    )
-                }
-            } catch {
-                return .failure(
-                    status: "error",
-                    state: server.state,
-                    server: server,
-                    message: String(describing: error)
-                )
+            if server.scheduleRestart() {
+                return .success(status: "restarting", state: server.state, server: server)
             }
+            return .success(
+                status: "restarting",
+                state: server.state,
+                server: server,
+                message: "A restart is already in progress."
+            )
         }
     }
 }

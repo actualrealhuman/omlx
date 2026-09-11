@@ -157,6 +157,7 @@ final class ServerProcess: @unchecked Sendable {
     )
     private var lastAuxiliaryHealthyAt: Date?
     private var expectingExit       = false   // set by stop()/forceRestart() so terminationHandler doesn't trigger auto-restart
+    private var restartScheduled    = false
     private let logURL: URL
 
     init(
@@ -248,10 +249,41 @@ final class ServerProcess: @unchecked Sendable {
         closeLog()
     }
 
+    /// Accept an explicit restart request without making the caller wait for
+    /// this child process to exit.  The state transition happens synchronously
+    /// so control-socket clients cannot mistake the still-live old process for
+    /// a completed restart.  The short delay lets an originating HTTP handler
+    /// flush its 202 response before SIGTERM begins.
+    @discardableResult
+    func scheduleRestart(after delay: TimeInterval = 0.5) -> Bool {
+        guard !restartScheduled else { return false }
+        restartScheduled = true
+        update(.stopping)
+
+        Task { @MainActor [weak self] in
+            if delay > 0 {
+                try? await Task.sleep(for: .seconds(delay))
+            }
+            guard let self, self.restartScheduled else { return }
+            await self.stop()
+            self.autoRestartBudget.reset()
+            self.consecutiveFailures = 0
+            self.lastAuxiliaryHealthyAt = nil
+            self.restartScheduled = false
+            do {
+                _ = try self.start()
+            } catch {
+                self.update(.failed(message: "Explicit restart failed: \(error)"))
+            }
+        }
+        return true
+    }
+
     /// Force-restart: SIGKILL the child without waiting, reset counters,
     /// then start() fresh.
     @discardableResult
     func forceRestart() async throws -> StartResult {
+        restartScheduled = false
         expectingExit = true
         cancelHealthLoop()
         if let proc = process, proc.isRunning {
@@ -329,8 +361,12 @@ final class ServerProcess: @unchecked Sendable {
         proc.standardOutput = handle
         proc.standardError  = handle
         proc.terminationHandler = { [weak self] term in
+            let exitedPID = term.processIdentifier
             DispatchQueue.main.async {
-                self?.handleProcessExit(code: term.terminationStatus)
+                self?.handleProcessExit(
+                    pid: exitedPID,
+                    code: term.terminationStatus
+                )
             }
         }
 
@@ -346,7 +382,12 @@ final class ServerProcess: @unchecked Sendable {
         startHealthCheckLoop()
     }
 
-    private func handleProcessExit(code: Int32) {
+    private func handleProcessExit(pid: Int32, code: Int32) {
+        // Process termination handlers are delivered asynchronously. A
+        // bounded stop may already have installed a replacement child before
+        // the old callback reaches the main queue; never let that stale event
+        // clear or restart the replacement.
+        guard process?.processIdentifier == pid else { return }
         let wasExpectingExit = expectingExit
         expectingExit = false
         process = nil

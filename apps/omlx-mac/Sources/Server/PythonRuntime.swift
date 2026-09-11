@@ -104,6 +104,7 @@ struct PythonRuntime {
     func makeEnvironment() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         env["OMLX_SUPERVISED"] = "menubar"
+        env["OMLX_CONTROL_SOCKET"] = AppControlServer.defaultSocketURL().path
         // macOS malloc otherwise keeps large empty arenas resident after
         // repeated model load/unload cycles. This must be set before Python
         // starts; setting it inside omlx.cli is too late for malloc init.

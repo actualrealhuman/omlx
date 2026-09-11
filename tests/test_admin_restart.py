@@ -2,14 +2,18 @@
 """Tests for the admin server-restart route.
 
 Covers the supervisor-gating contract: the endpoint refuses with 503 when
-``OMLX_SUPERVISED`` is not set in the environment (plain ``omlx serve``)
-and accepts with 202 + schedules a SIGTERM when running under the menu
-bar supervisor.
+``OMLX_SUPERVISED`` is not set in the environment (plain ``omlx serve``),
+uses the macOS app's explicit control channel for a menu-bar-managed server,
+and retains delayed SIGTERM for other supervisors.
 """
 
 from __future__ import annotations
 
-from unittest.mock import patch
+import asyncio
+import json
+import uuid
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -42,16 +46,17 @@ class TestRestartServerRoute:
         assert "supervisor" in body["detail"].lower()
 
     def test_returns_202_when_supervised(self, client, monkeypatch):
-        """With OMLX_SUPERVISED set, the handler returns 202 immediately.
-
-        ``_schedule_self_terminate`` is replaced with a spy so the test
-        process never actually receives SIGTERM. Patching the seam (not
-        ``asyncio.get_running_loop``) keeps FastAPI's TestClient portal
-        intact.
-        """
+        """The macOS app is explicitly told to own the restart transaction."""
         monkeypatch.setenv("OMLX_SUPERVISED", "menubar")
 
-        with patch("omlx.admin.routes._schedule_self_terminate") as spy:
+        with (
+            patch(
+                "omlx.admin.routes._request_menubar_restart",
+                new_callable=AsyncMock,
+                return_value={"ok": True, "status": "restarting"},
+            ) as request_restart,
+            patch("omlx.admin.routes._schedule_self_terminate") as terminate,
+        ):
             r = client.post("/admin/api/server/restart")
 
         assert r.status_code == 202, r.text
@@ -59,11 +64,8 @@ class TestRestartServerRoute:
         assert body["status"] == "restarting"
         assert body["supervisor"] == "menubar"
         assert body["expected_downtime_seconds"] > 0
-        # The handler must schedule the SIGTERM (not invoke it synchronously)
-        # and pass a positive delay so FastAPI can flush the 202 first.
-        spy.assert_called_once()
-        ((delay,), _kwargs) = spy.call_args
-        assert delay > 0
+        request_restart.assert_awaited_once_with()
+        terminate.assert_not_called()
 
     def test_supervisor_label_round_trips(self, client, monkeypatch):
         """Whatever supervisor identifier is set in env comes back in
@@ -71,11 +73,30 @@ class TestRestartServerRoute:
         which supervisor is responsible for the respawn."""
         monkeypatch.setenv("OMLX_SUPERVISED", "launchd")
 
-        with patch("omlx.admin.routes._schedule_self_terminate"):
+        with patch("omlx.admin.routes._schedule_self_terminate") as terminate:
             r = client.post("/admin/api/server/restart")
 
         assert r.status_code == 202
         assert r.json()["supervisor"] == "launchd"
+        terminate.assert_called_once_with(0.5)
+
+    def test_menubar_control_failure_keeps_server_alive(self, client, monkeypatch):
+        """A missing parent must not turn restart into a one-way shutdown."""
+        monkeypatch.setenv("OMLX_SUPERVISED", "menubar")
+
+        with (
+            patch(
+                "omlx.admin.routes._request_menubar_restart",
+                new_callable=AsyncMock,
+                side_effect=OSError("control socket unavailable"),
+            ),
+            patch("omlx.admin.routes._schedule_self_terminate") as terminate,
+        ):
+            r = client.post("/admin/api/server/restart")
+
+        assert r.status_code == 503
+        assert "did not accept" in r.json()["detail"]
+        terminate.assert_not_called()
 
     def test_unsupervised_does_not_schedule_termination(self, client, monkeypatch):
         """503 path must not schedule a SIGTERM — otherwise plain
@@ -88,3 +109,31 @@ class TestRestartServerRoute:
 
         assert r.status_code == 503
         spy.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_menubar_restart_control_socket_round_trip(monkeypatch):
+    """The Python endpoint and Swift control server share one-line JSON."""
+    # AF_UNIX paths are limited to roughly 104 bytes on macOS; pytest's nested
+    # tmp_path can exceed that before the filename is added.
+    socket_path = Path("/tmp") / f"omlx-restart-{uuid.uuid4().hex}.sock"
+    received = []
+
+    async def handle(reader, writer):
+        received.append(json.loads((await reader.readline()).decode("utf-8")))
+        writer.write(b'{"ok":true,"status":"restarting","state":"stopping"}\n')
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    server = await asyncio.start_unix_server(handle, path=socket_path)
+    monkeypatch.setenv("OMLX_CONTROL_SOCKET", str(socket_path))
+    try:
+        response = await admin_routes._request_menubar_restart()
+    finally:
+        server.close()
+        await server.wait_closed()
+        socket_path.unlink(missing_ok=True)
+
+    assert received == [{"command": "restart"}]
+    assert response["status"] == "restarting"

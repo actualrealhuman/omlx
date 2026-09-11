@@ -147,6 +147,61 @@ final class ServerProcessIntegrationTests: XCTestCase {
                        "Port \(port) still bound after stop — orphaned child?")
     }
 
+    func testScheduledRestartTransitionsBeforeReplacingChild() async throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let pythonOverride = env["OMLX_PYTHON_OVERRIDE"], !pythonOverride.isEmpty,
+              FileManager.default.isExecutableFile(atPath: pythonOverride),
+              let devScript = env["OMLX_DEV_SERVER_SCRIPT"], !devScript.isEmpty,
+              FileManager.default.fileExists(atPath: devScript)
+        else {
+            throw XCTSkip(
+                "Integration smoke test needs OMLX_PYTHON_OVERRIDE + " +
+                "OMLX_DEV_SERVER_SCRIPT set. See file header for the command."
+            )
+        }
+
+        let runtime = try PythonRuntime.resolve()
+        let port = Self.findFreePort()
+        let tempBase = FileManager.default.temporaryDirectory
+            .appendingPathComponent("oMLX-restart-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempBase, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: tempBase) }
+
+        let proc = ServerProcess(
+            runtime: runtime,
+            bindAddress: "127.0.0.1",
+            port: port,
+            basePath: tempBase
+        )
+        guard case .started = try proc.start(), let originalPID = proc.pid else {
+            XCTFail("Initial server process did not start")
+            return
+        }
+        try? await Task.sleep(for: .seconds(1))
+
+        XCTAssertTrue(proc.scheduleRestart(after: 0))
+        XCTAssertEqual(proc.state, .stopping,
+                       "Restart acknowledgement must expose a transition immediately")
+        XCTAssertFalse(proc.scheduleRestart(after: 0),
+                       "Concurrent restart requests must collapse into one transaction")
+
+        let deadline = Date().addingTimeInterval(8)
+        while Date() < deadline && (proc.pid == nil || proc.pid == originalPID) {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        XCTAssertNotNil(proc.pid)
+        XCTAssertNotEqual(proc.pid, originalPID,
+                          "Scheduled restart must replace the managed child process")
+        let replacementPID = proc.pid
+        try? await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(proc.pid, replacementPID,
+                       "A stale exit callback must not clear the replacement child")
+
+        await proc.stop(timeout: 5)
+        XCTAssertFalse(Self.isPortInUse(port: port),
+                       "Restarted child must still be cleanly reapable")
+    }
+
     // MARK: - Helpers
 
     /// Bind to port 0, let the OS pick a free port, close the socket, and

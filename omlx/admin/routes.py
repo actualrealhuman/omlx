@@ -22,6 +22,7 @@ import subprocess
 import sys
 import time
 from collections import deque
+from contextlib import suppress
 from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -3801,15 +3802,53 @@ def _schedule_self_terminate(delay: float = 0.5) -> None:
     asyncio.get_running_loop().call_later(delay, _kill)
 
 
+async def _request_menubar_restart(timeout: float = 2.0) -> dict[str, Any]:
+    """Ask the macOS parent app to own the complete restart transaction.
+
+    A child process cannot reliably express restart intent by merely exiting:
+    the supervisor has to infer a crash, consume its crash budget, and may have
+    stale lifecycle state by the time the termination handler runs.  The app's
+    local, user-only control socket gives it the intent *before* it stops this
+    process.  Its restart command acknowledges immediately and performs the
+    bounded stop/start asynchronously, so this request cannot deadlock against
+    uvicorn waiting for the current HTTP response to finish.
+    """
+    configured_path = os.environ.get("OMLX_CONTROL_SOCKET")
+    socket_path = Path(configured_path) if configured_path else (
+        Path.home() / "Library" / "Application Support" / "oMLX" / "control.sock"
+    )
+
+    reader: asyncio.StreamReader
+    writer: asyncio.StreamWriter
+    reader, writer = await asyncio.wait_for(
+        asyncio.open_unix_connection(str(socket_path)), timeout=timeout
+    )
+    try:
+        writer.write(json.dumps({"command": "restart"}).encode("utf-8") + b"\n")
+        await asyncio.wait_for(writer.drain(), timeout=timeout)
+        raw = await asyncio.wait_for(reader.readline(), timeout=timeout)
+    finally:
+        writer.close()
+        with suppress(Exception):
+            await writer.wait_closed()
+
+    if not raw:
+        raise RuntimeError("menubar supervisor closed the control socket")
+    response = json.loads(raw.decode("utf-8"))
+    if not isinstance(response, dict) or not response.get("ok"):
+        detail = response.get("message") if isinstance(response, dict) else None
+        raise RuntimeError(detail or "menubar supervisor rejected the restart")
+    return response
+
+
 @router.post("/api/server/restart")
 async def restart_server(is_admin: bool = Depends(require_admin)):
     """Trigger a server restart via the menubar supervisor.
 
-    The handler does not perform the restart itself — it returns 202 and
-    schedules ``os.kill(os.getpid(), SIGTERM)`` 500ms after the response
-    is queued. The menubar app's ``ServerManager._health_check_loop``
-    detects the process exit and respawns the server with a short
-    backoff (~5s).
+    For the macOS app, restart intent is sent explicitly over the app's local
+    control socket.  The parent acknowledges first, then owns the bounded
+    graceful-stop and relaunch transaction.  Other supervisors retain the
+    delayed self-SIGTERM fallback.
 
     Gated by the ``OMLX_SUPERVISED`` environment variable so plain
     ``omlx serve`` (no supervisor) returns 503 rather than killing the
@@ -3826,16 +3865,28 @@ async def restart_server(is_admin: bool = Depends(require_admin)):
             ),
         )
 
-    _schedule_self_terminate(0.5)
+    if supervisor == "menubar":
+        try:
+            await _request_menubar_restart()
+        except (OSError, TimeoutError, ValueError, RuntimeError) as exc:
+            logger.error("Menubar supervisor restart request failed: %s", exc)
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "The menu bar supervisor did not accept the restart. "
+                    "Use Force Restart from the menu bar app."
+                ),
+            ) from exc
+    else:
+        _schedule_self_terminate(0.5)
     logger.warning("Server restart requested (supervisor=%s)", supervisor)
 
-    # 5s backoff in ServerManager + ~1-2s startup = ~7s downtime budget.
     return JSONResponse(
         status_code=202,
         content={
             "status": "restarting",
             "supervisor": supervisor,
-            "expected_downtime_seconds": 7,
+            "expected_downtime_seconds": 12 if supervisor == "menubar" else 7,
         },
     )
 
