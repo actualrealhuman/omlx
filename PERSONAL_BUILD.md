@@ -13,6 +13,7 @@ branches that are developed independently for possible upstream contribution.
 | Autosizing chat message editor | `chat-edit-autosize` | Upstreamable feature | `feature/chat-edit-autosize` / `20dba1ca` | Implemented and tested; PR not opened |
 | Explicit-only message edit cancellation | `safe-edit-cancel` | Upstreamable fix | `feature/chat-edit-safe-cancel` / `c26317ff` (`4294bd5e` integration) | Implemented and tested; PR not opened |
 | Preserve interrupted chat output | `stream-recovery` | Upstreamable fix | `feature/chat-preserve-interrupted-output` / `86fd1d63` | Implemented and tested; PR not opened |
+| High-contrast true-black dark theme | `high-contrast-dark-theme` | Upstreamable feature | `feature/high-contrast-dark-theme` / `183625ff` | Implemented and tested; PR not opened |
 | Supervisor-owned web restarts | `supervisor-owned-restarts` | Downstream fix | `5878dc7d` | Implemented and tested; PR not opened |
 | Reliable local app activation checks | `reliable-local-activation` | Downstream fix | `02dd8ddf` | Implemented and tested; PR not opened |
 
