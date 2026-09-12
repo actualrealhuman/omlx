@@ -14,16 +14,16 @@
     }
 
     [data-theme="dark"] {
-        --bg-primary: #1d1d20;
-        --bg-secondary: #252529;
-        --bg-tertiary: #2d2d32;
-        --text-primary: #efefef;
-        --text-secondary: #a1a1aa;
-        --text-tertiary: #71717a;
-        --text-muted: #52525b;
-        --border-faint: #3f3f46;
-        --border-normal: #52525b;
-        --code-bg: #27272a;
+        --bg-primary: #000000;
+        --bg-secondary: #0a0a0a;
+        --bg-tertiary: #171717;
+        --text-primary: #ffffff;
+        --text-secondary: #f5f5f5;
+        --text-tertiary: #e5e5e5;
+        --text-muted: #d4d4d4;
+        --border-faint: #404040;
+        --border-normal: #737373;
+        --code-bg: #0a0a0a;
         --link-color: #60a5fa;
     }
 
@@ -34,9 +34,9 @@
 
     /* === Page-level backgrounds === */
     [data-theme="dark"] .bg-white { background-color: var(--bg-primary) !important; }
-    [data-theme="dark"] .bg-white\/80 { background-color: rgba(29, 29, 32, 0.8) !important; }
+    [data-theme="dark"] .bg-white\/80 { background-color: rgba(0, 0, 0, 0.8) !important; }
     [data-theme="dark"] .bg-neutral-50 { background-color: var(--bg-secondary) !important; }
-    [data-theme="dark"] .bg-neutral-50\/50 { background-color: rgba(37, 37, 41, 0.5) !important; }
+    [data-theme="dark"] .bg-neutral-50\/50 { background-color: rgba(10, 10, 10, 0.5) !important; }
     [data-theme="dark"] .bg-neutral-100 { background-color: var(--bg-tertiary) !important; }
     [data-theme="dark"] .bg-neutral-200 { background-color: var(--bg-tertiary) !important; }
 
@@ -54,10 +54,10 @@
        when the global muted palette is intentionally subtle. */
     [data-theme="dark"] [data-cluster-v2-active] .text-neutral-600,
     [data-theme="dark"] [data-cluster-v2-active] .text-neutral-500 {
-        color: #d4d4d8 !important;
+        color: #f5f5f5 !important;
     }
     [data-theme="dark"] [data-cluster-v2-active] .text-neutral-400 {
-        color: #a1a1aa !important;
+        color: #d4d4d4 !important;
     }
 
     /* === Borders === */
@@ -76,7 +76,7 @@
 
     /* === Gauge track (visible in both themes) === */
     .gauge-track { background-color: #e5e5e5; }
-    [data-theme="dark"] .gauge-track { background-color: #3f3f46 !important; }
+    [data-theme="dark"] .gauge-track { background-color: #404040 !important; }
 
     /* === Active nav tab (bg-white with shadow inside dark nav) === */
     [data-theme="dark"] .shadow-sm { box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.3) !important; }
@@ -87,33 +87,33 @@
     /* === Buttons: bg-neutral-900 text-white → invert in dark mode === */
     [data-theme="dark"] button.bg-neutral-900,
     [data-theme="dark"] a.bg-neutral-900 {
-        background-color: #e5e5e5 !important;
-        color: #18181b !important;
+        background-color: #ffffff !important;
+        color: #000000 !important;
     }
     [data-theme="dark"] button.hover\:bg-neutral-800:hover,
     [data-theme="dark"] a.hover\:bg-neutral-800:hover {
-        background-color: #d4d4d8 !important;
+        background-color: #e5e5e5 !important;
     }
     /* Status badge inversion */
     [data-theme="dark"] span.bg-neutral-900 {
-        background-color: #e5e5e5 !important;
-        color: #18181b !important;
+        background-color: #ffffff !important;
+        color: #000000 !important;
     }
     [data-theme="dark"] span.bg-neutral-900 span {
-        color: #18181b !important;
+        color: #000000 !important;
     }
     [data-theme="dark"] span.bg-neutral-900 span.bg-white {
-        background-color: #18181b !important;
+        background-color: #000000 !important;
     }
     /* Inverted button text */
     [data-theme="dark"] button.bg-neutral-900 .text-white,
     [data-theme="dark"] button.bg-neutral-900 span,
     [data-theme="dark"] button.bg-neutral-900 svg {
-        color: #18181b !important;
+        color: #000000 !important;
     }
     /* Spinner inside inverted button */
-    [data-theme="dark"] button.bg-neutral-900 svg.animate-spin circle { stroke: #18181b; }
-    [data-theme="dark"] button.bg-neutral-900 svg.animate-spin path { fill: #18181b; }
+    [data-theme="dark"] button.bg-neutral-900 svg.animate-spin circle { stroke: #000000; }
+    [data-theme="dark"] button.bg-neutral-900 svg.animate-spin path { fill: #000000; }
 
     /* The cluster-v2 strategy control contains a nested recommendation pill.
        The generic inverted-button rule above recolored every nested span and
@@ -121,16 +121,16 @@
        this segmented control genuinely dark with explicit foregrounds. */
     [data-theme="dark"] [data-cluster-v2-strategy-picker]
         button[data-selected="true"] {
-        border-color: #71717a !important;
-        color: #f8fafc !important;
-        background: #27272a !important;
-        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+        border-color: #737373 !important;
+        color: #ffffff !important;
+        background: #171717 !important;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
         text-shadow: none;
         -webkit-font-smoothing: antialiased;
     }
     [data-theme="dark"] [data-cluster-v2-strategy-picker]
         button[data-selected="true"] > span:first-child {
-        color: #f8fafc !important;
+        color: #ffffff !important;
     }
     [data-theme="dark"] [data-cluster-v2-strategy-picker]
         button[data-selected="true"] [data-cluster-v2-strategy-recommended] {
@@ -160,10 +160,10 @@
     }
 
     /* === Log viewer: keep dark === */
-    [data-theme="dark"] div.bg-neutral-900 { background-color: #0f0f11 !important; }
-    [data-theme="dark"] textarea.bg-neutral-900 { background-color: #0f0f11 !important; color: #4ade80 !important; }
-    [data-theme="dark"] .bg-neutral-800 { background-color: #1a1a1d !important; }
-    [data-theme="dark"] .border-neutral-700 { border-color: #3f3f46 !important; }
+    [data-theme="dark"] div.bg-neutral-900 { background-color: #000000 !important; }
+    [data-theme="dark"] textarea.bg-neutral-900 { background-color: #000000 !important; color: #4ade80 !important; }
+    [data-theme="dark"] .bg-neutral-800 { background-color: #0a0a0a !important; }
+    [data-theme="dark"] .border-neutral-700 { border-color: #404040 !important; }
     [data-theme="dark"] .text-green-400 { color: #4ade80 !important; }
     [data-theme="dark"] .text-green-500 { color: #22c55e !important; }
 
@@ -197,10 +197,10 @@
 
     /* === Toggle switches (ON state: bg-black) === */
     [data-theme="dark"] button.bg-black {
-        background-color: #a1a1aa !important;
+        background-color: #ffffff !important;
     }
     [data-theme="dark"] button.bg-black span.bg-white {
-        background-color: #ffffff !important;
+        background-color: #000000 !important;
     }
     /* Toggle OFF state */
     [data-theme="dark"] button.bg-neutral-200 {
@@ -208,8 +208,8 @@
     }
     /* Default radio button (ON state) */
     [data-theme="dark"] button.bg-black.border-black {
-        background-color: #a1a1aa !important;
-        border-color: #a1a1aa !important;
+        background-color: #ffffff !important;
+        border-color: #ffffff !important;
     }
     [data-theme="dark"] button.border-neutral-300 {
         border-color: var(--border-normal) !important;
@@ -223,7 +223,7 @@
         background-color: var(--border-faint) !important;
     }
     [data-theme="dark"] input[type="range"]::-webkit-slider-thumb {
-        background-color: #a1a1aa !important;
+        background-color: #ffffff !important;
     }
 
     /* === Badge colors (dark mode adjustments) === */
@@ -263,7 +263,7 @@
     [data-theme="dark"] .shadow-2xl { box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5) !important; }
 
     /* === Selection text === */
-    [data-theme="dark"] ::selection { background-color: #3f3f46; color: var(--text-primary); }
+    [data-theme="dark"] ::selection { background-color: #1d4ed8; color: var(--text-primary); }
 
     /* === Disabled states === */
     [data-theme="dark"] .disabled\:opacity-50:disabled { opacity: 0.5; }
@@ -272,7 +272,7 @@
     [data-theme="dark"] .hover\:bg-neutral-50:hover { background-color: var(--bg-secondary) !important; }
 
     /* === Copy button bg-white/80 === */
-    [data-theme="dark"] .bg-white\/80 { background-color: rgba(29, 29, 32, 0.8) !important; }
+    [data-theme="dark"] .bg-white\/80 { background-color: rgba(0, 0, 0, 0.8) !important; }
 
     /* === Model card markdown styles === */
     .model-card-content { font-size: 0.8125rem; line-height: 1.6; color: var(--text-secondary); }
