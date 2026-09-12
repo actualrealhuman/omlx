@@ -871,5 +871,11 @@ echo
 echo "To launch:"
 echo "  open '$STAGED_APP'"
 echo
+echo "To validate installation:"
+echo "  '$SCRIPT_DIR/install_build.py' --app '$STAGED_APP' --dry-run"
+echo
+echo "To atomically install, restart, verify, and retain the previous app:"
+echo "  '$SCRIPT_DIR/install_build.py' --app '$STAGED_APP' --yes"
+echo
 echo "Server log will appear at:"
 echo "  ~/Library/Application Support/oMLX/logs/server.log"

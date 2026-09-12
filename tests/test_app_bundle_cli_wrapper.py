@@ -42,6 +42,8 @@ def test_release_builds_enforce_canonical_source_and_preserve_artifacts():
     assert "status --porcelain --untracked-files=normal" in script
     assert "OMLX_ALLOW_NONCANONICAL_RELEASE" in script
     assert "build/Artifacts/${APP_VERSION}-build${BUILD_NUMBER}-${SOURCE_REVISION}" in script
+    assert 'install_build.py\' --app \'$STAGED_APP\' --dry-run' in script
+    assert 'install_build.py\' --app \'$STAGED_APP\' --yes' in script
 
 
 def _write_fake_python(path: Path) -> None:

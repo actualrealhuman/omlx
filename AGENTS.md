@@ -31,5 +31,10 @@
   channel, source revision/branch, and feature IDs before installation.
 - Never install, replace, or launch the user's current app unless the user has
   explicitly requested that separate action.
+- For an authorized installation, use
+  `apps/omlx-mac/Scripts/install_build.py --app /path/to/oMLX.app --yes`; do not
+  hand-roll process termination or copy directly over `/Applications/oMLX.app`.
+- Run the installer with `--dry-run` first. Preserve its rollback backup and
+  report both the installed identity and backup path when the operation ends.
 
 See `PERSONAL_BUILD.md` for the full branch policy and release checklist.

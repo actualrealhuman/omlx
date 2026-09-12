@@ -68,8 +68,15 @@ and the table above in the same integration commit.
    artifacts default to a version/build/revision-specific directory under
    `apps/omlx-mac/build/Artifacts/`, so a different build cannot overwrite the
    previous staged bundle.
-6. Verify the final app's signature, `CFBundleShortVersionString`, build number,
-   channel, revision, branch, and feature array before installing or launching.
+6. Dry-run `apps/omlx-mac/Scripts/install_build.py --dry-run`, which verifies
+   the signature, version, build number, channel, revision, branch, feature
+   array, and downgrade policy. Pass `--app /path/to/oMLX.app` to select an
+   artifact instead of using the newest canonical one.
+7. Install only with an explicit `apps/omlx-mac/Scripts/install_build.py --yes`.
+   It gracefully stops the old server, atomically exchanges the app bundles,
+   launches and verifies the new server identity, retains the previous bundle
+   under `~/Library/Application Support/oMLX/app-backups/`, and automatically
+   rolls back if verification fails.
 
 A dated integration branch is disposable review space, never a private release
 source. For an intentional local-only Release build from another branch, the

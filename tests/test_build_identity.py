@@ -7,7 +7,6 @@ from types import ModuleType
 
 from omlx.build_identity import build_label, get_build_identity
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
