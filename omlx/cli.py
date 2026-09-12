@@ -1244,7 +1244,7 @@ Example directory structure:
         "--api-key",
         type=str,
         default=None,
-        help="API key for authentication (optional)",
+        help="API key for authentication (required for non-loopback binds)",
     )
 
     # Launch command

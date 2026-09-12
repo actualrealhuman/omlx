@@ -55,6 +55,14 @@ and the table above in the same integration commit.
 
 ## Private release procedure
 
+We call this complete workflow a **promote**. To promote the private app means
+to fetch and merge upstream, integrate the downstream feature branches, pass
+the canonical preflight and relevant tests, produce a full local Release
+bundle, validate the installer plan, then atomically install, restart, and
+verify the replacement while retaining a rollback bundle. A build or restart
+by itself is not a promote. Promotion is local-only and does not imply pushing
+branches, opening a pull request, or triggering hosted CI.
+
 1. Fetch `upstream` immediately before integration, then inspect the incoming
    commits. Do not describe a checkout as current merely because its existing
    remote-tracking ref looks current.
