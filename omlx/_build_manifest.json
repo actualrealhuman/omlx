@@ -1,5 +1,7 @@
 {
   "channel": "private",
+  "release_branch": "personal/main",
+  "upstream_ref": "upstream/main",
   "features": [
     "benchmark-upload-controls",
     "cache-inspection",
@@ -7,6 +9,8 @@
     "live-context",
     "chat-edit-autosize",
     "stream-recovery",
-    "safe-edit-cancel"
+    "safe-edit-cancel",
+    "supervisor-owned-restarts",
+    "reliable-local-activation"
   ]
 }

@@ -1,9 +1,14 @@
 """Tests for downstream build identity reporting."""
 
+import json
 import sys
+from pathlib import Path
 from types import ModuleType
 
 from omlx.build_identity import build_label, get_build_identity
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_source_tree_reports_private_development_features():
@@ -35,3 +40,17 @@ def test_generated_bundle_metadata_is_reported(monkeypatch):
     }
     assert "private" in build_label()
     assert "abc123def456" in build_label()
+
+
+def test_private_release_manifest_and_feature_ledger_stay_in_sync():
+    manifest = json.loads(
+        (ROOT / "omlx/_build_manifest.json").read_text(encoding="utf-8")
+    )
+    ledger = (ROOT / "PERSONAL_BUILD.md").read_text(encoding="utf-8")
+
+    assert manifest["release_branch"] == "personal/main"
+    assert manifest["upstream_ref"] == "upstream/main"
+    assert manifest["channel"] == "private"
+    assert len(manifest["features"]) == len(set(manifest["features"]))
+    for feature in manifest["features"]:
+        assert f"`{feature}`" in ledger

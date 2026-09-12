@@ -43,6 +43,9 @@
 #   apps/omlx-mac/Scripts/build.sh --rebuild-donor    # force venvstacks rebuild
 #   apps/omlx-mac/Scripts/build.sh --no-rebuild-donor # never rebuild; use
 #                                                       existing donor even if stale
+#   apps/omlx-mac/Scripts/build.sh release --preflight-only
+#                                                     # validate canonical private
+#                                                     # release source without building
 #
 # Env overrides:
 #   OMLX_DONOR_APP=/path/to/oMLX.app    # explicit donor (bypasses venvstacks)
@@ -56,6 +59,9 @@
 #                                       # macOS min version for custom kernels
 #   OMLX_BUILD_CHANNEL=private           # build identity shown in About/status
 #   OMLX_BUILD_FEATURES=a,b,c            # comma-separated downstream feature IDs
+#   OMLX_ALLOW_NONCANONICAL_RELEASE=1     # explicit escape hatch for a local
+#                                         # Release build from another branch;
+#                                         # never use for distributed builds
 
 set -euo pipefail
 
@@ -87,6 +93,7 @@ if [ $# -gt 0 ]; then
 fi
 
 BARE=0
+PREFLIGHT_ONLY=0
 WITH_CUSTOM_KERNEL="${OMLX_WITH_CUSTOM_KERNEL:-0}"
 REBUILD_DONOR=auto    # auto | force | never
 for arg in "$@"; do
@@ -95,6 +102,7 @@ for arg in "$@"; do
         --with-custom-kernel) WITH_CUSTOM_KERNEL=1 ;;
         --rebuild-donor) REBUILD_DONOR=force ;;
         --no-rebuild-donor) REBUILD_DONOR=never ;;
+        --preflight-only) PREFLIGHT_ONLY=1 ;;
         *) echo "error: unknown flag '$arg'" >&2; exit 2 ;;
     esac
 done
@@ -126,7 +134,7 @@ LOCAL_EXPORT="${OMLX_EXPORT_DIR:-$PACKAGING_DIR/_export}"
 # (/Applications/oMLX.app) is treated as a fallback, not an override.
 OMLX_DONOR_APP_SET="${OMLX_DONOR_APP+1}"
 OMLX_DONOR_APP="${OMLX_DONOR_APP:-/Applications/oMLX.app}"
-OUTPUT_DIR="${OMLX_NEXT_OUT:-$PROJECT_DIR/build/Stage}"
+OUTPUT_DIR_OVERRIDE="${OMLX_NEXT_OUT:-}"
 BUILD_DIR="$PROJECT_DIR/build"
 
 LIGHT_BLUE="\033[1;34m"
@@ -517,6 +525,8 @@ BUILD_MANIFEST="$REPO_ROOT/omlx/_build_manifest.json"
 [ -f "$BUILD_MANIFEST" ] || die "missing $BUILD_MANIFEST — cannot derive build identity"
 DEFAULT_BUILD_CHANNEL=$("$PYTHON_BIN" -c 'import json,sys; print(json.load(open(sys.argv[1]))["channel"])' "$BUILD_MANIFEST")
 DEFAULT_BUILD_FEATURES=$("$PYTHON_BIN" -c 'import json,sys; print(",".join(json.load(open(sys.argv[1]))["features"]))' "$BUILD_MANIFEST")
+RELEASE_BRANCH=$("$PYTHON_BIN" -c 'import json,sys; print(json.load(open(sys.argv[1]))["release_branch"])' "$BUILD_MANIFEST")
+UPSTREAM_REF=$("$PYTHON_BIN" -c 'import json,sys; print(json.load(open(sys.argv[1]))["upstream_ref"])' "$BUILD_MANIFEST")
 BUILD_CHANNEL="${OMLX_BUILD_CHANNEL:-$DEFAULT_BUILD_CHANNEL}"
 BUILD_FEATURES="${OMLX_BUILD_FEATURES:-$DEFAULT_BUILD_FEATURES}"
 if [ "$WITH_CUSTOM_KERNEL" = "1" ]; then
@@ -525,7 +535,53 @@ fi
 SOURCE_REVISION=$(git -C "$REPO_ROOT" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 SOURCE_BRANCH=$(git -C "$REPO_ROOT" branch --show-current 2>/dev/null || true)
 [ -n "$SOURCE_BRANCH" ] || SOURCE_BRANCH="detached"
+
+_validate_private_release_source() {
+    [ "$CONFIG" = "Release" ] || return 0
+
+    local allow_noncanonical
+    allow_noncanonical=$(echo "${OMLX_ALLOW_NONCANONICAL_RELEASE:-0}" | tr '[:upper:]' '[:lower:]')
+    case "$allow_noncanonical" in
+        1|true|yes|on)
+            warn "Bypassing canonical private-release checks (OMLX_ALLOW_NONCANONICAL_RELEASE=1)."
+            return 0
+            ;;
+    esac
+
+    [ "$SOURCE_BRANCH" = "$RELEASE_BRANCH" ] \
+        || die "Release builds must come from $RELEASE_BRANCH, not $SOURCE_BRANCH. Use a Debug build for feature work, or set OMLX_ALLOW_NONCANONICAL_RELEASE=1 for an intentional local-only artifact."
+
+    [ -z "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=normal)" ] \
+        || die "Release builds require a clean working tree so embedded source matches $SOURCE_REVISION."
+
+    git -C "$REPO_ROOT" rev-parse --verify --quiet "${UPSTREAM_REF}^{commit}" >/dev/null \
+        || die "Missing $UPSTREAM_REF. Fetch upstream before preparing a private release."
+    git -C "$REPO_ROOT" merge-base --is-ancestor "$UPSTREAM_REF" HEAD \
+        || die "$RELEASE_BRANCH does not contain $UPSTREAM_REF. Fetch and merge upstream before building."
+
+    local upstream_version
+    upstream_version=$(git -C "$REPO_ROOT" show "${UPSTREAM_REF}:omlx/_version.py" 2>/dev/null | \
+        grep -oE '__version__[[:space:]]*=[[:space:]]*"[^"]+"' | \
+        sed -E 's/.*"([^"]+)".*/\1/' || true)
+    [ -n "$upstream_version" ] \
+        || die "Could not derive the version from $UPSTREAM_REF."
+    [ "$APP_VERSION" = "$upstream_version" ] \
+        || die "Version mismatch: working tree is $APP_VERSION but $UPSTREAM_REF is $upstream_version. Preserve the upstream version when resolving merges."
+}
+
+_validate_private_release_source
 log "Bundle version: $APP_VERSION (build $BUILD_NUMBER, $BUILD_CHANNEL, $SOURCE_REVISION)"
+
+if [ "$PREFLIGHT_ONLY" -eq 1 ]; then
+    ok "Private release preflight passed: $SOURCE_BRANCH contains $UPSTREAM_REF at version $APP_VERSION."
+    exit 0
+fi
+
+if [ -n "$OUTPUT_DIR_OVERRIDE" ]; then
+    OUTPUT_DIR="$OUTPUT_DIR_OVERRIDE"
+else
+    OUTPUT_DIR="$PROJECT_DIR/build/Artifacts/${APP_VERSION}-build${BUILD_NUMBER}-${SOURCE_REVISION}"
+fi
 
 # --- xcodebuild -----------------------------------------------------------
 

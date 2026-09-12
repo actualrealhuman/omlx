@@ -33,6 +33,17 @@ def test_build_script_embeds_downstream_identity_metadata():
     assert "OMLXSourceRevision" in script
 
 
+def test_release_builds_enforce_canonical_source_and_preserve_artifacts():
+    script = Path("apps/omlx-mac/Scripts/build.sh").read_text()
+
+    assert 'SOURCE_BRANCH" = "$RELEASE_BRANCH' in script
+    assert 'merge-base --is-ancestor "$UPSTREAM_REF" HEAD' in script
+    assert 'APP_VERSION" = "$upstream_version' in script
+    assert "status --porcelain --untracked-files=normal" in script
+    assert "OMLX_ALLOW_NONCANONICAL_RELEASE" in script
+    assert "build/Artifacts/${APP_VERSION}-build${BUILD_NUMBER}-${SOURCE_REVISION}" in script
+
+
 def _write_fake_python(path: Path) -> None:
     path.parent.mkdir(parents=True)
     path.write_text(
