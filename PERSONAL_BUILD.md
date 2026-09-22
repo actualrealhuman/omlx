@@ -10,6 +10,7 @@ branches that are developed independently for possible upstream contribution.
 | Cache inspection sidecars | `cache-inspection` | Upstreamable feature | `feature/cache-inspection-sidecars` | Draft PR #3326 |
 | Battery and power management | `battery-power` | Upstreamable feature | `feature/battery-power-management` | Planned |
 | Live dashboard context usage | `live-context` | Upstreamable feature | `feature/dashboard-context-usage` / `260c66fd` | Implemented and tested; PR not opened |
+| Lossless chat-history persistence | `chat-history-safety` | Upstreamable fix | `feature/chat-history-safety` / `2e4df089` | Implemented and tested; PR not opened |
 | Autosizing chat message editor | `chat-edit-autosize` | Upstreamable feature | `feature/chat-edit-autosize` / `20dba1ca` | Implemented and tested; PR not opened |
 | Explicit-only message edit cancellation | `safe-edit-cancel` | Upstreamable fix | `feature/chat-edit-safe-cancel` / `c26317ff` (`4294bd5e` integration) | Implemented and tested; PR not opened |
 | Preserve interrupted chat output | `stream-recovery` | Upstreamable fix | `feature/chat-preserve-interrupted-output` / `86fd1d63` | Implemented and tested; PR not opened |
