@@ -6,6 +6,7 @@ This engine wraps AsyncEngineCore to provide continuous batching
 for better throughput when serving multiple concurrent requests.
 """
 
+import asyncio
 import copy
 import logging
 from collections.abc import AsyncIterator
@@ -24,6 +25,7 @@ from .base import (
     BaseEngine,
     GenerationOutput,
     _clear_teardown_references,
+    _close_engine_core,
     _run_scheduler_preflight_with_cleanup_retry,
     _warn_scheduler_unreachable_once,
 )
@@ -476,11 +478,9 @@ class BatchedEngine(BaseEngine):
                 from ..patches.qwen35_q4_mlp import (
                     apply_qwen35_q4_lm_prefill_linear_patch,
                     apply_qwen35_q4_mlp_patch,
-                    apply_qwen35_q4_prefill_linear_patch,
                 )
 
                 apply_qwen35_q4_mlp_patch()
-                apply_qwen35_q4_prefill_linear_patch()
                 apply_qwen35_q4_lm_prefill_linear_patch()
             except Exception:
                 logger.debug("Qwen q4 MLP prefill patch not applied", exc_info=True)
@@ -786,11 +786,12 @@ class BatchedEngine(BaseEngine):
 
     async def stop(self) -> None:
         """Stop the engine and cleanup resources."""
+        cancelled = False
         if self._engine:
             await self._engine.stop()
             if hasattr(self._engine, "engine") and self._engine.engine is not None:
                 try:
-                    self._engine.engine.close()
+                    cancelled = await _close_engine_core(self._engine.engine)
                 except Exception as e:
                     logger.warning(f"Error closing engine: {e}")
         _clear_teardown_references(
@@ -805,6 +806,8 @@ class BatchedEngine(BaseEngine):
         )
         self._loaded = False
         logger.info("BatchedEngine stopped")
+        if cancelled:
+            raise asyncio.CancelledError
 
     def _apply_chat_template(
         self,
@@ -812,6 +815,7 @@ class BatchedEngine(BaseEngine):
         tools: list[dict] | None = None,
         chat_template_kwargs: dict[str, Any] | None = None,
         is_partial: bool | None = None,
+        add_generation_prompt: bool | None = None,
     ) -> str:
         """Apply chat template to messages.
 
@@ -825,6 +829,8 @@ class BatchedEngine(BaseEngine):
                 key is cleaned from message dicts but no detection is performed.
                 ``None`` (default) — auto-detect from messages for backward
                 compatibility with direct engine callers.
+            add_generation_prompt: Overrides the partial-derived default, used
+                to render the same messages without the generation prompt.
         """
         if hasattr(self._tokenizer, "apply_chat_template"):
             if is_partial is None:
@@ -836,7 +842,11 @@ class BatchedEngine(BaseEngine):
                     msg.pop("partial", None)
             template_kwargs = {
                 "tokenize": False,
-                "add_generation_prompt": not is_partial,
+                "add_generation_prompt": (
+                    not is_partial
+                    if add_generation_prompt is None
+                    else add_generation_prompt
+                ),
             }
             if is_partial:
                 template_kwargs["continue_final_message"] = True
@@ -911,12 +921,12 @@ class BatchedEngine(BaseEngine):
 
     @staticmethod
     def _pop_specprefill_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
-        """Pop SpecPrefill per-request overrides out of ``kwargs``.
+        """Pop per-request prompt overrides out of ``kwargs``.
 
         The engine's ``add_request`` accepts these as dedicated arguments, so
         they must be forwarded explicitly rather than left in ``**kwargs``.
         Shared by ``generate`` and ``stream_generate`` so both request paths
-        honour SpecPrefill overrides identically.
+        honour SpecPrefill overrides and the generation prompt marker alike.
         """
         specprefill_kwargs: dict[str, Any] = {}
         for key in (
@@ -924,6 +934,8 @@ class BatchedEngine(BaseEngine):
             "specprefill_keep_pct",
             "specprefill_threshold",
             "specprefill_system_end",
+            "generation_prompt_text",
+            "generation_prompt_persists",
         ):
             if kwargs.get(key) is not None:
                 specprefill_kwargs[key] = kwargs.pop(key)
@@ -1246,6 +1258,10 @@ class BatchedEngine(BaseEngine):
         self._inject_specprefill_system_end(
             messages, prompt, template_tools, ct_kwargs, kwargs
         )
+        generation_prompt, persists = self._generation_prompt_text(ct_kwargs, partial)
+        if generation_prompt:
+            kwargs["generation_prompt_text"] = generation_prompt
+            kwargs["generation_prompt_persists"] = persists
 
         return await self.generate(
             prompt=prompt,
@@ -1404,6 +1420,10 @@ class BatchedEngine(BaseEngine):
         self._inject_specprefill_system_end(
             messages, prompt, template_tools, ct_kwargs, kwargs
         )
+        generation_prompt, persists = self._generation_prompt_text(ct_kwargs, partial)
+        if generation_prompt:
+            kwargs["generation_prompt_text"] = generation_prompt
+            kwargs["generation_prompt_persists"] = persists
 
         async for output in self.stream_generate(
             prompt=prompt,

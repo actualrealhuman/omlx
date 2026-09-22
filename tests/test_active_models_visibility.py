@@ -593,7 +593,7 @@ def test_active_models_surfaces_dflash_guardrail_stats():
 def test_dflash_dashboard_localizes_metrics_and_shows_session_fallbacks():
     root = Path(__file__).resolve().parents[1]
     template = (
-        root / "omlx/admin/templates/dashboard/_status.html"
+        root / "omlx/admin/templates/dashboard/blocks/_active_models.html"
     ).read_text(encoding="utf-8")
     dashboard_js = (root / "omlx/admin/static/js/dashboard.js").read_text(
         encoding="utf-8"
@@ -623,7 +623,7 @@ def test_dflash_dashboard_localizes_metrics_and_shows_session_fallbacks():
 def test_dashboard_generation_rows_show_live_context_usage():
     root = Path(__file__).resolve().parents[1]
     template = (
-        root / "omlx/admin/templates/dashboard/_status.html"
+        root / "omlx/admin/templates/dashboard/blocks/_active_models.html"
     ).read_text(encoding="utf-8")
 
     assert "gen.prompt_tokens + (gen.generated_tokens || 0)" in template

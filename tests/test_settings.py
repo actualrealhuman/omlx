@@ -92,6 +92,9 @@ class TestServerSettings:
         assert settings.distributed_inference_enabled is False
         assert settings.max_audio_upload_size == "100MB"
         assert settings.max_audio_upload_bytes() == 100 * 1024 * 1024
+        assert settings.max_image_upload_size == "50MB"
+        assert settings.max_image_upload_bytes() == 50 * 1024 * 1024
+        assert settings.max_image_side_length == 2048
 
     def test_custom_values(self):
         """Test custom values."""
@@ -122,6 +125,8 @@ class TestServerSettings:
             "preserve_mid_system_cache": True,
             "distributed_inference_enabled": False,
             "max_audio_upload_size": "100MB",
+            "max_image_upload_size": "50MB",
+            "max_image_side_length": 2048,
         }
 
     def test_from_dict_distributed_inference_is_opt_in(self):
@@ -187,6 +192,26 @@ class TestServerSettings:
             ServerSettings(max_audio_upload_size="0MB").max_audio_upload_bytes()
         with pytest.raises(ValueError, match="must be positive"):
             ServerSettings(max_audio_upload_size="-1MB").max_audio_upload_bytes()
+
+    def test_from_dict_max_image_upload_size(self):
+        """max_image_upload_size round-trips through from_dict / to_dict."""
+        settings = ServerSettings.from_dict({"max_image_upload_size": "20MB"})
+        assert settings.max_image_upload_size == "20MB"
+        assert settings.max_image_upload_bytes() == 20 * 1024 * 1024
+        assert settings.to_dict()["max_image_upload_size"] == "20MB"
+
+    def test_from_dict_max_image_side_length(self):
+        """max_image_side_length round-trips through from_dict / to_dict."""
+        settings = ServerSettings.from_dict({"max_image_side_length": 1024})
+        assert settings.max_image_side_length == 1024
+        assert settings.to_dict()["max_image_side_length"] == 1024
+
+    def test_max_image_upload_bytes_rejects_non_positive(self):
+        """0MB / negative sizes parse as integers but are not usable limits."""
+        with pytest.raises(ValueError, match="must be positive"):
+            ServerSettings(max_image_upload_size="0MB").max_image_upload_bytes()
+        with pytest.raises(ValueError, match="must be positive"):
+            ServerSettings(max_image_upload_size="-1MB").max_image_upload_bytes()
 
     def test_from_dict(self):
         """Test creation from dictionary."""
@@ -450,9 +475,7 @@ class TestSchedulerSettings:
         """Defaults on; explicit false round-trips."""
         assert SchedulerSettings.from_dict({}).decode_fairness is True
         assert (
-            SchedulerSettings.from_dict(
-                {"decode_fairness": False}
-            ).decode_fairness
+            SchedulerSettings.from_dict({"decode_fairness": False}).decode_fairness
             is False
         )
 
@@ -520,13 +543,21 @@ class TestCacheSettings:
         base_path = Path("/tmp/omlx")
         assert settings.get_ssd_cache_dir(base_path) == Path("/custom/cache")
 
-    def test_get_ssd_cache_max_size_bytes_auto(self):
-        """Test auto SSD cache size calculation."""
+    def test_get_ssd_cache_max_size_bytes_auto(self, tmp_path):
         settings = CacheSettings(ssd_cache_max_size="auto")
-        base_path = Path("/tmp/omlx")
-        cache_dir = settings.get_ssd_cache_dir(base_path)
-        expected = int(get_ssd_capacity(cache_dir) * 0.1)
-        assert settings.get_ssd_cache_max_size_bytes(base_path) == expected
+        cache_dir = settings.get_ssd_cache_dir(tmp_path)
+        (cache_dir / "a").mkdir(parents=True)
+        (cache_dir / "a" / "block.safetensors").write_bytes(b"x" * 60)
+        sidecars = cache_dir / "_gdn_sidecars" / ("b" * 64)
+        sidecars.mkdir(parents=True)
+        (sidecars / "state.safetensors").write_bytes(b"x" * 40)
+        (cache_dir / "unrelated").write_bytes(b"x" * 100)
+        with patch("omlx.settings.shutil.disk_usage") as usage:
+            usage.return_value.free = 200
+            assert settings.get_ssd_cache_max_size_bytes(tmp_path) == 150
+            config = GlobalSettings(base_path=tmp_path).to_scheduler_config()
+            assert config.paged_ssd_cache_auto_size is True
+            assert config.paged_ssd_cache_max_size == 150
 
     def test_get_ssd_cache_max_size_bytes_explicit(self):
         """Test explicit SSD cache size."""
@@ -591,9 +622,7 @@ class TestCacheSettings:
     def test_from_dict_preserves_legacy_mode_and_fp32_default(
         self, legacy_split, expected_mode
     ):
-        settings = CacheSettings.from_dict(
-            {"gdn_ssd_split_enabled": legacy_split}
-        )
+        settings = CacheSettings.from_dict({"gdn_ssd_split_enabled": legacy_split})
         assert settings.gdn_ssd_split_enabled is legacy_split
         assert settings.get_gdn_snapshot_storage() == expected_mode
         assert settings.gdn_sidecar_state_dtype == "fp32"
@@ -614,7 +643,9 @@ class TestCacheSettings:
             }
         )
         global_settings = GlobalSettings(cache=settings)
-        assert any("gdn_snapshot_storage" in error for error in global_settings.validate())
+        assert any(
+            "gdn_snapshot_storage" in error for error in global_settings.validate()
+        )
 
     def test_auto_policy_embeds_when_cache_is_disabled_or_hot_only(self):
         settings = CacheSettings(enabled=False)
@@ -1661,6 +1692,37 @@ class TestGlobalSettings:
         errors = settings.validate()
         assert not any("max_audio_upload_size" in e for e in errors)
 
+    def test_validate_invalid_max_image_upload_size(self):
+        """Validation rejects unparseable or non-positive image upload limits."""
+        settings = GlobalSettings()
+        settings.server.max_image_upload_size = "bogus"
+        errors = settings.validate()
+        assert any("max_image_upload_size" in e for e in errors)
+
+        settings = GlobalSettings()
+        settings.server.max_image_upload_size = "0MB"
+        errors = settings.validate()
+        assert any("max_image_upload_size" in e for e in errors)
+
+    def test_validate_valid_max_image_upload_size(self):
+        """Validation accepts human-readable image upload sizes."""
+        settings = GlobalSettings()
+        settings.server.max_image_upload_size = "250MB"
+        errors = settings.validate()
+        assert not any("max_image_upload_size" in e for e in errors)
+
+    def test_validate_max_image_side_length(self):
+        """Validation rejects negative side length."""
+        settings = GlobalSettings()
+        settings.server.max_image_side_length = -1
+        errors = settings.validate()
+        assert any("max_image_side_length" in e for e in errors)
+
+        settings = GlobalSettings()
+        settings.server.max_image_side_length = 0
+        errors = settings.validate()
+        assert not any("max_image_side_length" in e for e in errors)
+
     def test_validate_memory_guard_tier_valid(self):
         """Test validation accepts each known tier."""
         for tier in ("safe", "balanced", "aggressive"):
@@ -1750,9 +1812,7 @@ class TestGlobalSettings:
         errors = settings.validate()
         assert not any("gdn_sidecar_state_dtype" in e for e in errors)
 
-    @pytest.mark.parametrize(
-        "dtype", ["fp32", "bf16", "int8", "rht_int8", "rht_int16"]
-    )
+    @pytest.mark.parametrize("dtype", ["fp32", "bf16", "int8", "rht_int8", "rht_int16"])
     def test_validate_accepts_every_dtype_with_split_enabled(self, dtype):
         settings = GlobalSettings()
         settings.cache.gdn_ssd_split_enabled = True
@@ -1894,6 +1954,38 @@ class TestGlobalSettings:
             )
             assert settings.server.max_audio_upload_size == "500MB"
             assert settings.server.max_audio_upload_bytes() == 500 * 1024 * 1024
+
+    def test_env_override_max_image_settings(self):
+        """OMLX_MAX_IMAGE_UPLOAD_SIZE and OMLX_MAX_IMAGE_SIDE_LENGTH override defaults."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(
+                os.environ,
+                {
+                    "OMLX_MAX_IMAGE_UPLOAD_SIZE": "25MB",
+                    "OMLX_MAX_IMAGE_SIDE_LENGTH": "1024",
+                },
+                clear=False,
+            ):
+                settings = GlobalSettings.load(base_path=tmpdir)
+                assert settings.server.max_image_upload_size == "25MB"
+                assert settings.server.max_image_upload_bytes() == 25 * 1024 * 1024
+                assert settings.server.max_image_side_length == 1024
+
+    def test_cli_override_max_image_settings(self):
+        """--max-image-upload-size and --max-image-side-length are applied via CLI overrides."""
+        from argparse import Namespace
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = GlobalSettings.load(
+                base_path=tmpdir,
+                cli_args=Namespace(
+                    max_image_upload_size="30MB",
+                    max_image_side_length=1500,
+                ),
+            )
+            assert settings.server.max_image_upload_size == "30MB"
+            assert settings.server.max_image_upload_bytes() == 30 * 1024 * 1024
+            assert settings.server.max_image_side_length == 1500
 
     def test_env_override_model(self):
         """Test environment variable override for model settings."""
@@ -2468,9 +2560,7 @@ class TestResolveDefaultBasePath:
         self, monkeypatch, tmp_path
     ):
         resolved = tmp_path / "resolved-base"
-        monkeypatch.setattr(
-            "omlx.settings.resolve_default_base_path", lambda: resolved
-        )
+        monkeypatch.setattr("omlx.settings.resolve_default_base_path", lambda: resolved)
 
         settings = GlobalSettings.load()
 
@@ -2999,3 +3089,168 @@ class TestCORSMiddleware:
             assert resp.status_code == 200
             assert "access-control-allow-origin" in resp.headers
             assert resp.headers["access-control-allow-origin"] == "*"
+
+
+class TestUISettings:
+    """UISettings carries the admin dashboard layout next to the language."""
+
+    def test_defaults(self):
+        from omlx.settings import UISettings
+
+        settings = UISettings()
+        assert settings.language == "en"
+        assert settings.dashboard_layout is None
+
+    def test_to_dict_includes_layout(self):
+        from omlx.settings import UISettings
+
+        layout = {"version": 1, "width": "wide", "blocks": []}
+        result = UISettings(language="ko", dashboard_layout=layout).to_dict()
+        assert result == {"language": "ko", "dashboard_layout": layout}
+
+    def test_from_dict_legacy_without_layout(self):
+        from omlx.settings import UISettings
+
+        settings = UISettings.from_dict({"language": "ko"})
+        assert settings.language == "ko"
+        assert settings.dashboard_layout is None
+
+    def test_from_dict_ignores_non_dict_layout(self):
+        from omlx.settings import UISettings
+
+        assert UISettings.from_dict({"dashboard_layout": "x"}).dashboard_layout is None
+        assert UISettings.from_dict({"dashboard_layout": []}).dashboard_layout is None
+
+    def test_layout_round_trips_through_settings_file(self, tmp_path):
+        layout = {
+            "version": 1,
+            "width": "full",
+            "blocks": [{"id": "serving_stats", "x": 0, "y": 0, "w": 12}],
+        }
+        gs = GlobalSettings(base_path=tmp_path)
+        gs.ui.dashboard_layout = layout
+        gs.save()
+
+        restored = GlobalSettings.load(base_path=tmp_path)
+        assert restored.ui.dashboard_layout == layout
+
+
+class TestDashboardLayoutRoute:
+    """/api/global-settings validates and persists ui_dashboard_layout."""
+
+    @staticmethod
+    def _layout(**overrides):
+        layout = {
+            "version": 1,
+            "width": "wide",
+            "blocks": [
+                {"id": "serving_stats", "x": 0, "y": 0, "w": 12},
+                {"id": "active_models", "x": 12, "y": 0, "w": 12},
+            ],
+        }
+        layout.update(overrides)
+        return layout
+
+    def test_get_exposes_layout(self, tmp_path, monkeypatch):
+        import asyncio
+
+        from omlx.admin import routes as admin_routes
+
+        gs = GlobalSettings(base_path=tmp_path)
+        gs.ui.dashboard_layout = self._layout()
+        monkeypatch.setattr(admin_routes, "_get_global_settings", lambda: gs)
+
+        result = asyncio.run(admin_routes.get_global_settings(is_admin=True))
+        assert result["ui"]["dashboard_layout"] == self._layout()
+
+    def test_post_persists_layout(self, tmp_path, monkeypatch):
+        import asyncio
+
+        from omlx.admin import routes as admin_routes
+
+        gs = GlobalSettings(base_path=tmp_path)
+        monkeypatch.setattr(admin_routes, "_get_global_settings", lambda: gs)
+
+        request = admin_routes.GlobalSettingsRequest.model_validate(
+            {"ui_dashboard_layout": self._layout()}
+        )
+        result = asyncio.run(
+            admin_routes.update_global_settings(request=request, is_admin=True)
+        )
+        assert result["success"] is True
+        assert "ui_dashboard_layout" in result["runtime_applied"]
+        assert gs.ui.dashboard_layout == self._layout()
+        assert GlobalSettings.load(base_path=tmp_path).ui.dashboard_layout == (
+            self._layout()
+        )
+
+    def test_post_explicit_null_restores_default(self, tmp_path, monkeypatch):
+        import asyncio
+
+        from omlx.admin import routes as admin_routes
+
+        gs = GlobalSettings(base_path=tmp_path)
+        gs.ui.dashboard_layout = self._layout()
+        monkeypatch.setattr(admin_routes, "_get_global_settings", lambda: gs)
+
+        request = admin_routes.GlobalSettingsRequest.model_validate(
+            {"ui_dashboard_layout": None}
+        )
+        asyncio.run(admin_routes.update_global_settings(request=request, is_admin=True))
+        assert gs.ui.dashboard_layout is None
+
+    def test_post_without_layout_keeps_current(self, tmp_path, monkeypatch):
+        import asyncio
+
+        from omlx.admin import routes as admin_routes
+
+        gs = GlobalSettings(base_path=tmp_path)
+        gs.ui.dashboard_layout = self._layout()
+        monkeypatch.setattr(admin_routes, "_get_global_settings", lambda: gs)
+
+        request = admin_routes.GlobalSettingsRequest()
+        result = asyncio.run(
+            admin_routes.update_global_settings(request=request, is_admin=True)
+        )
+        assert "ui_dashboard_layout" not in result["runtime_applied"]
+        assert gs.ui.dashboard_layout == self._layout()
+
+    def test_unknown_and_duplicate_blocks_are_dropped(self):
+        from omlx.admin.routes import DashboardLayoutRequest
+
+        layout = DashboardLayoutRequest.model_validate(
+            self._layout(
+                blocks=[
+                    {"id": "serving_stats", "x": 0, "y": 0, "w": 24},
+                    {"id": "not_a_block", "x": 0, "y": 1, "w": 24},
+                    {"id": "serving_stats", "x": 0, "y": 2, "w": 12},
+                ]
+            )
+        )
+        assert [b.id for b in layout.blocks] == ["serving_stats"]
+        assert layout.blocks[0].w == 24
+
+    @pytest.mark.parametrize(
+        "block",
+        [
+            {"id": "serving_stats", "x": 20, "y": 0, "w": 12},  # x + w > 24
+            {"id": "serving_stats", "x": 0, "y": 0, "w": 5},  # below min width
+            {"id": "serving_stats", "x": 0, "y": 0, "w": 25},  # above column count
+            {"id": "serving_stats", "x": -1, "y": 0, "w": 12},
+        ],
+    )
+    def test_invalid_block_geometry_is_rejected(self, block):
+        import pydantic
+
+        from omlx.admin.routes import DashboardLayoutRequest
+
+        with pytest.raises(pydantic.ValidationError):
+            DashboardLayoutRequest.model_validate(self._layout(blocks=[block]))
+
+    def test_invalid_width_is_rejected(self):
+        import pydantic
+
+        from omlx.admin.routes import DashboardLayoutRequest
+
+        with pytest.raises(pydantic.ValidationError):
+            DashboardLayoutRequest.model_validate(self._layout(width="huge"))
