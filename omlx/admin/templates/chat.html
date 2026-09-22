@@ -7,6 +7,7 @@
 <script src="/admin/static/js/purify.min.js"></script>
 <script src="/admin/static/js/marked.umd.js"></script>
 <script src="/admin/static/js/marked-highlight.umd.js"></script>
+<script src="/admin/static/js/chat_history_storage.js"></script>
 
 <!-- Code highlighting -->
 <link rel="stylesheet" id="hljs-light-theme" href="/admin/static/css/hljs-github.min.css">
@@ -1057,8 +1058,8 @@
 
         <!-- New Chat Button -->
         <div class="p-3 flex-shrink-0 space-y-2">
-            <button @click="startNewChat()"
-                class="w-full flex items-center gap-2 px-3 py-2 bg-surface-muted hover:bg-surface-alt rounded-lg text-sm font-medium transition-colors"
+            <button @click="startNewChat()" :disabled="!!chatStorageIssue"
+                class="w-full flex items-center gap-2 px-3 py-2 bg-surface-muted hover:bg-surface-alt rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 style="color: var(--text-primary);">
                 <i data-lucide="plus" class="w-4 h-4"></i>
                 {{ t('chat.new_chat') }}
@@ -1155,6 +1156,33 @@
 
     <!-- Main Content -->
     <div class="flex-1 flex flex-col bg-surface overflow-hidden min-w-0 relative">
+        <!-- Persistent storage failures must stay visible until the data is safe again. -->
+        <div x-show="chatStorageIssue" x-cloak role="alert" aria-live="assertive"
+            class="absolute top-3 left-1/2 -translate-x-1/2 z-[180] w-full max-w-2xl rounded-xl border p-4 shadow-2xl"
+            style="width: calc(100% - 2rem); background: var(--bg-primary); border-color: var(--text-danger); color: var(--text-primary);">
+            <div class="flex items-start gap-3">
+                <i data-lucide="triangle-alert" class="w-5 h-5 flex-shrink-0 text-danger mt-0.5"></i>
+                <div class="min-w-0 flex-1">
+                    <h3 class="text-sm font-bold" x-text="window.t('chat.storage_error.title')"></h3>
+                    <p class="mt-1 text-xs" style="color: var(--text-secondary);"
+                        x-text="chatStorageIssueMessage()"></p>
+                    <p class="mt-1 text-xs font-semibold text-danger"
+                        x-text="window.t('chat.storage_error.no_data_deleted')"></p>
+                    <div class="mt-3 flex flex-wrap gap-2">
+                        <button type="button" @click="downloadPendingChatHistory()"
+                            x-show="chatStorageIssue?.pendingJson || chatStorageIssue?.raw != null"
+                            class="px-3 py-1.5 text-xs font-medium rounded-lg border border-line bg-surface-muted hover:bg-surface-alt"
+                            x-text="chatStorageIssue?.pendingJson ? window.t('chat.storage_error.download_pending') : window.t('chat.storage_error.download_raw')"></button>
+                        <button type="button" @click="retryChatHistorySave()"
+                            class="px-3 py-1.5 text-xs font-medium rounded-lg bg-accent text-accent-fg hover:bg-accent-hover"
+                            x-text="window.t('chat.storage_error.retry')"></button>
+                        <button type="button" @click="showChatSettingsModal = true"
+                            class="px-3 py-1.5 text-xs font-medium rounded-lg border border-line bg-surface-muted hover:bg-surface-alt"
+                            x-text="window.t('chat.storage_error.manage')"></button>
+                    </div>
+                </div>
+            </div>
+        </div>
         <!-- Floating Sidebar Toggles -->
         <button @click="sidebarOpen = true"
             class="absolute p-1.5 bg-surface hover:bg-surface-muted rounded-lg border border-line z-[100] shadow-sm"
@@ -1869,12 +1897,12 @@
                             @keydown.enter="onComposerEnter($event)"
                             @input="autoResize($event.target)" @paste="handlePaste($event)"
                             :placeholder="hasAsrSupport() ? window.t('chat.input_placeholder_asr') : (isMobile ? window.t('chat.input_placeholder_mobile') : window.t('chat.input_placeholder'))"
-                            :disabled="!apiKeySet || !currentModel || isCurrentChatStreaming() || hasAsrSupport()" rows="1"
+                            :disabled="!apiKeySet || !currentModel || isCurrentChatStreaming() || hasAsrSupport() || !!chatStorageIssue" rows="1"
                             class="flex-1 px-4 py-3 bg-transparent resize-none outline-none text-sm max-h-32"
                             style="color: var(--text-primary);"></textarea>
                         <div class="relative flex-shrink-0">
                             <button x-show="!isCurrentChatStreaming()" @click="sendMessage()"
-                                :disabled="(hasAsrSupport() ? (!uploadAudio || micActive()) : (!inputMessage.trim() && uploadImages.length === 0 && uploadDocuments.length === 0)) || hasPendingUploads() || !apiKeySet || !currentModel"
+                                :disabled="(hasAsrSupport() ? (!uploadAudio || micActive()) : (!inputMessage.trim() && uploadImages.length === 0 && uploadDocuments.length === 0)) || hasPendingUploads() || !apiKeySet || !currentModel || !!chatStorageIssue"
                                 class="w-10 h-10 m-1 bg-accent hover:bg-accent-hover disabled:bg-surface-muted rounded-full transition-colors flex items-center justify-center">
                                 <i data-lucide="arrow-up" class="w-4 h-4 text-accent-fg"></i>
                             </button>
@@ -1984,7 +2012,8 @@
         </div>
 
         <!-- Tab Content: Scrollable area -->
-        <div class="flex-1 overflow-y-auto custom-scrollbar">
+        <div class="flex-1 overflow-y-auto custom-scrollbar"
+            :inert="!!chatStorageIssue" :aria-disabled="!!chatStorageIssue">
 
             <!-- ==================== PROFILE TAB ==================== -->
             <div x-show="rightSidebarTab === 'profile'" class="px-4 py-3 space-y-3">
@@ -2528,7 +2557,6 @@
     }
 
     const CHAT_UNTITLED_I18N_KEY = 'chat.untitled_title';
-    const MAX_CHAT_HISTORY_SIZE = 100;
     const CHAT_HISTORY_STORAGE_KEY = 'omlx_chat_history';
     const API_KEY_STORAGE_KEY = 'omlx_chat_api_key';
     const THEME_STORAGE_KEY = 'omlx-chat-theme';
@@ -2595,6 +2623,9 @@
             // Chat State
             currentChatId: null,
             chatHistory: [],
+            chatStorageIssue: null,
+            _chatHistoryStore: null,
+            _pendingChatHistory: null,
             _thinkingDomSeq: 0,
             _adminModelsList: null,
             _adminModelsListPromise: null,
@@ -2871,6 +2902,7 @@
             persistChatSettingsToHistory(chatId = this.currentChatId) {
                 const session = this.getChatSession(chatId, false);
                 if (!session || !chatId) return;
+                if (!this.chatMutationAllowed()) return;
                 if (chatId === this.currentChatId) {
                     this.syncSessionModelSettingsFromUi(session);
                 }
@@ -2880,17 +2912,18 @@
                     return;
                 }
                 const snap = this.captureSessionModelSettings();
-                this.chatHistory[existingIndex] = {
-                    ...this.chatHistory[existingIndex],
-                    model: session.model ?? this.chatHistory[existingIndex].model,
-                    systemPrompt: session.systemPrompt ?? this.chatHistory[existingIndex].systemPrompt,
-                    activeProfile: session.activeProfile ?? this.chatHistory[existingIndex].activeProfile,
+                const nextHistory = [...this.chatHistory];
+                nextHistory[existingIndex] = {
+                    ...nextHistory[existingIndex],
+                    model: session.model ?? nextHistory[existingIndex].model,
+                    systemPrompt: session.systemPrompt ?? nextHistory[existingIndex].systemPrompt,
+                    activeProfile: session.activeProfile ?? nextHistory[existingIndex].activeProfile,
                     modelSettings: snap.modelSettings,
                     speculativeEngine: snap.speculativeEngine,
                     speculativeDraftModel: snap.speculativeDraftModel,
                     modelSettingsByModel: this.cloneData(session.modelSettingsByModel || {}),
                 };
-                this.saveChatHistory();
+                this.saveChatHistory(nextHistory, { action: 'settings' });
             },
 
             emptyStats() {
@@ -3236,6 +3269,7 @@
             },
 
             async selectVariant(userIndex, variantId) {
+                if (!this.chatMutationAllowed()) return;
                 const session = this.getChatSession(this.currentChatId, true);
                 if (!session?.messages[userIndex] || session.messages[userIndex].role !== 'user') return;
                 session.messages[userIndex]._activeVariantId = variantId;
@@ -4626,31 +4660,119 @@
         });
     },
 
+    chatHistoryStore() {
+        if (!this._chatHistoryStore) {
+            this._chatHistoryStore = createChatHistoryStorage(
+                localStorage,
+                CHAT_HISTORY_STORAGE_KEY
+            );
+        }
+        return this._chatHistoryStore;
+    },
+
+    _downloadChatData(text, filename, type = 'application/json') {
+        const blob = new Blob([text], { type });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    },
+
+    pendingChatHistory() {
+        if (Array.isArray(this._pendingChatHistory)) return this._pendingChatHistory;
+        const pending = this.chatStorageIssue?.pendingJson;
+        if (!pending) return this.chatHistory;
+        try {
+            const parsed = JSON.parse(pending);
+            return Array.isArray(parsed) ? parsed : this.chatHistory;
+        } catch {
+            return this.chatHistory;
+        }
+    },
+
+    chatStorageIssueMessage() {
+        const kind = this.chatStorageIssue?.kind || 'unavailable';
+        return window.t(`chat.storage_error.${kind}`);
+    },
+
+    chatMutationAllowed() {
+        return !this.chatStorageIssue;
+    },
+
     async downloadChats() {
-        const history = localStorage.getItem(CHAT_HISTORY_STORAGE_KEY);
-        if (!history) {
+        if (this.chatStorageIssue) {
+            this.downloadPendingChatHistory();
+            return;
+        }
+        const loaded = this.chatHistoryStore().load();
+        if (!loaded.ok) {
+            this.chatStorageIssue = {
+                kind: loaded.kind,
+                raw: loaded.raw ?? null,
+                pendingJson: null,
+            };
+            if (loaded.raw != null) this.downloadPendingChatHistory();
+            return;
+        }
+        if (!loaded.history.length) {
             alert(window.t('chat.no_chats_to_export'));
             return;
         }
-        try {
-            const chats = JSON.parse(history);
-            if (!chats.length) {
-                alert(window.t('chat.no_chats_to_export'));
+        this._downloadChatData(JSON.stringify(loaded.history, null, 2), 'omlx-chats.json');
+    },
+
+    downloadPendingChatHistory() {
+        const pending = this.chatStorageIssue?.pendingJson;
+        if (pending) {
+            let pretty = pending;
+            try { pretty = JSON.stringify(JSON.parse(pending), null, 2); } catch { }
+            this._downloadChatData(pretty, 'omlx-chats-unsaved.json');
+            return;
+        }
+        const raw = this.chatStorageIssue?.raw;
+        if (raw != null) {
+            this._downloadChatData(raw, 'omlx-chat-history-recovery.txt', 'text/plain');
+        }
+    },
+
+    async retryChatHistorySave() {
+        let pending = this._pendingChatHistory;
+        const pendingJson = this.chatStorageIssue?.pendingJson;
+        if (!pending && pendingJson) {
+            try { pending = JSON.parse(pendingJson); } catch (error) {
+                console.error('Failed to parse pending chat history:', error);
                 return;
             }
-            const json = JSON.stringify(chats, null, 2);
-            const blob = new Blob([json], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'omlx-chats.json';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-        } catch (e) {
-            console.error('Failed to download chats:', e);
         }
+        if (!Array.isArray(pending)) {
+            this.loadChatHistory();
+            return;
+        }
+        const currentId = this.currentChatId;
+        if (this.saveChatHistory(pending, { action: 'retry' })) {
+            await this.resyncChatHistoryState(currentId);
+        }
+    },
+
+    async resyncChatHistoryState(preferredChatId = this.currentChatId) {
+        this.chatSessions = {};
+        const targetId = this.chatHistory.some(chat => chat.id === preferredChatId)
+            ? preferredChatId
+            : this.chatHistory[0]?.id;
+        this.currentChatId = null;
+        this.messages = [];
+        if (targetId) {
+            await this.loadChat(targetId);
+            return;
+        }
+        const sysDefault = this.promptProfiles.find(p => p.name === 'System Default');
+        this.systemPrompt = sysDefault ? sysDefault.content : '';
+        this.activePromptProfile = sysDefault ? sysDefault.name : null;
+        this.recentStats = this.emptyStats();
     },
 
     importChats(event) {
@@ -4678,23 +4800,23 @@
                 const t = c?.updatedAt ? Date.parse(c.updatedAt) : 0;
                 return Number.isNaN(t) ? 0 : t;
             };
-            const byId = new Map(this.chatHistory.map(c => [c.id, c]));
+            const byId = new Map(this.pendingChatHistory().map(c => [c.id, c]));
             const changed = new Set();
+            const replaced = [];
             for (const entry of valid) {
                 const existing = byId.get(entry.id);
                 if (existing) {
                     // Never overwrite the open or streaming chat; its live state is the truth
                     if (entry.id === this.currentChatId || this.isChatStreaming(entry.id)) continue;
                     if (ts(entry) <= ts(existing)) continue;
-                    delete this.chatSessions[entry.id];
+                    replaced.push(entry.id);
                 }
                 byId.set(entry.id, entry);
                 changed.add(entry.id);
             }
-            this.chatHistory = [...byId.values()]
-                .sort((a, b) => ts(b) - ts(a))
-                .slice(0, MAX_CHAT_HISTORY_SIZE);
-            this.saveChatHistory();
+            const nextHistory = [...byId.values()].sort((a, b) => ts(b) - ts(a));
+            if (!this.saveChatHistory(nextHistory, { action: 'import' })) return;
+            for (const id of replaced) delete this.chatSessions[id];
             alert(window.t('chat.import_success').replace('{count}', changed.size));
         };
         reader.onerror = () => alert(window.t('chat.error.import_invalid'));
@@ -5230,67 +5352,67 @@
     },
 
     loadChatHistory() {
-        const history = localStorage.getItem(CHAT_HISTORY_STORAGE_KEY);
-        if (history) {
-            try {
-                this.chatHistory = JSON.parse(history);
-                this.sortChatHistory();
-                let migrated = false;
-                for (const chat of this.chatHistory) {
-                    if (chat.title && /^chat\.untitled/.test(String(chat.title))) {
-                        chat.title = this.untitledChatTitle();
-                        migrated = true;
-                    }
-                    const gatewayId = this.resolveGatewayModelId(chat.model);
-                    if (gatewayId && gatewayId !== chat.model) {
-                        if (
-                            chat.modelSettingsByModel?.[chat.model]
-                            && !chat.modelSettingsByModel[gatewayId]
-                        ) {
-                            chat.modelSettingsByModel[gatewayId] =
-                                chat.modelSettingsByModel[chat.model];
-                        }
-                        chat.model = gatewayId;
-                        migrated = true;
-                    }
+        const loaded = this.chatHistoryStore().load();
+        if (!loaded.ok) {
+            this._pendingChatHistory = null;
+            this.chatStorageIssue = {
+                kind: loaded.kind,
+                raw: loaded.raw ?? null,
+                pendingJson: null,
+            };
+            console.error('Failed to load chat history:', loaded.error);
+            return false;
+        }
+
+        const nextHistory = loaded.history;
+        this.sortChatHistory(nextHistory);
+        let migrated = false;
+        for (const chat of nextHistory) {
+            if (chat.title && /^chat\.untitled/.test(String(chat.title))) {
+                chat.title = this.untitledChatTitle();
+                migrated = true;
+            }
+            const gatewayId = this.resolveGatewayModelId(chat.model);
+            if (gatewayId && gatewayId !== chat.model) {
+                if (
+                    chat.modelSettingsByModel?.[chat.model]
+                    && !chat.modelSettingsByModel[gatewayId]
+                ) {
+                    chat.modelSettingsByModel[gatewayId] =
+                        chat.modelSettingsByModel[chat.model];
                 }
-                if (migrated) {
-                    this.saveChatHistory();
-                }
-            } catch (e) {
-                this.chatHistory = [];
+                chat.model = gatewayId;
+                migrated = true;
             }
         }
+        if (migrated) return this.saveChatHistory(nextHistory, { action: 'migration' });
+        this.chatHistory = nextHistory;
+        this._pendingChatHistory = null;
+        this.chatStorageIssue = null;
+        return true;
     },
 
-    saveChatHistory() {
-        const key = CHAT_HISTORY_STORAGE_KEY;
-        const persist = () => localStorage.setItem(key, JSON.stringify(this.chatHistory));
-        try {
-            persist();
-        } catch (e) {
-            if (e?.name !== 'QuotaExceededError' && !/quota/i.test(String(e?.message || ''))) {
-                console.error('Failed to save chat history:', e);
-                return;
-            }
-            while (this.chatHistory.length > 1) {
-                this.chatHistory.pop();
-                try {
-                    persist();
-                    console.warn('Chat history trimmed to fit localStorage quota');
-                    return;
-                } catch (retryErr) {
-                    if (retryErr?.name !== 'QuotaExceededError' && !/quota/i.test(String(retryErr?.message || ''))) {
-                        console.error('Failed to save trimmed chat history:', retryErr);
-                        return;
-                    }
-                }
-            }
-            console.error('Chat history too large for localStorage even after trimming');
+    saveChatHistory(nextHistory, { action = 'save' } = {}) {
+        const result = this.chatHistoryStore().save(nextHistory);
+        if (!result.ok) {
+            this._pendingChatHistory = nextHistory;
+            this.chatStorageIssue = {
+                kind: result.kind,
+                action,
+                raw: result.raw ?? null,
+                pendingJson: result.serialized ?? null,
+            };
+            console.error('Failed to save chat history:', result.error);
+            return false;
         }
+        this.chatHistory = nextHistory;
+        this._pendingChatHistory = null;
+        this.chatStorageIssue = null;
+        return true;
     },
 
     async startNewChat(options = {}) {
+        if (!this.chatMutationAllowed()) return false;
         this.cancelPersistModelSettingsTimer();
         const prevChatId = this.currentChatId;
         const preserveDraft = options.preserveDraft === true && !prevChatId;
@@ -5300,13 +5422,13 @@
             const prevSession = this.getChatSession(prevChatId, false);
             if (prevSession) {
                 prevSession.messages = this.messages;
-                this.saveCurrentChat(
+                if (!this.saveCurrentChat(
                     prevChatId,
                     null,
                     null,
                     null,
                     { touchUpdatedAt: false }
-                );
+                )) return false;
             }
         }
 
@@ -5358,7 +5480,7 @@
         this.resetStreamSession(this.getStreamSession(chatId, true));
         this.recentStats = this.emptyStats();
         this.stopStatsPollingIfIdle();
-        this.saveCurrentChat(chatId);
+        if (!this.saveCurrentChat(chatId)) return false;
 
         this.$nextTick(() => {
             const input = this.$refs.messageInput;
@@ -5376,21 +5498,23 @@
             this.computeTimelineDots();
             this.computeTimelineActive();
         });
+        return true;
     },
 
     async loadChat(chatId) {
+        if (this.chatStorageIssue && this.currentChatId !== chatId) return false;
         this.cancelPersistModelSettingsTimer();
         if (this.currentChatId && this.currentChatId !== chatId) {
             const prevSession = this.getChatSession(this.currentChatId, false);
             if (prevSession) {
                 prevSession.messages = this.messages;
-                this.saveCurrentChat(
+                if (!this.saveCurrentChat(
                     this.currentChatId,
                     null,
                     null,
                     null,
                     { touchUpdatedAt: false }
-                );
+                )) return false;
             }
         }
 
@@ -5435,6 +5559,7 @@
         }
         this.isMobile = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
         this.sidebarOpen = window.innerWidth >= 768;
+        return true;
     },
 
     saveCurrentChat(
@@ -5448,8 +5573,9 @@
         const messagesToSave = messages ?? session?.messages ?? (chatId === this.currentChatId ? this.messages : []);
         if (!chatId) return;
 
-        const existingIndex = this.chatHistory.findIndex(c => c.id === chatId);
-        const existingChat = existingIndex >= 0 ? this.chatHistory[existingIndex] : null;
+        const baseHistory = this.pendingChatHistory();
+        const existingIndex = baseHistory.findIndex(c => c.id === chatId);
+        const existingChat = existingIndex >= 0 ? baseHistory[existingIndex] : null;
 
         // Strip base64 image data from content arrays to avoid localStorage quota issues
         const messagesForStorage = messagesToSave.map(msg => {
@@ -5523,19 +5649,19 @@
             }
         }
 
+        const nextHistory = [...baseHistory];
         if (existingIndex >= 0) {
-            this.chatHistory[existingIndex] = chatData;
+            nextHistory[existingIndex] = chatData;
         } else {
-            this.chatHistory.unshift(chatData);
+            nextHistory.unshift(chatData);
         }
 
-        this.sortChatHistory();
-        // Keep only last MAX_CHAT_HISTORY_SIZE chats
-        this.chatHistory = this.chatHistory.slice(0, MAX_CHAT_HISTORY_SIZE);
-        this.saveChatHistory();
+        this.sortChatHistory(nextHistory);
+        return this.saveChatHistory(nextHistory, { action: 'chat' });
     },
 
     startRenamingChat(chat) {
+        if (!this.chatMutationAllowed()) return;
         this.renamingChatId = chat.id;
         this.renameDraft = chat.title || this.untitledChatTitle();
         this.$nextTick(() => {
@@ -5553,17 +5679,23 @@
     },
 
     saveRenamedChat(chatId) {
+        if (!this.chatMutationAllowed()) return;
         const chat = this.chatHistory.find(c => c.id === chatId);
         if (!chat) return;
 
-        chat.title = this.renameDraft.trim() || this.untitledChatTitle();
-        chat.manualTitle = true;
-        chat.updatedAt = new Date().toISOString();
-        this.saveChatHistory();
-        this.cancelRenamingChat();
+        const nextHistory = this.chatHistory.map(c => c.id === chatId ? {
+            ...c,
+            title: this.renameDraft.trim() || this.untitledChatTitle(),
+            manualTitle: true,
+            updatedAt: new Date().toISOString(),
+        } : c);
+        if (this.saveChatHistory(nextHistory, { action: 'rename' })) {
+            this.cancelRenamingChat();
+        }
     },
 
     async sendMessage() {
+        if (!this.chatMutationAllowed()) return;
         if (this.hasAsrSupport()) {
             await this.sendTranscriptionMessage();
             return;
@@ -5587,7 +5719,12 @@
         });
 
         if (!this.currentChatId) {
-            await this.startNewChat({ preserveDraft: true });
+            if (!await this.startNewChat({ preserveDraft: true })) {
+                this.inputMessage = userText;
+                this.uploadImages = images;
+                this.uploadDocuments = documents;
+                return;
+            }
         }
 
         const chatId = this.currentChatId;
@@ -5623,6 +5760,9 @@
         const userMsg = { id: this.newMessageId(), role: 'user', content };
         chatSession.messages.push(userMsg);
         this.messages = chatSession.messages;
+        if (!this.saveCurrentChat(chatId, chatSession.messages, sourceModel, sourceSystemPrompt)) {
+            return;
+        }
         this.forceScrollToBottom();
         await this.streamResponse({
             chatId,
@@ -5633,6 +5773,7 @@
     },
 
     async sendTranscriptionMessage() {
+        if (!this.chatMutationAllowed()) return;
         if (!this.uploadAudio || this.micActive()) return;
         if (!this.currentModel || this.isCurrentChatStreaming()) return;
 
@@ -5640,7 +5781,10 @@
         this.uploadAudio = null;
 
         if (!this.currentChatId) {
-            await this.startNewChat({ preserveDraft: true });
+            if (!await this.startNewChat({ preserveDraft: true })) {
+                this.uploadAudio = audio;
+                return;
+            }
         }
         const chatId = this.currentChatId;
         const sourceModel = this.currentModel;
@@ -5657,6 +5801,9 @@
         };
         chatSession.messages.push(userMsg);
         this.messages = chatSession.messages;
+        if (!this.saveCurrentChat(chatId, chatSession.messages, sourceModel, chatSession.systemPrompt)) {
+            return;
+        }
         this.forceScrollToBottom();
         await this.streamTranscription({
             chatId,
@@ -5818,6 +5965,7 @@
     },
 
     async startMicTranscription() {
+        if (!this.chatMutationAllowed()) return;
         if (this.micActive() || this.uploadAudio) return;
         if (!this.currentModel || this.isCurrentChatStreaming()) return;
 
@@ -5831,7 +5979,10 @@
         }
 
         if (!this.currentChatId) {
-            await this.startNewChat({ preserveDraft: true });
+            if (!await this.startNewChat({ preserveDraft: true })) {
+                mediaStream.getTracks().forEach(track => track.stop());
+                return;
+            }
         }
         const chatId = this.currentChatId;
         const sourceModel = this.currentModel;
@@ -6501,7 +6652,12 @@
                     });
                 });
 
-                this.saveCurrentChat(context.chatId, chatSession.messages, chatSession.model, context.systemPrompt);
+                if (!this.saveCurrentChat(
+                    context.chatId,
+                    chatSession.messages,
+                    chatSession.model,
+                    context.systemPrompt
+                )) return;
                 if (stream.abortController?.signal.aborted) {
                     return;
                 }
@@ -6683,6 +6839,7 @@
     },
 
     async regenerateMessage(index, opts = {}) {
+        if (!this.chatMutationAllowed()) return;
         if (this.isCurrentChatStreaming()) return;
 
         const session = this.getChatSession(this.currentChatId, true);
@@ -6783,7 +6940,9 @@
         }
         this.messages = session.messages;
         this.syncFooterStatsFromMessages(session.messages);
-        this.saveCurrentChat(chatId);
+        if (!this.saveCurrentChat(chatId)) {
+            return;
+        }
         this.scheduleEnhanceMessages();
     },
 
@@ -6796,7 +6955,6 @@
 
         const session = this.getChatSession(this.currentChatId, true);
         if (!session?.messages[userIndex] || session.messages[userIndex].role !== 'user') return;
-
         const turnMsgs = [];
         for (let i = userIndex + 1; i < session.messages.length && session.messages[i].role !== 'user'; i++) {
             turnMsgs.push(session.messages[i]);
@@ -6819,7 +6977,9 @@
         }
 
         this.messages = session.messages;
-        this.saveCurrentChat(this.currentChatId);
+        if (!this.saveCurrentChat(this.currentChatId)) {
+            return;
+        }
         this.scheduleEnhanceMessages();
     },
 
@@ -6846,6 +7006,7 @@
     },
 
     branchChat(index) {
+        if (!this.chatMutationAllowed()) return;
         if (this.isCurrentChatStreaming()) return;
         const session = this.getChatSession(this.currentChatId, true);
         const originalChat = this.chatHistory.find(c => c.id === this.currentChatId);
@@ -6911,8 +7072,12 @@
             updatedAt: new Date().toISOString()
         };
 
-        this.chatHistory.unshift(branchData);
-        this.saveChatHistory();
+        const nextHistory = [branchData, ...this.chatHistory];
+        this.sortChatHistory(nextHistory);
+        if (!this.saveChatHistory(nextHistory, { action: 'branch' })) {
+            delete this.chatSessions[branchId];
+            return;
+        }
         this.loadChat(branchId);
     },
 
@@ -7002,7 +7167,8 @@
         this.editImages = [];
     },
 
-            async saveEdit(index) {
+    async saveEdit(index) {
+        if (!this.chatMutationAllowed()) return;
         if (!this.editContent.trim() || this.isCurrentChatStreaming()) return;
 
         const session = this.getChatSession(this.currentChatId, true);
@@ -7040,6 +7206,8 @@
         this.editContent = '';
         this.editImages = [];
 
+        if (!this.saveCurrentChat(this.currentChatId, session.messages)) return;
+
         // Scroll and get new response
         this.scrollToBottom();
         // Use profile from last assistant message before edit, or current active profile
@@ -7063,13 +7231,13 @@
     async deleteChat(chatId, { skipConfirm = false } = {}) {
         if (!skipConfirm && !confirm(window.t('chat.confirm_delete_chat'))) return;
 
+        const wasCurrent = this.currentChatId === chatId;
+        const nextHistory = this.pendingChatHistory().filter(c => c.id !== chatId);
+        if (!this.saveChatHistory(nextHistory, { action: 'delete' })) return;
+
         this.cancelStreamTransport(this.getStreamSession(chatId, false));
         delete this.streamSessions[chatId];
         delete this.chatSessions[chatId];
-
-        const wasCurrent = this.currentChatId === chatId;
-        this.chatHistory = this.chatHistory.filter(c => c.id !== chatId);
-        this.saveChatHistory();
 
         if (!wasCurrent) return;
 
@@ -7108,10 +7276,9 @@
         if (!confirm(window.t('chat.confirm_clear_all'))) return;
 
         this.stopAllStreams();
-        this.chatHistory = [];
+        if (!this.saveChatHistory([], { action: 'clear' })) return;
         this.chatSessions = {};
         this.streamSessions = {};
-        this.saveChatHistory();
         await this.startNewChat();
 
     },
@@ -7417,21 +7584,25 @@
     },
 
     // Sort chat list: pinned first, then most-recently-updated.
-    sortChatHistory() {
-        this.chatHistory.sort((a, b) => {
+    sortChatHistory(history = this.chatHistory) {
+        history.sort((a, b) => {
             if (!!b.pinned !== !!a.pinned) return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0);
             const ta = a.updatedAt ? Date.parse(a.updatedAt) : 0;
             const tb = b.updatedAt ? Date.parse(b.updatedAt) : 0;
             return (Number.isNaN(tb) ? 0 : tb) - (Number.isNaN(ta) ? 0 : ta);
         });
+        return history;
     },
 
     togglePinChat(chatId) {
+        if (!this.chatMutationAllowed()) return;
         const chat = this.chatHistory.find(c => c.id === chatId);
         if (!chat) return;
-        chat.pinned = !chat.pinned;
-        this.sortChatHistory();
-        this.saveChatHistory();
+        const nextHistory = this.chatHistory.map(c => c.id === chatId
+            ? { ...c, pinned: !c.pinned }
+            : c);
+        this.sortChatHistory(nextHistory);
+        this.saveChatHistory(nextHistory, { action: 'pin' });
     },
 
     imageLimitReached() {

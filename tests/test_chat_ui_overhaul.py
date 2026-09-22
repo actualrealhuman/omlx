@@ -19,6 +19,16 @@ NEW_I18N_KEYS = {
     "chat.max_tool_rounds",
     "chat.max_tool_rounds_hint",
     "chat.error.max_tool_rounds",
+    "chat.storage_error.title",
+    "chat.storage_error.quota",
+    "chat.storage_error.corrupt",
+    "chat.storage_error.serialization",
+    "chat.storage_error.unavailable",
+    "chat.storage_error.no_data_deleted",
+    "chat.storage_error.download_pending",
+    "chat.storage_error.download_raw",
+    "chat.storage_error.retry",
+    "chat.storage_error.manage",
 }
 
 
@@ -76,17 +86,70 @@ def test_wheel_listener_is_registered_only_during_scroll_setup():
     assert "addEventListener('wheel'" not in scroll
 
 
-def test_chat_history_is_sorted_before_it_is_trimmed():
+def test_chat_history_is_sorted_and_committed_without_automatic_trimming():
+    html = _template()
     save = _section(
-        _template(),
+        html,
         "    saveCurrentChat(",
         "    startRenamingChat(chat)",
     )
 
-    assert save.index("this.sortChatHistory()") < save.index(
-        "this.chatHistory.slice(0, MAX_CHAT_HISTORY_SIZE)"
+    assert "const nextHistory = [...baseHistory]" in save
+    assert save.index("this.sortChatHistory(nextHistory)") < save.index(
+        "this.saveChatHistory(nextHistory"
     )
-    assert "this.saveChatHistory()" in save
+    assert "MAX_CHAT_HISTORY_SIZE" not in html
+    assert "chatHistory.pop()" not in html
+
+
+def test_chat_history_failures_are_visible_and_preserve_recovery_data():
+    html = _template()
+    save = _section(html, "    saveChatHistory(", "    async startNewChat(")
+    load = _section(html, "    loadChatHistory()", "    saveChatHistory(")
+
+    assert "this.chatHistoryStore().save(nextHistory)" in save
+    assert "this._pendingChatHistory = nextHistory" in save
+    assert "pendingJson: result.serialized" in save
+    assert "this.chatHistory = nextHistory" in save
+    assert save.index("if (!result.ok)") < save.index("this.chatHistory = nextHistory")
+    assert "this.chatStorageIssue" in load
+    assert "chat.storage_error.no_data_deleted" in html
+    assert "downloadPendingChatHistory()" in html
+    assert "retryChatHistorySave()" in html
+    assert ':inert="!!chatStorageIssue"' in html
+
+
+def test_retry_commits_the_pending_candidate_and_rehydrates_sessions():
+    section = _section(
+        _template(),
+        "    async retryChatHistorySave()",
+        "    importChats(event)",
+    )
+
+    assert "pending = this._pendingChatHistory" in section
+    assert "this.saveChatHistory(pending" in section
+    assert "await this.resyncChatHistoryState(currentId)" in section
+    assert "this.chatSessions = {}" in section
+
+
+def test_send_stops_before_inference_when_the_user_turn_cannot_be_saved():
+    section = _section(
+        _template(),
+        "    async sendMessage()",
+        "    async sendTranscriptionMessage()",
+    )
+
+    save_guard = "if (!this.saveCurrentChat(chatId, chatSession.messages"
+    assert save_guard in section
+    assert section.index(save_guard) < section.index("await this.streamResponse({")
+
+
+def test_import_is_all_or_nothing_and_has_no_count_cap():
+    section = _section(_template(), "    importChats(event)", "    async saveApiKey()")
+
+    assert "const nextHistory" in section
+    assert "if (!this.saveChatHistory(nextHistory" in section
+    assert ".slice(0," not in section
 
 
 def test_chat_navigation_preserves_the_previous_chat_timestamp():
