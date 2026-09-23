@@ -1,7 +1,10 @@
 # 0002: Chat storage redesign — IndexedDB, media preservation, and recovery
 
-- Status: Proposed
+- Status: Accepted
 - Decision date: 2026-09-23
+- Implementation status: phases 2 and 3 implemented on local branches
+  `feature/chat-storage-records` and `feature/chat-storage-indexeddb`; phase 1
+  is `0001`; phase 4 not started. Nothing published.
 - Extends: `0001-chat-history-storage-safety.md`
 
 ## Context
@@ -227,16 +230,54 @@ phase 3 instead: `rev` is a property of the record and of atomic read-modify-wri
 so it belongs with the backend that provides that atomicity rather than with media
 handling.
 
-## Open questions
+## Resolved questions
 
-- Should phase 4 be split further, given media, meter, and export are each
-  sizeable?
-- What is the right proactive quota warning threshold, if any?
-- Should `navigator.storage.persist()` be requested automatically or only from
-  the storage panel?
+**Should phase 4 be split further?** Yes — into two, and they are now named so
+the sequencing is explicit:
+
+- **4a — media preservation**: populate the `blobs` store, stop stripping
+  `image_url`/`file` parts, derive thumbnails at upload, and land the
+  mark-and-sweep collector. This is the correctness fix and it stands alone.
+- **4b — meter and archive**: the storage panel, `estimate()` plus
+  metadata-backed breakdown, and the two-mode export/import with digest
+  verification.
+
+Splitting matters because 4a changes what a message contains, which changes what
+an archive must carry. Doing them together couples a correctness fix to a
+feature, and the correctness fix is the one worth landing first.
+
+**Proactive quota warning threshold?** Deferred to 4b, and deliberately so. A
+warning that says "storage is nearly full" with no way to see what is using it
+or to free it is noise, and noise trains users to dismiss the banner that
+protects them. The warning ships with the meter, not before it. Exhaustion
+already surfaces loudly through the `0001` banner, which is the right behaviour
+until there is something actionable to say.
+
+**`navigator.storage.persist()` automatic or panel-only?** Panel-only. It is a
+request for elevated storage and prompting for it on first load is presumptuous
+for a quick-chat feature. Offer it in the storage panel with a plain explanation
+of what it prevents, and show its current state. Phase 3 does not call it.
 
 ## References
 
 - `0001-chat-history-storage-safety.md`
+- `omlx/admin/static/js/chat_record_store.js` — localStorage backend
+- `omlx/admin/static/js/chat_indexeddb_store.js` — IndexedDB backend
+- `omlx/admin/static/js/chat_history_migration.js` — legacy and backend migration
 - `tests/chat_history_storage.test.cjs`
+- `tests/chat_record_store.test.cjs`
+- `tests/chat_indexeddb_store.test.cjs`
+- `tests/chat_history_migration.test.cjs`
+- `tests/chat_backend_migration.test.cjs`
 - `tests/test_chat_ui_overhaul.py`
+
+## Testing caveat
+
+The IndexedDB tests run against `tests/helpers/fake_indexeddb.cjs`, a
+dependency-free stand-in that models transaction atomicity, abort-rolls-back,
+quota errors, and the deferred-handler timing that real IndexedDB uses. It is
+not a browser. Upgrade blocking across tabs, real blob storage, eviction
+behaviour, and the auto-commit-on-idle rule are only approximated there, so the
+migration and the multi-tab locking need a pass in a real browser before they are
+considered verified end to end. The interface contract and the compare-and-set
+logic are covered by the fake; browser semantics are not.
