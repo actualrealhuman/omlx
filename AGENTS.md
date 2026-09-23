@@ -1,5 +1,34 @@
 # Repository workflow requirements
 
+## Scope and sources of truth
+
+This is a public repository. Keep this file portable and safe to publish. If
+the checkout belongs to a larger local multi-worktree workspace, also follow
+the workspace-level `AGENTS.md` that was loaded when the agent session began.
+
+- `PERSONAL_BUILD.md` is the source for downstream feature registration,
+  branch policy, and the private release procedure.
+- `docs/CONTRIBUTING.md` defines upstream contribution expectations.
+- `docs/TESTING.md` contains subsystem-specific validation knowledge.
+- `docs/decisions/` records durable technical decisions that are appropriate
+  for the public repository.
+- Keep machine-specific state, unpublished operational plans, artifact paths,
+  installed-app state, and detailed agent handoffs outside this Git worktree.
+- Update the appropriate tracked document when a change establishes a durable
+  technical decision, invariant, or validation procedure. Do not use chat
+  history as the only record.
+
+## Cost and metered services
+
+- Do not autonomously create, enable, trigger, or modify CI/CD, hosted runners,
+  scheduled jobs, Dependabot, Codespaces, cloud builds, deployments, paid APIs,
+  or any resource that may cost money or consume a metered allowance. Creating
+  configuration that will later trigger such usage also requires approval.
+- Warn the user about the possible cost and obtain express authorization
+  immediately before the specific metered action.
+- Prefer local execution. Read-only remote inspection is permitted when it does
+  not trigger a paid or metered job.
+
 ## External writes
 
 - Any action that is externally visible or hard to reverse requires the user's
@@ -21,11 +50,11 @@
   this file states an approval boundary, re-confirm *at* the boundary rather than
   assuming earlier context satisfied it.
 
-`origin` (`actualrealhuman/omlx`) is a **public** fork; pushing publishes. Before
-any push, report which files become public for the first time, as distinct from
-files that are already public and would merely be updated. A push publishes
-*commits*, not the working tree: removing a file from the tip does not un-publish
-it if an earlier unpublished commit added it.
+`origin` is a **public** fork; pushing publishes. Before any push, report which
+files become public for the first time, as distinct from files that are already
+public and would merely be updated. A push publishes *commits*, not the working
+tree: removing a file from the tip does not un-publish it if an earlier
+unpublished commit added it.
 
 Hosted CI triggers, verified against `.github/workflows`:
 
@@ -40,6 +69,40 @@ Hosted CI triggers, verified against `.github/workflows`:
 Do not create, modify, or enable CI configuration without separate explicit
 permission. Read-only operations — `git fetch`, `git ls-remote`, status and log
 inspection, `gh` read queries, and local test runs — require no such authorization.
+
+## Privacy and publication hygiene
+
+- Treat every committed file and commit message as potentially public,
+  including work on branches that have not yet been pushed.
+- Never commit local account names, absolute home-directory paths, personal
+  email addresses, machine names, real LAN addresses, credentials, API keys,
+  tokens, cookies, private repository URLs, private conversation excerpts, or
+  machine-specific installation and artifact state.
+- Use portable placeholders such as `$WORKSPACE_ROOT`, `$REPO_ROOT`, `$HOME`,
+  `<host>`, and `<artifact-path>` in tracked documentation and examples.
+- Use the configured public or pseudonymous Git author identity. Do not replace
+  it with a personal email address without explicit user instruction.
+- Do not copy a local handoff into the repository verbatim. Extract only the
+  durable, sanitized technical content that belongs in public documentation.
+- Before every commit and again before every push, inspect the exact diff and
+  commits to be published for identifiers, secrets, local paths, generated
+  artifacts, and unrelated files.
+
+## Worktree ownership and handoffs
+
+- One agent owns a feature/worktree at a time. Do not edit the same feature or
+  shared coordination files concurrently with another agent.
+- Before editing, verify and report the worktree, branch, HEAD, and clean/dirty
+  status. Preserve unrelated user or agent changes.
+- Keep upstreamable work isolated from `personal/main` and from local-only
+  coordination material.
+- When work pauses, put mutable resume state in the workspace's private
+  coordination area, not in this public repository. A handoff should record the
+  last verified timestamp, branch and HEAD, working-tree state, completed and
+  remaining work, exact validation results, blockers, approval boundaries, and
+  the next safe action.
+- Public decision records describe durable technical choices, not agent
+  ownership, private plans, transient branch divergence, or local app state.
 
 ## Upstream integration
 
