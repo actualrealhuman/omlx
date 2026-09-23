@@ -1,5 +1,46 @@
 # Repository workflow requirements
 
+## External writes
+
+- Any action that is externally visible or hard to reverse requires the user's
+  explicit authorization for *that specific action*, given immediately before it is
+  performed. This includes pushing to any remote, publishing a new branch, opening
+  or closing a pull request, commenting on a repository the user does not own,
+  publishing a release, deploying, and installing or launching the app (see
+  **Private builds** below, which states the same rule for installation).
+- The following are **not** authorization: approving a plan, option, or sequence
+  that merely mentions the step; a question such as "what next?"; silence; an
+  approval given earlier for a different action; the user re-authenticating a tool
+  after a reported blocker. Re-authentication makes an action possible; it does not
+  permit one.
+- Before an external write, state the exact command, the exact target
+  (`owner/repo`, branch, or system), and the concrete consequence — then stop and
+  wait for an unambiguous yes. If the user has to ask what was done, the boundary
+  already failed.
+- Restating this rule is not the same as following it. When a handoff, spec, or
+  this file states an approval boundary, re-confirm *at* the boundary rather than
+  assuming earlier context satisfied it.
+
+`origin` (`actualrealhuman/omlx`) is a **public** fork; pushing publishes. Before
+any push, report which files become public for the first time, as distinct from
+files that are already public and would merely be updated. A push publishes
+*commits*, not the working tree: removing a file from the tip does not un-publish
+it if an earlier unpublished commit added it.
+
+Hosted CI triggers, verified against `.github/workflows`:
+
+| Event | Runs |
+| --- | --- |
+| push to `main` | `CI` on the receiving repository |
+| pull request targeting `main` | `CI` on the target repository (upstream's minutes) |
+| push to any other branch | nothing |
+| release published | `Build wheels`, `Update Homebrew formula` |
+| `workflow_dispatch` | `Build wheels` only |
+
+Do not create, modify, or enable CI configuration without separate explicit
+permission. Read-only operations — `git fetch`, `git ls-remote`, status and log
+inspection, `gh` read queries, and local test runs — require no such authorization.
+
 ## Upstream integration
 
 - `personal/main` is the only canonical source for private release builds.
