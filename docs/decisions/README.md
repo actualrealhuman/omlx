@@ -21,4 +21,3 @@ instead of silently rewriting their historical decision. Keep every record
 portable and publication-safe: no local usernames, absolute home paths, machine
 names, private addresses, credentials, unpublished artifact locations, or
 private conversation excerpts.
-
