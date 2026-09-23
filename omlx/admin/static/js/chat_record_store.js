@@ -154,7 +154,10 @@
         //
         // localStorage gives no atomic read-modify-write, so this is best-effort
         // here and becomes transactional in the IndexedDB backend.
-        async function put(record, { expectRev = null } = {}) {
+        //
+        // `preserveRev` is for migration only: it carries a source record's
+        // revision forward so a stale tab still collides. Ordinary writes omit it.
+        async function put(record, { expectRev = null, preserveRev = false } = {}) {
             if (!record || typeof record !== 'object' || record.id == null) {
                 return { ok: false, kind: 'invalid', error: new TypeError('Record requires an id') };
             }
@@ -184,7 +187,10 @@
                 };
             }
 
-            const nextRev = currentRev + 1;
+            const carried = preserveRev && Number.isInteger(record.rev)
+                ? Math.max(record.rev, currentRev)
+                : currentRev + 1;
+            const nextRev = Math.max(carried, currentRev);
             let serialized;
             try {
                 serialized = JSON.stringify({ ...record, rev: nextRev });

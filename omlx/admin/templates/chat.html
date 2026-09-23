@@ -9,6 +9,7 @@
 <script src="/admin/static/js/marked-highlight.umd.js"></script>
 <script src="/admin/static/js/chat_history_storage.js"></script>
 <script src="/admin/static/js/chat_record_store.js"></script>
+<script src="/admin/static/js/chat_indexeddb_store.js"></script>
 <script src="/admin/static/js/chat_history_migration.js"></script>
 
 <!-- Code highlighting -->
@@ -2640,6 +2641,9 @@
             chatStorageIssue: null,
             _chatHistoryStore: null,
             _chatRecordStore: null,
+            _localRecordStore: null,
+            _chatStorageReady: false,
+            chatStorageBackend: null,
             // Last-known revision per chat, used for optimistic concurrency.
             _chatRevs: {},
             _tabChannel: null,
@@ -3973,6 +3977,9 @@
             localStorage.setItem(API_KEY_STORAGE_KEY, serverApiKey);
         }
 
+        // Resolve the storage backend before any history is read or written.
+        await this.initChatStorage();
+
         const storedKey = localStorage.getItem(API_KEY_STORAGE_KEY);
         if (storedKey) {
             this.apiKeySet = true;
@@ -4642,18 +4649,81 @@
         return this._chatHistoryStore;
     },
 
-    // Per-chat record store. Backend-agnostic and asynchronous; the localStorage
-    // backend is the current implementation and IndexedDB replaces it in phase 3
-    // without changing any caller.
+    // Synchronous accessor. initChatStorage() normally resolves the backend at
+    // startup; if something reads before then it gets the localStorage store
+    // rather than an exception, because that store holds any data the backend
+    // migration has not yet moved.
     chatRecordStore() {
-        if (!this._chatRecordStore) {
-            this._chatRecordStore = createLocalStorageRecordStore({
+        if (this._chatRecordStore) return this._chatRecordStore;
+        return this.localRecordStore();
+    },
+
+    localRecordStore() {
+        if (!this._localRecordStore) {
+            this._localRecordStore = createLocalStorageRecordStore({
                 storage: localStorage,
                 prefix: CHAT_RECORD_PREFIX,
                 indexKey: CHAT_RECORD_INDEX_KEY,
                 metaKey: CHAT_RECORD_META_KEY,
             });
         }
+        return this._localRecordStore;
+    },
+
+    // Chooses the backend once, at startup. IndexedDB is preferred for its
+    // capacity and its atomic compare-and-set; when it is unavailable — private
+    // browsing, disabled storage, a blocked upgrade — the app stays on the
+    // localStorage record store instead of failing to start.
+    async initChatStorage() {
+        if (this._chatStorageReady) return this._chatRecordStore;
+
+        const local = this.localRecordStore();
+
+        let available = false;
+        try {
+            available = await isIndexedDBAvailable(window.indexedDB);
+        } catch (error) {
+            console.warn('IndexedDB capability probe failed:', error);
+            available = false;
+        }
+
+        if (!available) {
+            this._chatRecordStore = local;
+            this.chatStorageBackend = 'localStorage';
+            this._chatStorageReady = true;
+            return this._chatRecordStore;
+        }
+
+        const idb = createIndexedDBRecordStore({ indexedDB: window.indexedDB });
+        try {
+            await idb.open();
+        } catch (error) {
+            console.warn('IndexedDB open failed; staying on localStorage:', error);
+            this._chatRecordStore = local;
+            this.chatStorageBackend = 'localStorage';
+            this._chatStorageReady = true;
+            return this._chatRecordStore;
+        }
+
+        // Move any localStorage records across before anything reads them.
+        const state = await backendMigrationState(idb);
+        if (!state.migrated) {
+            const moved = await migrateRecordStores({ source: local, target: idb });
+            if (!moved.ok) {
+                // Leave the marker unwritten so the next startup retries the
+                // remainder, and keep serving from the source backend.
+                console.warn('Chat backend migration incomplete:', moved.kind);
+                try { idb.close(); } catch {}
+                this._chatRecordStore = local;
+                this.chatStorageBackend = 'localStorage';
+                this._chatStorageReady = true;
+                return this._chatRecordStore;
+            }
+        }
+
+        this._chatRecordStore = idb;
+        this.chatStorageBackend = 'indexedDB';
+        this._chatStorageReady = true;
         return this._chatRecordStore;
     },
 

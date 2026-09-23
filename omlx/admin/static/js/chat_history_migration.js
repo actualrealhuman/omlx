@@ -18,6 +18,7 @@
 
     const LEGACY_HISTORY_KEY = 'omlx_chat_history';
     const MIGRATION_META_KEY = 'chatHistoryMigration';
+    const BACKEND_META_KEY = 'backendMigration';
 
     function byteLength(text) {
         if (typeof text !== 'string') return 0;
@@ -228,18 +229,139 @@
         }
     }
 
+    // Moves records from one record store to another — used to move the
+    // localStorage records onto IndexedDB. Same rules as the legacy migration:
+    // verify before marking, retain the source, and never overwrite a record the
+    // target already has, because a newer write must win.
+    async function migrateRecordStores({
+        source,
+        target,
+        onProgress = null,
+        sourceLabel = 'localStorage',
+    } = {}) {
+        if (!source || !target) {
+            return { ok: false, kind: 'invalid', error: new TypeError('source and target are required') };
+        }
+        if (source.backend === target.backend) {
+            return { ok: true, migrated: 0, skipped: 0, noop: true };
+        }
+
+        const listed = await source.listIndex();
+        if (!listed.ok) {
+            return { ok: false, kind: listed.kind || 'unavailable', migrated: 0, error: listed.error };
+        }
+
+        let migrated = 0;
+        let skipped = 0;
+        let bytes = 0;
+        const failures = [];
+
+        for (const entry of listed.entries) {
+            const got = await source.get(entry.id);
+            if (!got.ok) {
+                failures.push({ id: entry.id, ...got });
+                break;
+            }
+            if (!got.record) continue;
+
+            const existing = await target.get(entry.id);
+            if (!existing.ok && existing.kind !== 'corrupt') {
+                failures.push({ id: entry.id, ...existing });
+                break;
+            }
+            if (existing.ok && existing.record) {
+                skipped += 1;
+                continue;
+            }
+
+            // Carry the source revision forward so a tab still holding the old
+            // backend's revision collides on the new one instead of overwriting.
+            const put = await target.put(got.record, { preserveRev: true });
+            if (!put.ok) {
+                failures.push({ id: entry.id, ...put });
+                break;
+            }
+            migrated += 1;
+            bytes += Number(entry.bytes) || byteLength(JSON.stringify(got.record));
+            if (onProgress) onProgress({ migrated, total: listed.entries.length });
+        }
+
+        if (failures.length) {
+            return {
+                ok: false,
+                kind: failures[0].kind || 'unavailable',
+                migrated,
+                skipped,
+                failures,
+                bytes,
+                retained: true,
+                sourceLabel,
+            };
+        }
+
+        // Verify by reading the target back rather than trusting the writes.
+        const targetIndex = await target.listIndex();
+        if (!targetIndex.ok) {
+            return { ok: false, kind: targetIndex.kind || 'unavailable', migrated, skipped, bytes, retained: true };
+        }
+        const present = new Set(targetIndex.entries.map((e) => String(e.id)));
+        const missing = listed.entries.map((e) => String(e.id)).filter((id) => !present.has(id));
+
+        if (missing.length) {
+            return {
+                ok: false,
+                kind: 'verification',
+                migrated,
+                skipped,
+                missing,
+                bytes,
+                retained: true,
+                sourceLabel,
+            };
+        }
+
+        const meta = await target.setMeta({
+            backend: target.backend,
+            [BACKEND_META_KEY]: {
+                completed: true,
+                from: sourceLabel,
+                migrated,
+                skipped,
+                bytes,
+                sourceRetained: true,
+            },
+        });
+        if (!meta.ok) {
+            return { ok: false, kind: meta.kind || 'unavailable', migrated, skipped, bytes, retained: true };
+        }
+
+        return { ok: true, migrated, skipped, bytes, sourceLabel, retained: true };
+    }
+
+    async function backendMigrationState(store) {
+        const read = await store.getMeta();
+        if (!read.ok) return { migrated: false, metaIssue: read.kind };
+        const info = read.meta?.[BACKEND_META_KEY];
+        return { migrated: Boolean(info?.completed), info: info ?? null };
+    }
+
     root.migrateLegacyHistory = migrateLegacyHistory;
     root.migrationState = migrationState;
     root.retireLegacyBackup = retireLegacyBackup;
+    root.migrateRecordStores = migrateRecordStores;
+    root.backendMigrationState = backendMigrationState;
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = {
             migrateLegacyHistory,
             migrationState,
             retireLegacyBackup,
+            migrateRecordStores,
+            backendMigrationState,
             inspectLegacy,
             partition,
             LEGACY_HISTORY_KEY,
             MIGRATION_META_KEY,
+            BACKEND_META_KEY,
         };
     }
 })(typeof globalThis !== 'undefined' ? globalThis : window);
