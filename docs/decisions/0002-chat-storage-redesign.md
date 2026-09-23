@@ -91,11 +91,19 @@ silent background eviction.
 
 The performance argument for background buffering disappears once per-chat
 records remove whole-history rewrites: a single chat write is small and fast.
-Awaiting also keeps the `0001` safety layer unchanged, since it already assumes
-a synchronous save-and-check, and preserves its existing test coverage.
-
 Large media writes may take a visible moment; show progress for those. Typing
 and text saves must not block.
+
+**The store interface is asynchronous from phase 2, not phase 3.** The phase-2
+`localStorage` backend is synchronous underneath, but the interface returns
+promises so that call sites convert to `await` once, in the phase that carries
+no backend risk. Deferring the async conversion to phase 3 would put call-site
+churn in the same change as the backend swap and the migration, which is the
+single riskiest combination in this plan.
+
+The `0001` save-and-check pattern is preserved unchanged: callers still check
+the result before proceeding. Only the syntax gains an `await`, which strengthens
+rather than weakens the existing guarantee.
 
 ### Multi-tab
 
@@ -207,12 +215,17 @@ either change alone.
 | Phase | Scope | Independently valuable |
 | --- | --- | --- |
 | 1 | `0001` safety fix | Yes — stops data loss, no backend change |
-| 2 | Per-chat records, with the storage abstraction folded in | Yes — removes write amplification |
-| 3 | IndexedDB backend, schema, migration | Yes — capacity and durability |
-| 4 | Media preservation, meter, export/import, multi-tab `rev` | Yes — restores attachments |
+| 2 | Per-chat records + swappable async store interface | Yes — removes write amplification |
+| 3 | IndexedDB backend, schema, migration, multi-tab `rev` locking | Yes — capacity, durability, and multi-tab safety |
+| 4 | Media preservation, meter, export/import | Yes — restores attachments |
 
 A pure abstraction change is not submitted on its own; it travels with the phase
 that needs it.
+
+Multi-tab `rev` locking was originally listed under phase 4 and is delivered with
+phase 3 instead: `rev` is a property of the record and of atomic read-modify-write,
+so it belongs with the backend that provides that atomicity rather than with media
+handling.
 
 ## Open questions
 
