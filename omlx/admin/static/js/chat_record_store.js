@@ -76,6 +76,42 @@
         return { ok: true, record: parsed };
     }
 
+    // This backend has no blobs store, so inline base64 cannot be kept: a couple of
+    // images would exhaust the localStorage quota and block saving the conversation
+    // outright. The bytes are blanked here — in the backend that cannot hold them —
+    // rather than in each caller, and the count is reported so the UI can say so
+    // instead of dropping attachments without a word. The IndexedDB backend keeps
+    // them; see chat_media_store.js.
+    function dropInlineMedia(messages) {
+        let stripped = 0;
+        const list = Array.isArray(messages) ? messages : [];
+        const out = list.map((msg) => {
+            if (!msg || typeof msg !== 'object' || !Array.isArray(msg.content)) return msg;
+            const content = msg.content.map((part) => {
+                if (!part || typeof part !== 'object') return part;
+                if (part.type === 'image_url' && /^data:/i.test(String(part.image_url?.url || ''))) {
+                    stripped += 1;
+                    return { ...part, image_url: { url: '', mediaDropped: 'backend' } };
+                }
+                if (part.type === 'file' && part.file?.data) {
+                    stripped += 1;
+                    return {
+                        ...part,
+                        file: {
+                            filename: part.file.filename || '',
+                            mime_type: part.file.mime_type || '',
+                            data: '',
+                            mediaDropped: 'backend',
+                        },
+                    };
+                }
+                return part;
+            });
+            return { ...msg, content };
+        });
+        return { messages: out, stripped };
+    }
+
     function createLocalStorageRecordStore(options = {}) {
         const storage = options.storage;
         if (!storage) throw new TypeError('createLocalStorageRecordStore requires a storage');
@@ -191,9 +227,10 @@
                 ? Math.max(record.rev, currentRev)
                 : currentRev + 1;
             const nextRev = Math.max(carried, currentRev);
+            const offloaded = dropInlineMedia(record.messages);
             let serialized;
             try {
-                serialized = JSON.stringify({ ...record, rev: nextRev });
+                serialized = JSON.stringify({ ...record, messages: offloaded.messages, rev: nextRev });
             } catch (error) {
                 return { ok: false, kind: 'serialization', error, raw: before.ok ? before.raw : null };
             }
@@ -227,15 +264,15 @@
                 // The record committed; only the index is broken. Report it as a
                 // degraded index rather than a failed write, so the caller does not
                 // discard a record that is safely on disk.
-                return { ok: true, rev: nextRev, indexDegraded: true, indexIssue: idx };
+                return { ok: true, rev: nextRev, mediaStripped: offloaded.stripped, indexDegraded: true, indexIssue: idx };
             }
             const nextIndex = { ...idx.index, [record.id]: indexed };
             const written = writeIndex(nextIndex);
             if (!written.ok) {
-                return { ok: true, rev: nextRev, indexDegraded: true, indexIssue: written };
+                return { ok: true, rev: nextRev, mediaStripped: offloaded.stripped, indexDegraded: true, indexIssue: written };
             }
 
-            return { ok: true, rev: nextRev };
+            return { ok: true, rev: nextRev, mediaStripped: offloaded.stripped };
         }
 
         async function remove(id) {
@@ -354,6 +391,7 @@
         return {
             backend: 'localStorage',
             schemaVersion: SCHEMA_VERSION,
+            supportsBlobs: false,
             get,
             put,
             remove,
@@ -369,12 +407,14 @@
     }
 
     root.createLocalStorageRecordStore = createLocalStorageRecordStore;
+    root.dropInlineMedia = dropInlineMedia;
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = {
             createLocalStorageRecordStore,
             isQuotaError,
             parseRecord,
             byteLength,
+            dropInlineMedia,
             RECORD_PREFIX,
             INDEX_KEY,
             META_KEY,

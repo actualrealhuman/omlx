@@ -1745,6 +1745,7 @@
   "chat.storage_error.corrupt": "L’historique enregistré est endommagé ou illisible. Il a été conservé pour récupération et ne sera pas écrasé.",
   "chat.storage_error.serialization": "L’historique en attente n’a pas pu être encodé. Les nouvelles activités sont suspendues afin de protéger l’historique existant.",
   "chat.storage_error.unavailable": "Le stockage du navigateur est indisponible. Les nouvelles activités sont suspendues afin de protéger l’historique existant.",
+  "chat.storage_error.incomplete": "Certaines discussions n’ont pas pu être converties vers le nouveau format de stockage ; la conversion a donc été interrompue. Rien n’a été écrasé ni supprimé, et votre historique d’origine est conservé pour téléchargement.",
   "chat.storage_error.no_data_deleted": "Aucune discussion existante n’a été supprimée.",
   "chat.storage_error.download_pending": "Télécharger les discussions non enregistrées",
   "chat.storage_error.download_raw": "Télécharger les données de récupération",

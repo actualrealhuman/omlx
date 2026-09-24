@@ -70,9 +70,10 @@ class FakeRequest {
 }
 
 class FakeCursor {
-    constructor(values) {
+    constructor(values, request) {
         this._values = values;
         this._index = 0;
+        this._request = request;
     }
 
     get primaryKey() {
@@ -83,11 +84,15 @@ class FakeCursor {
         return this._values[this._index];
     }
 
+    // Real IDBCursor.continue() returns undefined: it re-fires `success` on the
+    // originating openCursor request with the next cursor, or null once exhausted.
+    // Returning a fresh request here modelled the legacy contract and let a
+    // real-browser bug in cursorAll() pass 88/88. Do not restore it.
     continue() {
         this._index += 1;
-        const request = new FakeRequest();
-        request.succeed(this._index < this._values.length ? this : null);
-        return request;
+        const next = this._index < this._values.length ? this : null;
+        if (this._request) this._request.succeed(next);
+        return undefined;
     }
 }
 
@@ -154,7 +159,8 @@ class FakeObjectStore {
     openCursor() {
         const request = new FakeRequest();
         const values = Array.from(this.data.values());
-        const cursor = new FakeCursor(values);
+        // the cursor re-fires this same request, as a real IDBCursor does
+        const cursor = new FakeCursor(values, request);
         request.succeed(values.length ? cursor : null);
         return request;
     }

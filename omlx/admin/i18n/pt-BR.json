@@ -1745,6 +1745,7 @@
   "chat.storage_error.corrupt": "O histórico armazenado está danificado ou ilegível. Ele foi preservado para recuperação e não será sobrescrito.",
   "chat.storage_error.serialization": "Não foi possível codificar o histórico pendente. Novas atividades ficam pausadas para manter o histórico existente seguro.",
   "chat.storage_error.unavailable": "O armazenamento do navegador está indisponível. Novas atividades ficam pausadas para manter o histórico existente seguro.",
+  "chat.storage_error.incomplete": "Alguns chats não puderam ser convertidos para o novo formato de armazenamento, então a conversão foi interrompida. Nada foi sobrescrito ou excluído; o histórico original foi preservado para download.",
   "chat.storage_error.no_data_deleted": "Nenhum chat existente foi excluído.",
   "chat.storage_error.download_pending": "Baixar chats não salvos",
   "chat.storage_error.download_raw": "Baixar dados de recuperação",

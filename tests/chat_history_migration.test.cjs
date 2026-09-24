@@ -146,7 +146,7 @@ test('unreadable legacy storage is unavailable, not empty', async () => {
     assert.equal(result.kind, 'unavailable');
 });
 
-test('entries without an id are rejected and reported, not dropped silently', async () => {
+test('entries without an id block the migration rather than being left unreachable', async () => {
     const { storage, recordStore } = setup([
         legacyChat('a'),
         { title: 'no id here' },
@@ -156,11 +156,20 @@ test('entries without an id are rejected and reported, not dropped silently', as
 
     const result = await migrateLegacyHistory({ legacyStorage: storage, recordStore });
 
-    assert.equal(result.ok, true);
+    // Policy changed 2026-09-23 after real-browser verification. This test used to
+    // assert ok === true — the migration reporting success while two chats had no
+    // record, which is the silent-loss path. It now refuses to complete.
+    assert.equal(result.ok, false);
+    assert.equal(result.kind, 'incomplete');
+    assert.equal(result.unaccounted.length, 2);
+    assert.equal(result.retained, true);
     assert.equal(result.migrated, 2);
     assert.equal(result.rejected.length, 2);
     assert.deepEqual(result.rejected.map(r => r.reason), ['missing-id', 'missing-id']);
+    // the chats that could be migrated still were
     assert.deepEqual((await recordStore.listIndex()).entries.map(e => e.id).sort(), ['a', 'b']);
+    // and the marker stays unwritten so the app keeps reading the legacy value
+    assert.equal((await migrationState(recordStore)).migrated, false);
 });
 
 test('duplicate ids are rejected, keeping the first occurrence', async () => {
@@ -174,6 +183,11 @@ test('duplicate ids are rejected, keeping the first occurrence', async () => {
     assert.equal(result.migrated, 1);
     assert.deepEqual(result.rejected.map(r => r.reason), ['duplicate-id']);
     assert.equal((await recordStore.get('a')).record.title, 'first');
+    // duplicates are exempt from the incomplete guard: the first occurrence is
+    // kept, so nothing is lost and the migration may still complete
+    assert.equal(result.ok, true);
+    assert.equal(result.unaccounted.length, 0);
+    assert.equal((await migrationState(recordStore)).migrated, true);
 });
 
 test('migration is idempotent: a second run skips everything', async () => {

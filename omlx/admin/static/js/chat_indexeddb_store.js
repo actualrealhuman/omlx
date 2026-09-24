@@ -52,14 +52,37 @@
         });
     }
 
-    async function cursorAll(store, mapper) {
-        const out = [];
-        let cursor = await reqToPromise(store.openCursor());
-        while (cursor) {
-            out.push(mapper ? mapper(cursor.value) : cursor.value);
-            cursor = await reqToPromise(cursor.continue());
-        }
-        return out;
+    // IDBCursor.continue() returns undefined. It does not hand back a new
+    // request: it re-fires `success` on the originating openCursor request with
+    // the next cursor, and a null result ends the iteration. Driving the loop
+    // from that single handler also keeps the transaction continuously busy,
+    // which the auto-commit-on-idle rule requires — awaiting across each row
+    // leaves a gap in which the browser commits and the next request fails.
+    function cursorAll(store, mapper) {
+        return new Promise((resolve, reject) => {
+            const out = [];
+            let request;
+            try {
+                request = store.openCursor();
+            } catch (error) {
+                reject(error);
+                return;
+            }
+            request.onsuccess = () => {
+                const cursor = request.result;
+                if (!cursor) {
+                    resolve(out);
+                    return;
+                }
+                try {
+                    out.push(mapper ? mapper(cursor.value) : cursor.value);
+                    cursor.continue();
+                } catch (error) {
+                    reject(error);
+                }
+            };
+            request.onerror = () => reject(request.error);
+        });
     }
 
     function byteLengthOf(value) {
@@ -76,6 +99,15 @@
 
         const name = options.name || DB_NAME;
         const version = options.version || DB_VERSION;
+        // Resolved at call time, not at module load: chat_media_store.js is a
+        // sibling classic script, and in node the test loads it first.
+        const codec = options.media
+            || (typeof root.createMediaCodec === 'function'
+                ? root.createMediaCodec({ crypto: options.crypto })
+                : null);
+        const media = codec && typeof codec.supported === 'boolean'
+            ? codec
+            : { supported: false, offloadMessages: null, resolveMessages: null, digestsIn: () => new Set() };
         let dbPromise = null;
 
         function open() {
@@ -96,8 +128,10 @@
                             chats.createIndex('updatedAt', 'updatedAt');
                             db.createObjectStore(CHAT_INDEX, { keyPath: 'id' });
                             db.createObjectStore(META, { keyPath: 'key' });
-                            // Populated in phase 4; declared now so the schema does not
-                            // need a version bump to add media later.
+                            // Content-addressed media, keyed by digest. Records hold
+                            // a reference and the bytes live here, so an attachment
+                            // survives reload and one image shared across chats is
+                            // stored once. collectBlobs() reclaims orphans.
                             db.createObjectStore(BLOBS, { keyPath: 'digest' });
                         }
                     };
@@ -126,11 +160,32 @@
             try { db = await open(); } catch (error) {
                 return { ok: false, kind: 'unavailable', error };
             }
+            let record;
             try {
-                const record = await reqToPromise(db.transaction(CHATS, 'readonly').objectStore(CHATS).get(id));
-                return { ok: true, record: record ?? null };
+                record = await reqToPromise(db.transaction(CHATS, 'readonly').objectStore(CHATS).get(id));
             } catch (error) {
                 return { ok: false, kind: 'unavailable', error };
+            }
+            if (!record || !media.supported || !Array.isArray(record.messages)) {
+                return { ok: true, record: record ?? null };
+            }
+            // Digest references resolve back to inline payloads so the caller sees
+            // the message it stored. A blob that cannot be read leaves its reference
+            // unresolved and is reported, rather than making the whole chat
+            // unreadable — losing the text of a conversation because one attachment
+            // went missing is the worse outcome.
+            try {
+                const blobStore = db.transaction(BLOBS, 'readonly').objectStore(BLOBS);
+                const resolved = await media.resolveMessages(record.messages, {
+                    getBlob: (digest) => reqToPromise(blobStore.get(digest)),
+                });
+                return {
+                    ok: true,
+                    record: { ...record, messages: resolved.messages },
+                    mediaMissing: resolved.missing,
+                };
+            } catch (error) {
+                return { ok: true, record, mediaMissing: [{ kind: 'unavailable', error }] };
             }
         }
 
@@ -141,6 +196,9 @@
         // revision forward so a tab still holding the old backend's revision
         // collides here instead of silently overwriting. Ordinary writes never use
         // it — they let the store mint the next revision.
+        //
+        // Inline media is offloaded to the blobs store and replaced by a digest
+        // reference, so `get` can hand back the same message that was put.
         async function put(record, { expectRev = null, preserveRev = false } = {}) {
             if (!record || typeof record !== 'object' || record.id == null) {
                 return { ok: false, kind: 'invalid', error: new TypeError('Record requires an id') };
@@ -150,15 +208,30 @@
                 return { ok: false, kind: 'unavailable', error };
             }
 
+            // Hashing is asynchronous, so it happens before the transaction opens.
+            // Awaiting crypto inside a transaction leaves it idle long enough to
+            // auto-commit, and the writes that follow would then fail.
+            let offloaded = { messages: record.messages, blobs: [] };
+            if (media.supported && Array.isArray(record.messages)) {
+                try {
+                    offloaded = await media.offloadMessages(record.messages);
+                } catch (error) {
+                    return { ok: false, kind: classify(error), error };
+                }
+            }
+            const payload = { ...record, messages: offloaded.messages };
+            const newBlobs = Array.isArray(offloaded.blobs) ? offloaded.blobs : [];
+
             let tx;
             try {
-                tx = db.transaction([CHATS, CHAT_INDEX], 'readwrite');
+                tx = db.transaction([CHATS, CHAT_INDEX, BLOBS], 'readwrite');
             } catch (error) {
                 return { ok: false, kind: classify(error), error };
             }
 
             const chats = tx.objectStore(CHATS);
             const index = tx.objectStore(CHAT_INDEX);
+            const blobs = tx.objectStore(BLOBS);
 
             try {
                 const existing = await reqToPromise(chats.get(record.id));
@@ -177,11 +250,24 @@
                     };
                 }
 
+                // Blobs before record. If the transaction fails after this point the
+                // worst case is an orphaned blob, which the collector reclaims; the
+                // reverse order could commit a record pointing at bytes that were
+                // never written.
+                let blobsWritten = 0;
+                for (const blob of newBlobs) {
+                    const present = await reqToPromise(blobs.get(blob.digest));
+                    if (!present) {
+                        blobs.put({ ...blob, createdAt: new Date().toISOString() });
+                        blobsWritten += 1;
+                    }
+                }
+
                 const carried = preserveRev && Number.isInteger(record.rev)
                     ? Math.max(record.rev, currentRev)
                     : currentRev + 1;
                 const nextRev = Math.max(carried, currentRev);
-                const stored = { ...record, rev: nextRev };
+                const stored = { ...payload, rev: nextRev };
                 chats.put(stored);
                 index.put({
                     id: record.id,
@@ -196,7 +282,7 @@
 
                 await txDone(tx);
                 // Record and index committed together: no degraded-index state.
-                return { ok: true, rev: nextRev };
+                return { ok: true, rev: nextRev, blobsWritten };
             } catch (error) {
                 return { ok: false, kind: classify(error), error };
             }
@@ -353,6 +439,99 @@
             }
         }
 
+        // ---- media blobs ----
+
+        async function getBlob(digest) {
+            let db;
+            try { db = await open(); } catch (error) {
+                return { ok: false, kind: 'unavailable', error };
+            }
+            try {
+                const row = await reqToPromise(db.transaction(BLOBS, 'readonly').objectStore(BLOBS).get(digest));
+                return { ok: true, blob: row ?? null };
+            } catch (error) {
+                return { ok: false, kind: 'unavailable', error };
+            }
+        }
+
+        async function listBlobs() {
+            let db;
+            try { db = await open(); } catch (error) {
+                return { ok: false, kind: 'unavailable', error };
+            }
+            try {
+                const rows = await cursorAll(db.transaction(BLOBS, 'readonly').objectStore(BLOBS));
+                return { ok: true, blobs: rows };
+            } catch (error) {
+                return { ok: false, kind: 'unavailable', error };
+            }
+        }
+
+        // Mark-and-sweep over the blobs store.
+        //
+        // Mark: every digest referenced by a committed record. Sweep: delete the
+        // blobs whose digest is not in that set. Content addressing has no other
+        // way to tell a live attachment from an orphan left by a failed save.
+        //
+        // Both halves run inside one readwrite transaction spanning CHATS and
+        // BLOBS. IndexedDB serialises readwrite transactions over the same object
+        // stores, so a concurrent put cannot add a reference that this pass then
+        // sweeps away.
+        //
+        // If the mark pass fails the sweep never runs. Deleting against a partial
+        // mark set would destroy attachments that are still in use, which is the
+        // one outcome this function must not produce.
+        async function collectBlobs() {
+            let db;
+            try { db = await open(); } catch (error) {
+                return { ok: false, kind: 'unavailable', error };
+            }
+            let tx;
+            try {
+                tx = db.transaction([CHATS, BLOBS], 'readwrite');
+            } catch (error) {
+                return { ok: false, kind: classify(error), error };
+            }
+            const chats = tx.objectStore(CHATS);
+            const blobs = tx.objectStore(BLOBS);
+
+            let referenced;
+            let allBlobs;
+            try {
+                const records = await cursorAll(chats);
+                referenced = new Set();
+                for (const record of records) {
+                    for (const digest of media.digestsIn(record.messages)) referenced.add(digest);
+                }
+                allBlobs = await cursorAll(blobs);
+            } catch (error) {
+                // Nothing has been deleted at this point; abandon the sweep whole.
+                try { tx.abort(); } catch {}
+                return { ok: false, kind: classify(error), error, removed: [], bytesFreed: 0 };
+            }
+
+            const removed = [];
+            let bytesFreed = 0;
+            for (const blob of allBlobs) {
+                if (referenced.has(blob.digest)) continue;
+                blobs.delete(blob.digest);
+                removed.push(blob.digest);
+                bytesFreed += Number(blob.bytes) || 0;
+            }
+            try {
+                await txDone(tx);
+            } catch (error) {
+                return { ok: false, kind: classify(error), error, removed: [], bytesFreed: 0 };
+            }
+            return {
+                ok: true,
+                removed,
+                bytesFreed,
+                kept: allBlobs.length - removed.length,
+                referenced: referenced.size,
+            };
+        }
+
         async function close() {
             if (!dbPromise) return;
             try {
@@ -365,6 +544,8 @@
         return {
             backend: 'indexedDB',
             schemaVersion: DB_VERSION,
+            supportsBlobs: true,
+            media,
             open,
             close,
             get,
@@ -377,6 +558,9 @@
             keys,
             clearAll,
             totalBytes,
+            getBlob,
+            listBlobs,
+            collectBlobs,
             storeNames: { CHATS, CHAT_INDEX, META, BLOBS },
         };
     }

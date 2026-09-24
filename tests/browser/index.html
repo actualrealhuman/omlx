@@ -1,0 +1,1625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>oMLX chat storage — real IndexedDB harness</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --panel2: #1c2129;
+    --line: #2d333d;
+    --fg: #e6edf3;
+    --dim: #9198a1;
+    --ok: #2ea043;
+    --okfg: #7ee787;
+    --bad: #da3633;
+    --badfg: #ff7b72;
+    --run: #bb8009;
+    --runfg: #e3b341;
+    --info: #388bfd;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); }
+  body {
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    padding: 0 0 80px 0;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
+  header { border-bottom: 1px solid var(--line); background: var(--panel); padding: 18px 0 14px 0; }
+  h1 { font-size: 19px; margin: 0 0 4px 0; }
+  h2 { font-size: 14px; margin: 26px 0 8px 0; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; }
+  .sub { color: var(--dim); margin: 0; }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+
+  .safe {
+    margin: 14px 0 0 0; padding: 10px 12px; border-radius: 6px;
+    border: 1px solid #1f6feb44; background: #0d2240; font-size: 13px;
+  }
+  .safe b { color: #79c0ff; }
+  .warnbox {
+    margin: 12px 0 0 0; padding: 12px; border-radius: 6px;
+    border: 2px solid var(--bad); background: #4d1d1b; font-size: 13.5px;
+  }
+  .warnbox b { color: var(--badfg); }
+
+  /* summary: the thing you see at a glance */
+  #summary {
+    position: sticky; top: 0; z-index: 50;
+    margin: 16px 0 0 0; padding: 14px 16px; border-radius: 8px;
+    border: 2px solid var(--line); background: var(--panel);
+    font-size: 20px; font-weight: 700; letter-spacing: .01em;
+  }
+  #summary.pass { border-color: var(--ok); background: #12301a; color: var(--okfg); }
+  #summary.fail { border-color: var(--bad); background: #3d1412; color: var(--badfg); }
+  #summary.run   { border-color: var(--run); background: #332708; color: var(--runfg); }
+  #summary small { display: block; font-size: 12.5px; font-weight: 400; color: var(--dim); margin-top: 4px; }
+
+  .toolbar { margin: 14px 0 4px 0; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  button {
+    font: inherit; font-size: 13px; padding: 7px 13px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--panel2); color: var(--fg);
+  }
+  button:hover { border-color: #495059; }
+  button.primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+  button.danger { background: #6e2b28; border-color: #8b3a35; }
+  input[type=text], textarea {
+    font: inherit; font-size: 13px; padding: 6px 9px; border-radius: 6px;
+    border: 1px solid var(--line); background: #0d1117; color: var(--fg);
+  }
+  input[type=text] { width: 210px; }
+  textarea { width: 100%; min-height: 54px; resize: vertical; }
+
+  ol#results { list-style: none; margin: 14px 0 0 0; padding: 0; }
+  li.r {
+    border: 1px solid var(--line); border-left-width: 5px; border-radius: 6px;
+    background: var(--panel); margin: 0 0 7px 0; padding: 9px 12px;
+  }
+  li.r.pass { border-left-color: var(--ok); }
+  li.r.fail { border-left-color: var(--bad); background: #2a1211; }
+  li.r.run  { border-left-color: var(--run); }
+  li.r.info { border-left-color: var(--info); }
+  li.r.manual { border-left-color: #a371f7; }
+  .rhead { display: flex; gap: 10px; align-items: baseline; }
+  .tag {
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+    padding: 2px 7px; border-radius: 999px; flex: none;
+  }
+  .tag.pass { background: var(--ok); color: #04260c; }
+  .tag.fail { background: var(--bad); color: #fff; }
+  .tag.run  { background: var(--run); color: #2b1f00; }
+  .tag.info { background: #1f3f70; color: #cfe2ff; }
+  .tag.manual { background: #6639ba; color: #fff; }
+  .rname { font-weight: 600; }
+  .rname.fail { color: var(--badfg); }
+  .ms { margin-left: auto; color: var(--dim); font-size: 11.5px; flex: none; }
+  .det { margin: 6px 0 0 0; font-size: 12.5px; color: var(--dim); white-space: pre-wrap; word-break: break-word; }
+  .det.fail { color: var(--badfg); }
+  .grp {
+    margin: 20px 0 8px 0; padding: 0 0 4px 0; border-bottom: 1px solid var(--line);
+    font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: #a9b2bd;
+  }
+  .divider { margin: 18px 0 10px 0; padding: 7px 11px; border-radius: 6px; background: #201a08; border: 1px dashed #9e6f00; color: var(--runfg); font-size: 12.5px; }
+
+  .est { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-top: 10px; }
+  .est div { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; }
+  .est span { display: block; color: var(--dim); font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; }
+  .est b { font-size: 17px; }
+
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; margin-top: 10px; }
+  .panel ol { margin: 8px 0 0 22px; padding: 0; }
+  .panel li { margin: 0 0 5px 0; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+  .kv { font-size: 12.5px; color: var(--dim); }
+  .kv b { color: var(--fg); }
+  #manualLog { margin-top: 10px; font-size: 12.5px; max-height: 220px; overflow-y: auto; }
+  #manualLog div { padding: 3px 0; border-bottom: 1px solid #21262d; }
+  .conflicted { color: var(--badfg); font-weight: 700; }
+  .savedok { color: var(--okfg); font-weight: 700; }
+  #manualVerdict { margin-top: 12px; padding: 11px 14px; border-radius: 6px; border: 2px solid var(--line); font-size: 15px; font-weight: 700; }
+  #manualVerdict.done { border-color: var(--ok); background: #12301a; color: var(--okfg); }
+  a { color: #79c0ff; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <h1>oMLX chat storage — real IndexedDB harness</h1>
+    <p class="sub">Phase 2/3 record store and migrations, exercised against the browser's actual IndexedDB. No server, no model.</p>
+    <div class="safe">
+      <b>Isolated from real chat data.</b> This page only ever opens
+      <code>omlx-chat-browser-test</code>, <code>omlx-chat-browser-test-mig</code> and
+      <code>omlx-chat-browser-test-v1</code> — never <code>omlx-chat</code>. It also runs on
+      <code>127.0.0.1:8765</code>, a different origin from the oMLX app, so the app's own
+      storage is not even reachable from here. Any pre-existing legacy key found on this
+      origin is copied to a timestamped backup before being overwritten.
+    </div>
+    <div id="legacyWarn"></div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div id="summary" class="run">starting…<small id="sub"></small></div>
+
+  <div class="toolbar">
+    <button class="primary" id="btnRun">Run all checks</button>
+    <button id="btnTab">Open second tab</button>
+    <button class="danger" id="btnReset">Reset test data</button>
+    <span class="kv" id="browser"></span>
+  </div>
+
+  <div id="results"></div>
+
+  <h2>Storage estimate</h2>
+  <div class="est">
+    <div><span>quota</span><b id="eQuota">—</b></div>
+    <div><span>usage</span><b id="eUsage">—</b></div>
+    <div><span>used</span><b id="ePct">—</b></div>
+    <div><span>persistent</span><b id="ePersist">—</b></div>
+  </div>
+
+  <h2>Manual two-tab conflict test</h2>
+  <div class="panel">
+    <b>What this proves:</b> two tabs editing the same chat. The second save must be
+    <span class="conflicted">refused as a conflict</span>, not silently overwrite the first.
+    <ol>
+      <li>Click <b>Open second tab</b> (allow popups if asked). Both tabs show this panel.</li>
+      <li>In <b>each</b> tab click <b>Load</b>. Both read the same <code>rev</code>.</li>
+      <li>Type a different title in tab A and click <b>Save</b>. It succeeds, <code>rev</code> advances.</li>
+      <li>Without reloading, type a different title in tab B and click <b>Save</b>.</li>
+      <li>Tab B must be <span class="conflicted">refused</span>, showing its <code>expectedRev</code> against the store's <code>currentRev</code>. That is the pass condition.</li>
+    </ol>
+    <div class="row">
+      <label class="kv">chat id</label>
+      <input type="text" id="mId" value="manual-conflict">
+      <button id="mLoad">Load</button>
+      <button class="primary" id="mSave">Save (compare-and-set)</button>
+    </div>
+    <div class="row">
+      <input type="text" id="mTitle" placeholder="title to write" style="width:340px">
+    </div>
+    <textarea id="mBody" placeholder="message body"></textarea>
+    <div class="row kv">
+      <span>expectedRev held by this tab: <b id="mRev">—</b></span>
+      <span>store rev: <b id="mStoreRev">—</b></span>
+      <span id="mStale"></span>
+    </div>
+    <div id="manualVerdict">Manual conflict not yet observed.</div>
+    <div id="manualLog"></div>
+  </div>
+
+</div>
+
+<script src="/omlx/admin/static/js/chat_record_store.js"></script>
+<script src="/omlx/admin/static/js/chat_media_store.js"></script>
+<script src="/omlx/admin/static/js/chat_indexeddb_store.js"></script>
+<script src="/omlx/admin/static/js/chat_history_migration.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  // ---- names: nothing here ever touches 'omlx-chat' ----
+  var TEST_DB = 'omlx-chat-browser-test';
+  var MIG_DB = TEST_DB + '-mig';
+  var V1_DB = TEST_DB + '-v1';
+  var LEGACY_KEY = 'omlx_chat_history';
+  var RELOAD_KEY = 'omlx_browser_test_reload';
+  var RESULTS_KEY = 'omlx_browser_test_results';
+  var MANUAL_KEY = 'omlx_browser_test_manual_conflicts';
+  var BACKUP_PREFIX = 'omlx_chat_history_PRETEST_BACKUP_';
+  var LS_PREFIX = 'omlx_browser_test_v2:';
+  var LS_INDEX = 'omlx_browser_test_v2_index';
+  var LS_META = 'omlx_browser_test_v2_meta';
+
+  var $ = function (id) { return document.getElementById(id); };
+  var sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
+
+  function assert(cond, msg) { if (!cond) throw new Error(msg); }
+
+  function errText(e) {
+    if (e == null) return 'unknown error';
+    if (typeof e === 'string') return e;
+    var name = e.name ? e.name + ': ' : '';
+    return name + (e.message || JSON.stringify(e));
+  }
+
+  function fmtBytes(n) {
+    n = Number(n) || 0;
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+    if (n < 1073741824) return (n / 1048576).toFixed(2) + ' MB';
+    return (n / 1073741824).toFixed(2) + ' GB';
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+
+  function loadJson(key) {
+    try { var raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : null; }
+    catch (e) { return null; }
+  }
+  function saveJson(key, val) {
+    try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {}
+  }
+
+  // ---- raw IndexedDB helpers: independent of the module under test ----
+  function rawOpen(name, version) {
+    return new Promise(function (resolve, reject) {
+      var rq;
+      try { rq = indexedDB.open(name, version); } catch (e) { return reject(e); }
+      rq.onsuccess = function () { resolve(rq.result); };
+      rq.onerror = function () { reject(rq.error || new Error('open failed')); };
+      rq.onblocked = function () { reject(new Error('open blocked by another connection')); };
+    });
+  }
+
+  function rawGet(dbName, storeName, key) {
+    return rawOpen(dbName).then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var rq;
+        try { rq = db.transaction(storeName, 'readonly').objectStore(storeName).get(key); }
+        catch (e) { db.close(); return reject(e); }
+        rq.onsuccess = function () { db.close(); resolve(rq.result); };
+        rq.onerror = function () { db.close(); reject(rq.error || new Error('get failed')); };
+      });
+    });
+  }
+
+  function rawCount(dbName, storeName) {
+    return rawOpen(dbName).then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var rq = db.transaction(storeName, 'readonly').objectStore(storeName).count();
+        rq.onsuccess = function () { db.close(); resolve(rq.result); };
+        rq.onerror = function () { db.close(); reject(rq.error || new Error('count failed')); };
+      });
+    });
+  }
+
+  // One attempt, and it waits for a real terminal event. Returning early while
+  // the request is still pending would leave it queued ahead of every later
+  // open of this database, which shows up as an open() that never resolves.
+  function deleteDb(name) {
+    return new Promise(function (resolve) {
+      var rq, settled = false;
+      function finish(r) { if (settled) return; settled = true; resolve(r); }
+      try { rq = indexedDB.deleteDatabase(name); }
+      catch (e) { return finish({ ok: false, why: 'threw: ' + errText(e) }); }
+      rq.onsuccess = function () { finish({ ok: true, why: 'deleted' }); };
+      rq.onerror = function () { finish({ ok: false, why: 'error: ' + (rq.error && rq.error.name) }); };
+      rq.onblocked = function () { finish({ ok: false, why: 'blocked by an open connection' }); };
+      setTimeout(function () { finish({ ok: false, why: 'no event after 10s' }); }, 10000);
+    });
+  }
+
+  // ---- stores ----
+  // Every connection we open is tracked. A lingering connection blocks
+  // deleteDatabase, and an abandoned delete request then blocks every later
+  // open of that same database — which looks like a hung browser, not a bug.
+  var main = null, mig = null, local = null;
+  var openStores = [];
+
+  function track(s) { if (s) openStores.push(s); return s; }
+
+  function mainStore() {
+    if (!main) main = track(createIndexedDBRecordStore({ indexedDB: indexedDB, name: TEST_DB }));
+    return main;
+  }
+  function migStore() {
+    if (!mig) mig = track(createIndexedDBRecordStore({ indexedDB: indexedDB, name: MIG_DB }));
+    return mig;
+  }
+  function localStore() {
+    if (!local) {
+      local = track(createLocalStorageRecordStore({
+        storage: localStorage, prefix: LS_PREFIX, indexKey: LS_INDEX, metaKey: LS_META,
+      }));
+    }
+    return local;
+  }
+
+  function closeAll() {
+    if (manualStore) { openStores.push(manualStore); manualStore = null; }
+    var all = openStores.slice();
+    openStores.length = 0;
+    return Promise.all(all.map(function (s) {
+      return typeof s.close === 'function' ? s.close() : null;
+    })).catch(function () {});
+  }
+
+  // ---- results rendering ----
+  var results = [];
+  var currentGroup = '';
+  var running = false;
+  var finished = false;
+
+  function group(label) { currentGroup = label; }
+
+  function addRow(entry) { results.push(entry); return entry; }
+
+  function render() {
+    var host = $('results');
+    var html = '';
+    var lastGroup = null;
+    results.forEach(function (r, i) {
+      if (r.divider) { html += '<div class="divider">' + esc(r.divider) + '</div>'; lastGroup = null; return; }
+      if (r.group && r.group !== lastGroup) {
+        html += '<div class="grp">' + esc(r.group) + '</div>';
+        lastGroup = r.group;
+      }
+      var label = r.status === 'pass' ? 'pass'
+        : r.status === 'fail' ? 'FAIL'
+        : r.status === 'run' ? 'running'
+        : r.status === 'manual' ? 'manual' : 'info';
+      html += '<li class="r ' + r.status + '">'
+        + '<div class="rhead">'
+        + '<span class="tag ' + r.status + '">' + label + '</span>'
+        + '<span class="rname ' + r.status + '">' + esc(r.name) + '</span>'
+        + (r.ms ? '<span class="ms">' + r.ms + ' ms</span>' : '')
+        + '</div>'
+        + (r.detail ? '<div class="det ' + r.status + '">' + esc(r.detail) + '</div>' : '')
+        + '</li>';
+    });
+    host.innerHTML = html;
+
+    var passed = results.filter(function (r) { return r.status === 'pass'; }).length;
+    var failed = results.filter(function (r) { return r.status === 'fail'; }).length;
+    var doing = results.filter(function (r) { return r.status === 'run'; }).length;
+    var total = results.filter(function (r) { return !r.divider; }).length;
+    var s = $('summary');
+    var cls = 'run', msg;
+    if (failed) { cls = 'fail'; msg = failed + ' FAILED'; }
+    else if (doing) { cls = 'run'; msg = 'running'; }
+    else if (finished && total) { cls = 'pass'; msg = 'all green'; }
+    else { cls = 'run'; msg = 'starting…'; }
+    s.className = cls;
+    s.innerHTML = passed + ' passed, ' + failed + ' failed of ' + total
+      + (doing ? ' (' + doing + ' running)' : '') + ' — ' + msg
+      + '<small>' + esc(browserName()) + ' · db <b>' + TEST_DB + '</b> · real IndexedDB, no fake</small>';
+  }
+
+  function saveResults() { saveJson(RESULTS_KEY, results); }
+
+  // The core helper: await fn, catch, render. Checks run one at a time so a
+  // failure points at exactly one behaviour.
+  function check(name, fn) {
+    var row = addRow({ group: currentGroup, name: name, status: 'run', detail: '' });
+    render();
+    var t0 = performance.now();
+    return Promise.resolve()
+      .then(function () { return fn(); })
+      .then(function (detail) {
+        row.status = 'pass';
+        row.detail = detail == null ? '' : String(detail);
+      }, function (e) {
+        row.status = 'fail';
+        row.detail = errText(e);
+      })
+      .then(function () {
+        row.ms = Math.round(performance.now() - t0);
+        render();
+        saveResults();
+      });
+  }
+
+  function note(name, detail) {
+    addRow({ group: currentGroup, name: name, status: 'info', detail: detail == null ? '' : String(detail) });
+    render();
+  }
+
+  function browserName() {
+    var ua = navigator.userAgent;
+    var m = ua.match(/(Firefox|Edg|OPR|Chrome|Safari)\/([\d.]+)/g) || [];
+    var pick = null;
+    for (var i = 0; i < m.length; i++) {
+      if (/Edg|OPR|Firefox/.test(m[i])) { pick = m[i]; break; }
+    }
+    if (!pick) pick = m[m.length - 1] || ua;
+    return pick.replace('/', ' ') + ' on ' + (navigator.platform || 'unknown');
+  }
+
+  // ---- proves the marker is written only after the data verified ----
+  // Wraps setMeta so that, at the instant the marker is written, we can read
+  // back the index and confirm the records were already committed.
+  function instrumentMarker(store, metaKey) {
+    var orig = store.setMeta;
+    var log = { markerAt: null, indexAtMarker: null, calls: 0 };
+    store.setMeta = function (patch) {
+      var isMarker = patch && Object.prototype.hasOwnProperty.call(patch, metaKey);
+      if (isMarker) {
+        return store.listIndex().then(function (listed) {
+          log.calls += 1;
+          log.indexAtMarker = listed.ok ? listed.entries.length : -1;
+          log.markerAt = Date.now();
+          return orig.call(store, patch);
+        });
+      }
+      log.calls += 1;
+      return orig.call(store, patch);
+    };
+    return {
+      log: log,
+      restore: function () { store.setMeta = orig; },
+    };
+  }
+
+  // ---- legacy fixtures ----
+  var LEGACY_IDS = ['legacy-a', 'legacy-b', 'legacy-c', 'legacy-d'];
+
+  function legacyChat(id, n) {
+    var msgs = [];
+    for (var i = 0; i < n; i++) {
+      msgs.push({ role: i % 2 ? 'assistant' : 'user', content: id + ' message ' + i, ts: 1700000000000 + i });
+    }
+    return { id: id, title: 'legacy ' + id, model: 'test-model', createdAt: 1700000000000, updatedAt: 1700000000000 + n, messages: msgs };
+  }
+
+  function legacySeedArray() {
+    return LEGACY_IDS.map(function (id, i) { return legacyChat(id, 3 + i); });
+  }
+
+  function backupLegacy() {
+    var raw = null;
+    try { raw = localStorage.getItem(LEGACY_KEY); } catch (e) { return null; }
+    if (raw == null) return null;
+    var key = BACKUP_PREFIX + Date.now();
+    try { localStorage.setItem(key, raw); } catch (e) { return 'FAILED' }
+    return key;
+  }
+
+  // =========================================================
+  //  checks
+  // =========================================================
+
+  function headChecks() {
+    group('Backend selection');
+
+    return check('1 · isIndexedDBAvailable(window.indexedDB) is true', function () {
+      return isIndexedDBAvailable(window.indexedDB).then(function (ok) {
+        assert(ok === true, 'probe returned ' + ok + ' — IndexedDB is not usable in this browser');
+        return 'capability probe created and removed __omlx_capability_probe__';
+      });
+    })
+    .then(function () {
+      return check('2 · open() resolves and all four stores exist', function () {
+        return mainStore().open().then(function (db) {
+          assert(db && typeof db.transaction === 'function', 'open() did not resolve to a database');
+          var names = [];
+          for (var i = 0; i < db.objectStoreNames.length; i++) names.push(db.objectStoreNames.item(i));
+          ['chats', 'chatIndex', 'meta', 'blobs'].forEach(function (want) {
+            assert(names.indexOf(want) !== -1, 'store "' + want + '" missing; found: ' + names.join(', '));
+          });
+          assert(db.version === 1, 'expected version 1, got ' + db.version);
+          return 'version ' + db.version + ' · stores: ' + names.sort().join(', ');
+        });
+      });
+    })
+
+    .then(function () {
+      group('Legacy migration — the real data-loss risk');
+      return check('3 · legacy array migrates to records; legacy key retained; marker only after verification', function () {
+        var ids = LEGACY_IDS;
+        var arr = legacySeedArray();
+        var raw = JSON.stringify(arr);
+        localStorage.setItem(LEGACY_KEY, raw);
+
+        var store = mainStore();
+        var inst = instrumentMarker(store, 'chatHistoryMigration');
+
+        return migrateLegacyHistory({ legacyStorage: localStorage, recordStore: store })
+          .then(function (rep) {
+            inst.restore();
+            assert(rep.ok === true, 'migration reported ' + JSON.stringify(rep));
+            assert(rep.migrated === ids.length, 'expected ' + ids.length + ' migrated, got ' + rep.migrated);
+            assert(rep.rejected.length === 0, 'unexpected rejections: ' + JSON.stringify(rep.rejected));
+
+            // every chat became a readable record with its messages intact
+            return ids.reduce(function (p, id) {
+              return p.then(function () {
+                return store.get(id).then(function (got) {
+                  assert(got.ok && got.record, id + ' did not become a record');
+                  assert(got.record.title === 'legacy ' + id, id + ' title lost: ' + got.record.title);
+                  assert(Array.isArray(got.record.messages) && got.record.messages.length >= 3,
+                    id + ' messages lost');
+                });
+              });
+            }, Promise.resolve());
+          })
+          .then(function () {
+            // the legacy value must still be there, byte for byte
+            var after = localStorage.getItem(LEGACY_KEY);
+            assert(after === raw, 'LEGACY KEY WAS ALTERED — this is the data-loss path');
+            assert(after.length === raw.length, 'legacy key length changed');
+
+            // marker exists, and at the instant it was written the index already held every record
+            return Promise.all([migrationState(store), store.getMeta()])
+              .then(function (both) {
+                var state = both[0];
+                var meta = both[1].meta || {};
+                assert(state.migrated === true, 'migration marker was not written');
+                // backend sits at the top level of meta, not inside the migration info
+                assert(meta.backend === 'indexedDB', 'meta.backend is ' + meta.backend);
+                assert(inst.log.markerAt !== null, 'setMeta with the marker was never called');
+                assert(inst.log.indexAtMarker >= ids.length,
+                  'marker written when the index held only ' + inst.log.indexAtMarker + ' of ' + ids.length
+                  + ' records — verification did not precede the marker');
+                return ids.length + ' chats migrated · legacy key retained unchanged (' + raw.length
+                  + ' bytes) · index held ' + inst.log.indexAtMarker + ' records when the marker was written';
+              });
+          });
+      });
+    })
+
+    .then(function () {
+      return check('3b · an entry with no id is reported rejected, not silently dropped', function () {
+        var arr = [legacyChat('legacy-a', 3), { title: 'no id here' }, legacyChat('legacy-b', 3)];
+        localStorage.setItem(LEGACY_KEY, JSON.stringify(arr));
+        return migrateLegacyHistory({ legacyStorage: localStorage, recordStore: mainStore() })
+          .then(function (rep) {
+            var rejected = (rep.rejected || []).filter(function (r) { return r.reason === 'missing-id'; });
+            assert(rejected.length >= 1, 'the id-less entry was neither migrated nor reported: ' + JSON.stringify(rep));
+            return 'rejected: ' + JSON.stringify(rep.rejected) + ' · migrated ' + rep.migrated
+              + ' · skipped ' + rep.skipped;
+          });
+      });
+    })
+
+    .then(function () {
+      // Guard added 2026-09-23: a legacy chat that cannot become a record must stop
+      // the migration from being marked complete, otherwise the app switches
+      // backends and that chat becomes unreachable.
+      return check('3c · migration refuses to mark complete while any legacy chat is unaccounted for', function () {
+        var precious = { title: 'precious chat', messages: [{ role: 'user', content: 'THE ONLY COPY' }] };
+        var arr = [legacyChat('mig-ok-1', 2), precious, legacyChat('mig-ok-2', 2)];
+        var raw = JSON.stringify(arr);
+
+        return closeAll().then(function () { return deleteDb(MIG_DB); })
+          .then(function (d) {
+            assert(d.ok, 'could not reset the migration database: ' + d.why);
+            mig = null;
+            localStorage.setItem(LEGACY_KEY, raw);
+            var store = migStore();
+            return store.open().then(function () {
+              return migrateLegacyHistory({ legacyStorage: localStorage, recordStore: store });
+            }).then(function (rep) {
+              return Promise.all([
+                migrationState(store),
+                store.keys(),
+                Promise.resolve(localStorage.getItem(LEGACY_KEY)),
+              ]).then(function (r) {
+                var state = r[0], ids = (r[1].ids || []).sort(), legacyAfter = r[2];
+                var rejected = rep.rejected || [];
+                assert(rejected.length === 1, 'expected exactly 1 rejected: ' + JSON.stringify(rejected));
+                assert(rep.ok === false && rep.kind === 'incomplete',
+                    'migration must refuse to finish: got '
+                    + JSON.stringify({ ok: rep.ok, kind: rep.kind }));
+                assert(state.migrated === false,
+                    'MARKER WRITTEN ANYWAY — the app would switch backends and the rejected chat '
+                    + 'would vanish from the sidebar');
+                assert(legacyAfter === raw, 'legacy blob must be retained untouched');
+                assert(ids.length === 2,
+                    'the two migratable chats must still land: ' + JSON.stringify(ids));
+                return 'refused as incomplete · marker NOT written · legacy blob retained ('
+                    + raw.length + ' bytes) · 2 of 3 migrated · the 1 left behind is named in the report';
+              });
+            });
+          });
+      });
+    })
+
+    .then(function () {
+      return check('4 · re-running the migration is idempotent (nothing duplicated)', function () {
+        var store = mainStore();
+        // 3b and 3c replaced the legacy value; restore the array check 3 already
+        // migrated, so this genuinely re-runs the same input
+        localStorage.setItem(LEGACY_KEY, JSON.stringify(legacySeedArray()));
+        return store.keys().then(function (before) {
+          assert(before.ok, 'store.keys() failed: ' + (before.kind || 'unknown')
+            + (before.error ? ' — ' + errText(before.error) : ''));
+          var n = before.ids.length;
+          return migrateLegacyHistory({ legacyStorage: localStorage, recordStore: store })
+            .then(function (rep) {
+              assert(rep.ok === true, 'second run reported ' + JSON.stringify(rep));
+              assert(rep.migrated === 0, 'second run wrote ' + rep.migrated + ' records again; expected 0');
+              return store.keys().then(function (after) {
+                assert(after.ids.length === n, 'record count grew from ' + n + ' to ' + after.ids.length);
+                return 'second run: migrated 0, skipped ' + rep.skipped + ' · total records still ' + after.ids.length;
+              });
+            });
+        });
+      });
+    })
+
+    .then(function () {
+      // Guards the premise behind chat.html downloadChats(): once the app writes
+      // to records, the legacy key is a frozen snapshot, so exporting from it
+      // silently drops every chat created after migration.
+      return check('4b · legacy blob freezes at migration, so export must read the record store', function () {
+        var arr = [legacyChat('mig-export-1', 1), legacyChat('mig-export-2', 1)];
+        return closeAll().then(function () { return deleteDb(MIG_DB); })
+          .then(function (d) {
+            assert(d.ok, 'could not reset the migration database: ' + d.why);
+            mig = null;
+            localStorage.setItem(LEGACY_KEY, JSON.stringify(arr));
+            var store = migStore();
+            return store.open().then(function () {
+              return migrateLegacyHistory({ legacyStorage: localStorage, recordStore: store });
+            });
+          })
+          .then(function (rep) {
+            assert(rep.ok === true, 'setup migration must succeed here: ' + JSON.stringify(rep));
+            var frozen = localStorage.getItem(LEGACY_KEY);
+            var fresh = {
+              id: 'post-migration-export',
+              title: 'written after migration',
+              rev: 0,
+              messages: [{ role: 'user', content: 'created in the new backend' }]
+            };
+            return migStore().put(fresh, { expectRev: 0 }).then(function (res) {
+              assert(res.ok, 'post-migration write refused: ' + JSON.stringify(res));
+              return Promise.all([migStore().listIndex(), Promise.resolve(frozen)]);
+            });
+          })
+          .then(function (r) {
+            var listed = r[0], frozen = r[1];
+            assert(listed.ok, 'listIndex failed: ' + (listed.kind || 'unknown'));
+            var ids = (listed.entries || []).map(function (e) { return e.id; });
+            assert(ids.indexOf('post-migration-export') !== -1,
+                'record store is missing the post-migration chat: ' + JSON.stringify(ids));
+            assert(frozen.indexOf('post-migration-export') === -1,
+                'legacy blob is no longer frozen — this check no longer proves staleness');
+            return 'record store holds ' + ids.length + ' chats · legacy blob frozen at 2 and missing "'
+              + 'post-migration-export" · an export reading the legacy key would drop a chat';
+          });
+      });
+    })
+
+    .then(function () {
+      return check('5 · corrupt legacy value: reported corrupt, raw returned, nothing written, no marker', function () {
+        var broken = '{broken';
+        return closeAll().then(function () { return deleteDb(MIG_DB); })
+          .then(function (d) {
+            assert(d.ok, 'could not reset the migration database: ' + d.why);
+            mig = null;
+            var store = migStore();
+            return store.open();
+          })
+          .then(function () {
+            localStorage.setItem(LEGACY_KEY, broken);
+            return migrateLegacyHistory({ legacyStorage: localStorage, recordStore: migStore() })
+              .then(function (rep) {
+                assert(rep.ok === false, 'corrupt input was accepted: ' + JSON.stringify(rep));
+                assert(rep.kind === 'corrupt', 'expected kind "corrupt", got "' + rep.kind + '"');
+                assert(rep.raw === broken, 'raw bytes not returned verbatim: ' + JSON.stringify(rep.raw));
+                assert(rep.migrated === 0, 'migrated ' + rep.migrated + ' from corrupt input');
+                assert(rep.retained === true, 'corrupt input was not marked retained');
+                return Promise.all([rawCount(MIG_DB, 'chats'), rawCount(MIG_DB, 'chatIndex'),
+                  rawCount(MIG_DB, 'meta')]);
+              })
+              .then(function (counts) {
+                assert(counts[0] === 0, 'wrote ' + counts[0] + ' rows into chats from a corrupt value');
+                assert(counts[1] === 0, 'wrote ' + counts[1] + ' rows into chatIndex from a corrupt value');
+                assert(counts[2] === 0, 'wrote ' + counts[2] + ' rows into meta from a corrupt value');
+                return migrationState(migStore()).then(function (st) {
+                  assert(st.migrated === false, 'marker was written despite corrupt input');
+                  assert(localStorage.getItem(LEGACY_KEY) === broken, 'corrupt legacy value was modified');
+                  return 'kind=corrupt · raw="' + rep_raw_safe(broken) + '" · chats=0 chatIndex=0 meta=0 · marker absent';
+                });
+              });
+          });
+      });
+    })
+
+    .then(function () {
+      return check('6 · non-array legacy value: reported corrupt, not empty', function () {
+        var obj = '{"a":1}';
+        localStorage.setItem(LEGACY_KEY, obj);
+        return migrateLegacyHistory({ legacyStorage: localStorage, recordStore: migStore() })
+          .then(function (rep) {
+            assert(rep.ok === false, 'non-array input was accepted');
+            assert(rep.kind === 'corrupt', 'expected kind "corrupt", got "' + rep.kind + '"');
+            assert(rep.empty !== true, 'non-array input was misreported as empty — an empty report invites a wipe');
+            assert(rep.raw === obj, 'raw not returned: ' + JSON.stringify(rep.raw));
+            return rawCount(MIG_DB, 'chats').then(function (n) {
+              assert(n === 0, 'non-array input produced ' + n + ' records');
+              return 'kind=corrupt (not empty) · raw preserved · nothing written';
+            });
+          });
+      });
+    })
+
+    .then(function () {
+      group('Backend migration — localStorage records → IndexedDB');
+      return check('7 · migrateRecordStores moves everything, retains the source, marks after verifying', function () {
+        var src = localStore();
+        var tgt = mainStore();
+        var ids = ['bk-1', 'bk-2', 'bk-3'];
+        // clear any earlier fixture
+        return ids.reduce(function (p, id) {
+          return p.then(function () { return localStorage.removeItem(LS_PREFIX + id); });
+        }, Promise.resolve())
+          .then(function () { return src.clearAll(); })
+          .then(function () {
+            return ids.reduce(function (p, id, i) {
+              return p.then(function () {
+                return src.put({ id: id, title: 'bk ' + id, model: 'm', createdAt: 1700, updatedAt: 1800 + i,
+                  messages: [{ role: 'user', content: 'body of ' + id }] });
+              });
+            }, Promise.resolve());
+          })
+          .then(function () {
+            var inst = instrumentMarker(tgt, 'backendMigration');
+            return migrateRecordStores({ source: src, target: tgt, sourceLabel: 'localStorage' })
+              .then(function (rep) {
+                inst.restore();
+                assert(rep.ok === true, 'backend migration reported ' + JSON.stringify(rep));
+                assert(rep.migrated === ids.length, 'migrated ' + rep.migrated + ' of ' + ids.length);
+                return Promise.all([backendMigrationState(tgt), tgt.getMeta()])
+                  .then(function (both) {
+                  var bm = both[0];
+                  var meta = both[1].meta || {};
+                  assert(bm.migrated === true, 'backend marker not written');
+                  assert(meta.backend === 'indexedDB', 'meta.backend is ' + meta.backend);
+                  assert(inst.log.markerAt !== null, 'setMeta with backendMigration never called');
+                  assert(inst.log.indexAtMarker >= ids.length,
+                    'backend marker written with only ' + inst.log.indexAtMarker + ' index entries');
+                  // source retained
+                  return Promise.all([src.listIndex(), src.get('bk-1')]).then(function (r) {
+                    assert(r[0].ok && r[0].entries.length === ids.length,
+                      'SOURCE WAS PRUNED: ' + (r[0].entries ? r[0].entries.length : 'unreadable'));
+                    assert(r[1].ok && r[1].record && r[1].record.title === 'bk bk-1',
+                      'source record body lost');
+                    return ids.length + ' records moved · source intact (' + r[0].entries.length
+                      + ' entries) · target index had ' + inst.log.indexAtMarker + ' entries at marker time';
+                  });
+                });
+              });
+          });
+      });
+    })
+
+    .then(function () {
+      return check('8 · re-running migrateRecordStores skips everything already present', function () {
+        return migrateRecordStores({ source: localStore(), target: mainStore() })
+          .then(function (rep) {
+            assert(rep.ok === true, 're-run reported ' + JSON.stringify(rep));
+            assert(rep.migrated === 0, 're-run migrated ' + rep.migrated + ' again; expected 0');
+            assert(rep.skipped === 3, 'skipped ' + rep.skipped + '; expected 3');
+            return 'migrated 0 · skipped ' + rep.skipped;
+          });
+      });
+    })
+
+    .then(function () {
+      return check('9 · a newer record already in the target is not overwritten', function () {
+        var src = localStore();
+        var tgt = mainStore();
+        return src.put({ id: 'bk-2', title: 'SOURCE-STALE', model: 'm', createdAt: 1700, updatedAt: 1800,
+          messages: [{ role: 'user', content: 'from source' }] })
+          .then(function () {
+            return tgt.put({ id: 'bk-2', title: 'TARGET-NEWER', model: 'm', createdAt: 1700, updatedAt: 1900,
+              messages: [{ role: 'user', content: 'from target' }] }, { expectRev: null });
+          })
+          .then(function () {
+            return tgt.get('bk-2').then(function (g) {
+              var targetRev = g.record.rev;
+              return migrateRecordStores({ source: src, target: tgt }).then(function (rep) {
+                assert(rep.ok === true, 'migration reported ' + JSON.stringify(rep));
+                return tgt.get('bk-2').then(function (after) {
+                  assert(after.record.title === 'TARGET-NEWER',
+                    'TARGET WAS OVERWRITTEN by a stale source copy: ' + after.record.title);
+                  assert(after.record.rev === targetRev,
+                    'target rev moved from ' + targetRev + ' to ' + after.record.rev);
+                  return 'bk-2 kept TARGET-NEWER at rev ' + after.record.rev + ' · skipped ' + rep.skipped;
+                });
+              });
+            });
+          });
+      });
+    })
+
+    .then(function () {
+      return check('10 · revisions carry forward via preserveRev (rev 2 arrives as rev 2)', function () {
+        var id = 'rev-carry';
+        // seed the source directly so it carries rev 2, plus its index entry
+        var rec = { id: id, title: 'source rev2', model: 'm', createdAt: 1700, updatedAt: 1800,
+          messages: [{ role: 'user', content: 'rev2 body' }], rev: 2 };
+        localStorage.setItem(LS_PREFIX + id, JSON.stringify(rec));
+        var idxRaw = localStorage.getItem(LS_INDEX);
+        var idx = idxRaw ? JSON.parse(idxRaw) : {};
+        idx[id] = { id: id, title: rec.title, model: 'm', createdAt: 1700, updatedAt: 1800, rev: 2,
+          bytes: JSON.stringify(rec).length, messageCount: 1 };
+        localStorage.setItem(LS_INDEX, JSON.stringify(idx));
+
+        var tgt = mainStore();
+        return tgt.remove(id).then(function () {
+          return migrateRecordStores({ source: localStore(), target: tgt });
+        })
+          .then(function (rep) {
+            assert(rep.ok === true, 'migration reported ' + JSON.stringify(rep));
+            return rawGet(TEST_DB, 'chats', id).then(function (stored) {
+              assert(stored, 'record did not arrive in the target');
+              assert(stored.rev === 2,
+                'rev was NOT carried forward: source rev 2 arrived as rev ' + stored.rev
+                + ' — a tab still holding rev 2 would now overwrite silently');
+              return 'source rev 2 → target rev ' + stored.rev + ' (not 1)';
+            });
+          });
+      });
+    })
+
+    .then(function () {
+      group('Real-browser concurrency — what the fake cannot prove');
+      return check('11 · stale expectRev refused as conflict, stored record genuinely unchanged', function () {
+        var id = 'cas-' + Date.now();
+        var store = mainStore();
+        var r1, r2;
+        return store.put({ id: id, title: 'v1', model: 'm', createdAt: 1700, updatedAt: 1800,
+          messages: [{ role: 'user', content: 'first' }] })
+          .then(function (a) {
+            r1 = a;
+            assert(a.ok === true && a.rev === 1, 'first put: ' + JSON.stringify(a));
+            return store.put({ id: id, title: 'v2', model: 'm', createdAt: 1700, updatedAt: 1801,
+              messages: [{ role: 'user', content: 'second' }] }, { expectRev: a.rev });
+          })
+          .then(function (b) {
+            r2 = b;
+            assert(b.ok === true && b.rev === 2, 'second put: ' + JSON.stringify(b));
+            // now a stale tab, still holding rev 1, tries to write
+            return store.put({ id: id, title: 'STALE-WRITE', model: 'm', createdAt: 1700, updatedAt: 9999,
+              messages: [{ role: 'user', content: 'should never land' }] }, { expectRev: 1 });
+          })
+          .then(function (c) {
+            assert(c.ok === false, 'STALE WRITE WAS ACCEPTED — silent overwrite in a real browser');
+            assert(c.kind === 'conflict', 'expected kind "conflict", got "' + c.kind + '"');
+            assert(c.expectedRev === 1, 'expectedRev reported as ' + c.expectedRev);
+            assert(c.currentRev === 2, 'currentRev reported as ' + c.currentRev + '; expected 2');
+            // re-read from disk: the record must be untouched
+            return rawGet(TEST_DB, 'chats', id).then(function (stored) {
+              assert(stored.title === 'v2', 'stored title changed to "' + stored.title + '"');
+              assert(stored.rev === 2, 'stored rev changed to ' + stored.rev);
+              assert(stored.messages[0].content === 'second', 'stored body changed to "'
+                + stored.messages[0].content + '"');
+              return rawGet(TEST_DB, 'chatIndex', id).then(function (ix) {
+                assert(ix.rev === 2 && ix.title === 'v2', 'index drifted: ' + JSON.stringify(ix));
+                return 'refused as conflict · expectedRev 1 vs currentRev 2 · chats and chatIndex both unchanged on re-read';
+              });
+            });
+          });
+      });
+    })
+
+    .then(function () {
+      return check('12 · two connections to one database: write through A, read through B', function () {
+        var a = track(createIndexedDBRecordStore({ indexedDB: indexedDB, name: TEST_DB }));
+        var b = track(createIndexedDBRecordStore({ indexedDB: indexedDB, name: TEST_DB }));
+        var id = 'crossconn-' + Date.now();
+        var wa;
+        return a.open().then(function (da) {
+          return b.open().then(function (db) {
+            assert(da !== db, 'expected two distinct connections');
+            return a.put({ id: id, title: 'written-via-A', model: 'm', createdAt: 1700, updatedAt: 1800,
+              messages: [{ role: 'user', content: 'from A' }] });
+          });
+        })
+          .then(function (w) {
+            wa = w;
+            assert(w.ok === true && w.rev === 1, 'A put: ' + JSON.stringify(w));
+            return b.get(id);
+          })
+          .then(function (g) {
+            assert(g.ok && g.record, 'B cannot see the record A committed');
+            assert(g.record.title === 'written-via-A', 'B read title "' + g.record.title + '"');
+            assert(g.record.rev === wa.rev, 'B read rev ' + g.record.rev + ', A minted ' + wa.rev);
+            // B must also refuse a stale write against A's revision
+            return b.put({ id: id, title: 'via-B-stale' }, { expectRev: 0 });
+          })
+          .then(function (c) {
+            assert(c.kind === 'conflict' && c.currentRev === 1,
+              'B did not conflict against A\'s rev: ' + JSON.stringify(c));
+            return Promise.all([a.close(), b.close()]);
+          })
+          .then(function () {
+            return 'two live connections · A wrote rev 1 · B read it and refused a stale write';
+          });
+      });
+    })
+
+    .then(function () {
+      return check('13 · failure mid-transaction leaves BOTH chats and chatIndex unchanged', function () {
+        var id = 'atomic-' + Date.now();
+        var store = mainStore();
+        var before;
+        return store.put({ id: id, title: 'baseline', model: 'm', createdAt: 1700, updatedAt: 1800,
+          messages: [{ role: 'user', content: 'BASELINE' }] })
+          .then(function () {
+            return Promise.all([rawGet(TEST_DB, 'chats', id), rawGet(TEST_DB, 'chatIndex', id)]);
+          })
+          .then(function (pair) {
+            before = pair;
+            assert(pair[0] && pair[1], 'baseline not committed to both stores');
+            // A value the structured clone algorithm rejects, so chats.put() fails
+            // after the transaction is already open and chatIndex.put() is next.
+            var poisoned = { id: id, title: 'POISONED', model: 'm', createdAt: 1700, updatedAt: 9999,
+              messages: [{ role: 'user', content: 'should not land' }],
+              unclonable: function () { return 'nope'; } };
+            return store.put(poisoned);
+          })
+          .then(function (res) {
+            assert(res.ok !== true, 'the poisoned write SUCCEEDED — nothing was tested');
+            var kind = res.kind + (res.error ? ' (' + errText(res.error) + ')' : '');
+            return sleep(120).then(function () {
+              return Promise.all([rawGet(TEST_DB, 'chats', id), rawGet(TEST_DB, 'chatIndex', id)]);
+            }).then(function (after) {
+              assert(after[0].title === 'baseline', 'chats WAS modified: ' + after[0].title);
+              assert(after[0].rev === before[0].rev, 'chats rev moved to ' + after[0].rev);
+              assert(after[0].messages[0].content === 'BASELINE', 'chats body modified');
+              assert(after[1].title === 'baseline',
+                'chatIndex DRIFTED from chats: index says "' + after[1].title + '"');
+              assert(after[1].rev === before[1].rev, 'chatIndex rev moved to ' + after[1].rev);
+              assert(after[1].messageCount === before[1].messageCount, 'chatIndex messageCount changed');
+              return 'write refused as ' + kind + ' · transaction rolled back · chats and chatIndex both still baseline at rev '
+                + after[0].rev;
+            });
+          });
+      });
+    })
+
+    .then(function () { return reloadCheck(); });
+  }
+
+  function rep_raw_safe(s) { return String(s).slice(0, 40); }
+
+  // ---- check 14: the one that matters most ----
+  function reloadCheck() {
+    group('Real-browser behaviours the fake only approximates');
+    var pending = loadJson(RELOAD_KEY);
+
+    if (!pending) {
+      // seed, then reload. The check itself completes on the next page load.
+      var token = 'SENTINEL-' + Math.random().toString(36).slice(2, 10);
+      var id = 'persist-sentinel';
+      var store = mainStore();
+      // A real inline attachment rides along so check 14c can prove the bytes
+      // survive the reload. Payload embeds the token so a substitution shows up
+      // as a mismatch rather than passing quietly.
+      var imgB64 = btoa('OMLX-MEDIA-' + token + '-payload-bytes');
+      return store.put({ id: id, title: 'persistence probe', model: 'm', createdAt: 1700,
+        updatedAt: Date.now(), messages: [
+          { role: 'user', content: token },
+          { role: 'user', content: [
+            { type: 'text', text: 'with an attachment' },
+            { type: 'image_url', image_url: { url: 'data:image/png;base64,' + imgB64 } }
+          ] }
+        ] })
+        .then(function (r) {
+          assert(r.ok === true, 'seed put failed: ' + JSON.stringify(r));
+          return rawGet(TEST_DB, 'chats', id);
+        })
+        .then(function (stored) {
+          assert(stored && stored.messages[0].content === token, 'seed not readable before reload');
+          var ref = stored.messages[1].content[1];
+          assert(ref && ref.image_url && ref.image_url.digest,
+            'the inline image was not offloaded to a digest reference before the reload');
+          assert(JSON.stringify(stored).indexOf(imgB64) === -1,
+            'raw base64 is still inside the stored record — offload did not happen');
+          addRow({ group: currentGroup, name: '14 · persistence across reload — seeded ' + id
+            + ' at rev ' + stored.rev + ', reloading the page…', status: 'run', detail: token });
+          saveResults();
+          saveJson(RELOAD_KEY, { id: id, token: token, rev: stored.rev, at: Date.now(),
+            imgB64: imgB64, digest: ref.image_url.digest });
+          render();
+          // tag the heartbeat so the returning page runs the suite instead of
+          // concluding a second tab owns the databases
+          try { localStorage.setItem(HB_KEY, JSON.stringify({ token: 'reloading', ts: Date.now() })); } catch (e) {}
+          setTimeout(function () { location.reload(); }, 250);
+          // never resolve: this page instance ends at the reload, so finish()
+          // must not run and declare the suite done before it has happened
+          return new Promise(function () {});
+        });
+    }
+
+    return check('14 · PERSISTENCE ACROSS RELOAD — the record written before the reload is still there', function () {
+      var store = mainStore();
+      return store.open().then(function () { return store.get(pending.id); })
+        .then(function (got) {
+          assert(got.ok === true, 'get failed: ' + errText(got.error));
+          assert(got.record !== null, 'THE RECORD WAS LOST ACROSS RELOAD — id ' + pending.id);
+          assert(got.record.messages[0].content === pending.token,
+            'content changed across reload: expected ' + pending.token + ', read ' + got.record.messages[0].content);
+          assert(got.record.rev === pending.rev, 'rev changed from ' + pending.rev + ' to ' + got.record.rev);
+          return rawGet(TEST_DB, 'chats', pending.id);
+        })
+        .then(function (raw) {
+          assert(raw && raw.rev === pending.rev, 'raw read disagrees with the store read');
+          return rawGet(TEST_DB, 'chatIndex', pending.id);
+        })
+        .then(function (ix) {
+          assert(ix && ix.rev === pending.rev, 'index entry lost or drifted: ' + JSON.stringify(ix));
+          var mins = ((Date.now() - pending.at) / 1000).toFixed(1);
+          return 'survived a real page reload (' + mins + 's round trip) · chats rev ' + pending.rev
+            + ' · chatIndex rev ' + ix.rev + ' · token ' + pending.token;
+        });
+    })
+      .then(function () {
+        // reported separately so a marker failure cannot be mistaken for data loss
+        return check('14b · migration markers survive the reload', function () {
+          return migrationState(mainStore()).then(function (st) {
+            assert(st.migrated === true,
+              'chatHistoryMigration marker absent — if check 3 failed this is downstream of the same '
+              + 'bug, not a persistence failure');
+            return backendMigrationState(mainStore());
+          })
+            .then(function (bm) {
+              assert(bm.migrated === true, 'backendMigration marker absent');
+              return 'chatHistoryMigration and backendMigration both intact';
+            });
+        });
+      })
+      .then(function () {
+        return check('14c · AN ATTACHMENT SURVIVES THE RELOAD with byte-identical content', function () {
+          var store = mainStore();
+          return store.get(pending.id).then(function (got) {
+            assert(got.ok === true, 'get failed: ' + errText(got.error));
+            assert(got.record, 'THE CHAT WITH THE ATTACHMENT IS GONE — id ' + pending.id);
+            var part = got.record.messages[1].content[1];
+            assert(part && part.type === 'image_url', 'the attachment part is missing');
+            assert(!part.image_url.mediaMissing, 'the attachment is reported missing');
+            assert(part.image_url.url === 'data:image/png;base64,' + pending.imgB64,
+              'ATTACHMENT BYTES LOST OR ALTERED ACROSS RELOAD — read '
+              + JSON.stringify(String(part.image_url.url).slice(0, 40)));
+            assert(part.image_url.digest === pending.digest, 'digest changed across reload');
+            // The resolved view deliberately carries the bytes back inline — that is
+            // what makes the attachment render. The thing that must not hold them is
+            // the stored row, so check the raw record rather than this one.
+            return rawGet(TEST_DB, 'chats', pending.id);
+          }).then(function (raw) {
+            assert(raw && JSON.stringify(raw).indexOf(pending.imgB64) === -1,
+              'the stored record still carries inline base64 — offload did not happen');
+            return rawGet(TEST_DB, 'blobs', pending.digest);
+          }).then(function (blob) {
+            assert(blob, 'no blob under that digest in the blobs store');
+            assert(blob.data === pending.imgB64, 'the stored blob bytes differ from what was written');
+            assert(blob.digest === pending.digest, 'blob digest mismatch');
+            return 'image resolved from the blobs store after a real reload · digest '
+              + pending.digest.slice(0, 16) + '… · ' + blob.bytes + ' bytes · record holds only the reference';
+          });
+        });
+      })
+      .then(function () {
+        localStorage.removeItem(RELOAD_KEY);
+        return tailChecks();
+      });
+  }
+
+  function tailChecks() {
+    return check('15 · navigator.storage.persisted() reads without throwing (not requested)', function () {
+      if (!navigator.storage || typeof navigator.storage.persisted !== 'function') {
+        throw new Error('navigator.storage.persisted is unavailable in this browser');
+      }
+      return navigator.storage.persisted().then(function (p) {
+        assert(typeof p === 'boolean', 'persisted() returned ' + typeof p);
+        return 'persisted = ' + p + ' (this harness never calls persist(); that stays a panel decision)';
+      });
+    })
+
+    .then(function () {
+      return check('16 · navigator.storage.estimate() returns plausible quota / usage', function () {
+        return navigator.storage.estimate().then(function (e) {
+          assert(typeof e.quota === 'number' && e.quota > 0, 'quota is ' + e.quota);
+          assert(typeof e.usage === 'number' && e.usage >= 0, 'usage is ' + e.usage);
+          assert(e.usage <= e.quota, 'usage ' + e.usage + ' exceeds quota ' + e.quota);
+          updateEstimate(e);
+          return 'quota ' + fmtBytes(e.quota) + ' · usage ' + fmtBytes(e.usage)
+            + ' · ' + (e.usage / e.quota * 100).toFixed(4) + '% used';
+        });
+      });
+    })
+
+    .then(function () {
+      return check('17 · a multi-megabyte record round-trips', function () {
+        var block = new Array(1025).join('x'); // 1024 chars
+        var mb = '';
+        for (var j = 0; j < 1024; j++) mb += block;
+        var big = mb + mb + mb; // ~3 MB
+        var id = 'big-' + Date.now();
+        var store = mainStore();
+        var t0 = performance.now();
+        return store.put({ id: id, title: 'big', model: 'm', createdAt: 1700, updatedAt: Date.now(),
+          messages: [{ role: 'user', content: big }] })
+          .then(function (r) {
+            assert(r.ok === true, 'large put failed: ' + JSON.stringify(r));
+            return store.get(id);
+          })
+          .then(function (g) {
+            assert(g.ok && g.record, 'large get failed');
+            var back = g.record.messages[0].content;
+            assert(back.length === big.length, 'length mismatch: wrote ' + big.length + ', read ' + back.length);
+            assert(back.charCodeAt(0) === big.charCodeAt(0)
+              && back.charCodeAt(back.length - 1) === big.charCodeAt(big.length - 1),
+              'content differs at the boundaries');
+            var mid = Math.floor(big.length / 2);
+            assert(back.substr(mid, 64) === big.substr(mid, 64), 'content differs mid-payload');
+            var ms = Math.round(performance.now() - t0);
+            return fmtBytes(big.length) + ' written and read back identical in ' + ms + ' ms · rev ' + g.record.rev;
+          })
+          .then(function (d) { return mainStore().remove(id).then(function () { return d; }); });
+      });
+    })
+
+    .then(function () {
+      return check('18 · version 1 upgrade creates the schema; a second open reuses the connection', function () {
+        var s;
+        return closeAll().then(function () { return deleteDb(V1_DB); })
+          .then(function (d) {
+            assert(d.ok, 'could not reset the v1 database: ' + d.why);
+            s = track(createIndexedDBRecordStore({ indexedDB: indexedDB, name: V1_DB, version: 1 }));
+            return s.open();
+          })
+          .then(function (db) {
+            assert(db.version === 1, 'version is ' + db.version);
+            var names = [];
+            for (var i = 0; i < db.objectStoreNames.length; i++) names.push(db.objectStoreNames.item(i));
+            ['chats', 'chatIndex', 'meta', 'blobs'].forEach(function (w) {
+              assert(names.indexOf(w) !== -1,
+                'onupgradeneeded did not create "' + w + '" — a fresh database has only: ' + names.join(', '));
+            });
+            return s.open().then(function (again) {
+              assert(again === db, 'a second open() opened a NEW connection instead of reusing it');
+              // cross-tab / cross-connection upgrade blocking
+              return upgradeBlocked(V1_DB).then(function (res) {
+                return s.close().then(function () { return res; });
+              });
+            })
+              .then(function (res) {
+                if (!res) return null;
+                assert(res.blocked === true,
+                  'a second open at version 2 was NOT blocked while a version-1 connection was held — '
+                  + 'onblocked never fired (opened=' + res.opened + ')');
+                // the blocked upgrade resumes the moment the connection closed;
+                // let it land before trying to clean up
+                return sleep(400).then(function () { return deleteDb(V1_DB); });
+              })
+              .then(function () {
+                return 'onupgradeneeded built all 4 stores at version 1 · second open() reused the same connection · '
+                  + 'upgrade to v2 blocked while the connection was held';
+              });
+          });
+      });
+    })
+
+    .then(function () {
+      return check('18b · mark-and-sweep collector removes only unreferenced blobs', function () {
+        var store = mainStore();
+        var keepB64 = btoa('KEEP-ME-attachment-payload');
+        var orphanB64 = btoa('ORPHANED-attachment-payload');
+        var swept = null, blobsBefore = 0, keeperDigest = null, orphanDigest = null;
+        function withImage(id, b64) {
+          return store.put({ id: id, title: id, model: 'm', createdAt: 1700, updatedAt: Date.now(),
+            messages: [{ role: 'user', content: [
+              { type: 'image_url', image_url: { url: 'data:image/png;base64,' + b64 } } ] }] });
+        }
+        return withImage('collector-keeper', keepB64)
+          .then(function (r) {
+            assert(r.ok === true, 'keeper put failed: ' + JSON.stringify(r));
+            return withImage('collector-source', orphanB64);
+          })
+          .then(function (r) {
+            assert(r.ok === true, 'orphan-source put failed: ' + JSON.stringify(r));
+            // Deleting the chat must not delete the blob directly; that is the
+            // collector's job, and only once nothing references it.
+            return store.remove('collector-source');
+          })
+          .then(function () { return store.listBlobs(); })
+          .then(function (listed) {
+            // Relative counts: other checks leave their own blobs in this database,
+            // so an absolute expectation would be wrong for the wrong reason.
+            blobsBefore = listed.blobs.length;
+            var keeper = listed.blobs.filter(function (b) { return b.data === keepB64; });
+            var orphan = listed.blobs.filter(function (b) { return b.data === orphanB64; });
+            assert(keeper.length === 1, 'the keeper blob was not written');
+            assert(orphan.length === 1, 'remove() deleted the orphan before any sweep');
+            keeperDigest = keeper[0].digest;
+            orphanDigest = orphan[0].digest;
+            assert(keeperDigest !== orphanDigest, 'two different payloads produced the same digest');
+            return store.collectBlobs();
+          })
+          .then(function (res) {
+            swept = res;
+            assert(swept.ok === true, 'collectBlobs failed: ' + JSON.stringify(swept));
+            assert(swept.removed.length === 1,
+              'expected exactly 1 orphan removed, got ' + swept.removed.length
+              + ' (' + JSON.stringify(swept.removed) + ')');
+            assert(swept.removed[0] === orphanDigest,
+              'the swept blob was not the orphan — removed ' + swept.removed[0] + ' instead');
+            return store.get('collector-keeper');
+          })
+          .then(function (got) {
+            var url = got.record.messages[0].content[0].image_url.url;
+            assert(url === 'data:image/png;base64,' + keepB64,
+              'THE COLLECTOR DESTROYED A STILL-REFERENCED ATTACHMENT');
+            return store.listBlobs();
+          })
+          .then(function (listed) {
+            assert(listed.blobs.length === blobsBefore - 1,
+              'expected exactly one blob reclaimed: ' + blobsBefore + ' → ' + listed.blobs.length);
+            assert(listed.blobs.filter(function (b) { return b.digest === keeperDigest; }).length === 1,
+              'the referenced blob is gone');
+            assert(listed.blobs.filter(function (b) { return b.digest === orphanDigest; }).length === 0,
+              'the orphan survived the sweep');
+            return 'referenced blob kept and still resolving · 1 orphan swept ('
+              + orphanDigest.slice(0, 14) + '…) · ' + swept.bytesFreed + ' bytes freed · remove() left blobs alone';
+          });
+      });
+    })
+
+    .then(function () {
+      group('Manual');
+      addRow({
+        group: 'Manual', status: 'manual',
+        name: '19 · two-tab conflict — scroll down to the manual panel',
+        detail: 'Open a second tab, Load in both, save in tab A, then save in tab B without reloading. '
+          + 'Tab B must be refused with expectedRev vs currentRev.',
+      });
+      render();
+      saveResults();
+    });
+  }
+
+  function upgradeBlocked(name) {
+    return new Promise(function (resolve) {
+      var settled = false, blocked = false;
+      var rq;
+      try { rq = indexedDB.open(name, 2); } catch (e) { return resolve({ blocked: false, error: errText(e) }); }
+      rq.onblocked = function () { blocked = true; finish(false); };
+      rq.onsuccess = function () {
+        var d = rq.result;
+        try { d.close(); } catch (e) {}
+        finish(false);
+      };
+      rq.onerror = function () { finish(false); };
+      function finish() {
+        if (settled) return;
+        settled = true;
+        resolve({ blocked: blocked, opened: !blocked });
+      }
+      setTimeout(function () { finish(); }, 2500);
+    });
+  }
+
+  // =========================================================
+  //  suite orchestration
+  // =========================================================
+
+  function wipe() {
+    return closeAll()
+      .then(function () { return sleep(80); })
+      .then(function () {
+        return Promise.all([deleteDb(TEST_DB), deleteDb(MIG_DB), deleteDb(V1_DB)]);
+      })
+      .then(function (res) {
+        var bad = [TEST_DB, MIG_DB, V1_DB]
+          .map(function (n, i) { return res[i].ok ? null : n + ' — ' + res[i].why; })
+          .filter(Boolean);
+        assert(bad.length === 0,
+          'could not delete: ' + bad.join('; ')
+          + '. A connection is still held, so every later open of that database would queue behind the '
+          + 'abandoned delete request. This is a harness leak, not a storage-layer failure.');
+        var kill = [LEGACY_KEY, RELOAD_KEY, RESULTS_KEY, LS_INDEX, LS_META];
+        try {
+          var alsoRemove = [];
+          for (var i = 0; i < localStorage.length; i++) {
+            var k = localStorage.key(i);
+            if (k && (k.indexOf(LS_PREFIX) === 0 || k.indexOf(BACKUP_PREFIX) === 0)) alsoRemove.push(k);
+          }
+          kill = kill.concat(alsoRemove);
+        } catch (e) {}
+        kill.forEach(function (k) { try { localStorage.removeItem(k); } catch (e) {} });
+      });
+  }
+
+  function runSuite() {
+    if (running) return Promise.resolve();
+    running = true;
+    finished = false;
+    var pending = loadJson(RELOAD_KEY);
+
+    if (pending) {
+      window.__harness.didReload = true;
+      var prior = loadJson(RESULTS_KEY) || [];
+      results = prior.slice();
+      // the row that triggered the reload was left "running" on purpose
+      results.forEach(function (r) {
+        if (r.status === 'run' && r.name && r.name.indexOf('reloading the page') !== -1) {
+          r.status = 'info';
+          r.detail = 'seeded before the reload; verified on this pass';
+        }
+      });
+      addRow({ divider: '▼ page reloaded — everything above ran before the reload' });
+      render();
+      return reloadCheck().then(finish, finish);
+    }
+
+    var backupKey = backupLegacy();
+    if (backupKey) {
+      $('legacyWarn').innerHTML = '<div class="warnbox"><b>A pre-existing <code>'
+        + LEGACY_KEY + '</code> was found on this origin.</b><br>'
+        + 'It has been copied to <code>' + esc(backupKey) + '</code> before these checks overwrote it. '
+        + 'This origin is <code>127.0.0.1:8765</code>, not the oMLX app origin, so your real chat history '
+        + 'is not here — but if you expected this to be empty, stop and check.</div>';
+    }
+
+    results = [];
+    saveResults();
+    render();
+    return wipe()
+      .then(function () { return headChecks(); })
+      .then(function () { return sleep(60); })
+      .then(finish, finish);
+  }
+
+  function finish(e) {
+    if (e) {
+      addRow({ group: 'Harness', status: 'fail', name: 'the harness itself threw', detail: errText(e) });
+    }
+    running = false;
+    // any row still marked run after the suite ended is a stall, not a pass
+    results.forEach(function (r) {
+      if (r.status === 'run' && !loadJson(RELOAD_KEY)) {
+        r.status = 'fail';
+        r.detail = 'never completed — the check stalled or the page reloaded before it finished';
+      }
+    });
+    finished = true;
+    render();
+    saveResults();
+  }
+
+  // ---- estimate readout ----
+  function updateEstimate(e) {
+    if (!e) return;
+    $('eQuota').textContent = fmtBytes(e.quota);
+    $('eUsage').textContent = fmtBytes(e.usage);
+    $('ePct').textContent = e.quota ? (e.usage / e.quota * 100).toFixed(4) + '%' : '—';
+  }
+
+  function pollEstimate() {
+    if (!navigator.storage || !navigator.storage.estimate) return;
+    navigator.storage.estimate().then(function (e) {
+      updateEstimate(e);
+      if (navigator.storage.persisted) {
+        navigator.storage.persisted().then(function (p) {
+          $('ePersist').textContent = p ? 'yes' : 'no (not requested)';
+        }, function () { $('ePersist').textContent = 'unreadable'; });
+      }
+    }, function () {});
+  }
+
+  // ---- manual two-tab panel ----
+  var manualStore = null;
+  var bc = null;
+  var heldRev = null;
+
+  function mstore() {
+    if (!manualStore) manualStore = track(createIndexedDBRecordStore({ indexedDB: indexedDB, name: TEST_DB }));
+    return manualStore;
+  }
+
+  function mlog(msg, cls) {
+    var host = $('manualLog');
+    var d = document.createElement('div');
+    d.innerHTML = '<span class="kv">' + new Date().toLocaleTimeString() + '</span> '
+      + '<span class="' + (cls || '') + '">' + esc(msg) + '</span>';
+    host.insertBefore(d, host.firstChild);
+  }
+
+  function manualVerdict() {
+    var n = loadJson(MANUAL_KEY) || 0;
+    var v = $('manualVerdict');
+    if (n > 0) {
+      v.className = 'done';
+      v.textContent = 'CONFLICT CONFIRMED — ' + n + ' stale save' + (n === 1 ? '' : 's')
+        + ' refused instead of overwriting.';
+    } else {
+      v.className = '';
+      v.textContent = 'Manual conflict not yet observed.';
+    }
+  }
+
+  function refreshRev() {
+    var id = $('mId').value.trim();
+    if (!id) return Promise.resolve();
+    return mstore().get(id).then(function (g) {
+      $('mStoreRev').textContent = g.record ? String(g.record.rev) : '(absent)';
+      if (heldRev !== null && g.record && g.record.rev !== heldRev) {
+        $('mStale').innerHTML = '<span class="conflicted">this tab\'s expectedRev ' + heldRev
+          + ' is stale — the store is at ' + g.record.rev + '. Saving now must be refused.</span>';
+      } else if (heldRev !== null) {
+        $('mStale').textContent = '';
+      }
+    }, function (e) { $('mStoreRev').textContent = 'error: ' + errText(e); });
+  }
+
+  function initManual() {
+    try { bc = new BroadcastChannel('omlx-chat-browser-test-manual'); } catch (e) { bc = null; }
+    if (bc) {
+      bc.onmessage = function (ev) {
+        var m = ev.data || {};
+        if (m.id !== $('mId').value.trim()) return;
+        if (m.type === 'saved') {
+          mlog('other tab saved "' + m.id + '" at rev ' + m.rev, 'savedok');
+          refreshRev();
+        } else if (m.type === 'conflict') {
+          mlog('other tab was refused at expectedRev ' + m.expectedRev + ' (store ' + m.currentRev + ')', 'conflicted');
+        }
+      };
+    }
+
+    $('mLoad').addEventListener('click', function () {
+      var id = $('mId').value.trim();
+      mstore().get(id).then(function (g) {
+        if (g.record) {
+          heldRev = g.record.rev;
+          $('mRev').textContent = String(heldRev);
+          $('mTitle').value = g.record.title || '';
+          $('mBody').value = (g.record.messages || []).map(function (m) { return m.role + ': ' + m.content; }).join('\n');
+          mlog('loaded "' + id + '" at rev ' + heldRev);
+        } else {
+          heldRev = 0;
+          $('mRev').textContent = '0 (new)';
+          mlog('"' + id + '" does not exist yet; a save will create it at rev 1');
+        }
+        $('mStale').textContent = '';
+        refreshRev();
+      }, function (e) { mlog('load failed: ' + errText(e), 'conflicted'); });
+    });
+
+    $('mSave').addEventListener('click', function () {
+      var id = $('mId').value.trim();
+      if (!id) { mlog('enter a chat id first', 'conflicted'); return; }
+      var expect = heldRev === null ? 0 : heldRev;
+      var rec = {
+        id: id,
+        title: $('mTitle').value || '(untitled)',
+        model: 'manual',
+        createdAt: 1700,
+        updatedAt: Date.now(),
+        messages: [{ role: 'user', content: $('mBody').value || $('mTitle').value || 'empty' }],
+      };
+      mstore().put(rec, { expectRev: expect }).then(function (r) {
+        if (r.ok) {
+          heldRev = r.rev;
+          $('mRev').textContent = String(r.rev);
+          mlog('saved "' + id + '" rev ' + expect + ' → ' + r.rev, 'savedok');
+          if (bc) bc.postMessage({ type: 'saved', id: id, rev: r.rev });
+        } else if (r.kind === 'conflict') {
+          var n = (loadJson(MANUAL_KEY) || 0) + 1;
+          saveJson(MANUAL_KEY, n);
+          mlog('REFUSED as conflict — this tab expectedRev ' + r.expectedRev
+            + ', store currentRev ' + r.currentRev + '. Nothing was overwritten.', 'conflicted');
+          if (bc) bc.postMessage({ type: 'conflict', id: id, expectedRev: r.expectedRev, currentRev: r.currentRev });
+          manualVerdict();
+        } else {
+          mlog('save failed: ' + (r.kind || errText(r.error)), 'conflicted');
+        }
+        refreshRev();
+      }, function (e) { mlog('put threw: ' + errText(e), 'conflicted'); });
+    });
+
+    $('mId').addEventListener('change', function () { heldRev = null; $('mRev').textContent = '—'; refreshRev(); });
+    $('btnTab').addEventListener('click', function () {
+      var url = location.href.split('#')[0] + '#manual';
+      var w = window.open(url, '_blank');
+      if (!w) mlog('popup blocked — allow popups, or open ' + url + ' yourself', 'conflicted');
+    });
+    $('btnRun').addEventListener('click', function () {
+      localStorage.removeItem(RELOAD_KEY);
+      results = [];
+      runSuite();
+    });
+    $('btnReset').addEventListener('click', function () {
+      if (!window.confirm('Delete the three test databases and the test localStorage keys? Real chat data is not touched.')) return;
+      manualStore = null;
+      wipe().then(function () {
+        localStorage.removeItem(MANUAL_KEY);
+        results = [];
+        finished = false;
+        render();
+        mlog('test data reset');
+        manualVerdict();
+      });
+    });
+
+    manualVerdict();
+    // deliberately no refreshRev() at boot: opening a connection here would
+    // block the suite's deleteDatabase and stall the entire run
+  }
+
+  // ---- machine-readable snapshot, for scripted runs ----
+  // Lets a driver (or a future CI job) read exact results instead of scraping
+  // the visible text. Harmless when nothing is scripting this page.
+  window.__harness = {
+    didReload: false,
+    snapshot: function () {
+      var passed = 0, failed = 0, total = 0;
+      results.forEach(function (r) {
+        if (r.divider) return;
+        total += 1;
+        if (r.status === 'pass') passed += 1;
+        if (r.status === 'fail') failed += 1;
+      });
+      return {
+        done: finished && !running,
+        running: running,
+        didReload: window.__harness.didReload,
+        manualOnly: Boolean(window.__harness.manualOnly),
+        passed: passed,
+        failed: failed,
+        total: total,
+        browser: browserName(),
+        origin: location.origin,
+        manualConflicts: loadJson(MANUAL_KEY) || 0,
+        results: results.map(function (r) {
+          return {
+            divider: r.divider || null, group: r.group || null, name: r.name || null,
+            status: r.status || null, detail: r.detail || '', ms: r.ms || null,
+          };
+        }),
+      };
+    },
+  };
+
+  // ---- boot ----
+  // A second tab must never auto-run the suite: it wipes the databases, which
+  // would pull the rug out from under the first tab mid-test. Only a lone tab
+  // on the plain URL runs the automated checks; anything else is manual mode.
+  var HB_KEY = 'omlx_browser_test_heartbeat';
+  var myToken = 'tab-' + Math.random().toString(36).slice(2, 10);
+
+  function heartbeat() {
+    try { localStorage.setItem(HB_KEY, JSON.stringify({ token: myToken, ts: Date.now() })); } catch (e) {}
+  }
+
+  // Read the previous heartbeat BEFORE overwriting it — reading after would
+  // always find our own token and never detect a second tab. A tab that is
+  // about to reload its own test tags the heartbeat so the returning page is
+  // not mistaken for a newcomer and skipped.
+  var priorTab = (function () {
+    var hb = loadJson(HB_KEY);
+    if (!hb || !hb.token || hb.token === myToken || hb.token === 'reloading') return null;
+    return (Date.now() - hb.ts) < 5000 ? hb : null;
+  })();
+
+  heartbeat();
+  setInterval(heartbeat, 1000);
+
+  $('browser').textContent = browserName();
+  initManual();
+  pollEstimate();
+  setInterval(pollEstimate, 2500);
+  render();
+
+  if (location.hash === '#manual' || priorTab) {
+    window.__harness.manualOnly = true;
+    finished = true;
+    addRow({
+      group: 'Manual mode', status: 'info',
+      name: 'automated checks skipped on this tab',
+      detail: location.hash === '#manual'
+        ? 'opened via #manual — second-tab mode, the other tab owns the databases'
+        : 'another tab is live on this origin; running here would wipe the databases it is using',
+    });
+    render();
+  } else {
+    runSuite();
+  }
+})();
+</script>
+</body>
+</html>

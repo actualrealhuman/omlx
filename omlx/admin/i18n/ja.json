@@ -1745,6 +1745,7 @@
   "chat.storage_error.corrupt": "保存されたチャット履歴が破損しているか読み取れません。復旧用に保持され、上書きされません。",
   "chat.storage_error.serialization": "保留中のチャット履歴をエンコードできませんでした。既存の履歴を保護するため、新しいチャット操作は一時停止されます。",
   "chat.storage_error.unavailable": "ブラウザの保存領域を利用できません。既存の履歴を保護するため、新しいチャット操作は一時停止されます。",
+  "chat.storage_error.incomplete": "一部のチャットを新しい保存形式に変換できなかったため、変換を停止しました。上書きや削除は行われておらず、元の履歴はダウンロード用に保持されています。",
   "chat.storage_error.no_data_deleted": "既存のチャットは削除されていません。",
   "chat.storage_error.download_pending": "未保存のチャットをダウンロード",
   "chat.storage_error.download_raw": "復旧データをダウンロード",

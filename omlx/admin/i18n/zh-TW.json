@@ -1745,6 +1745,7 @@
   "chat.storage_error.corrupt": "儲存的聊天記錄已損壞或無法讀取。資料已保留以便復原，不會被覆寫。",
   "chat.storage_error.serialization": "無法編碼待儲存的聊天記錄。為確保現有記錄安全，新的聊天操作已暫停。",
   "chat.storage_error.unavailable": "無法使用瀏覽器儲存空間。為確保現有記錄安全，新的聊天操作已暫停。",
+  "chat.storage_error.incomplete": "部分聊天無法轉換為新的儲存格式，因此轉換已停止。沒有內容被覆寫或刪除，您的原始對話記錄已保留以供下載。",
   "chat.storage_error.no_data_deleted": "未刪除任何現有聊天。",
   "chat.storage_error.download_pending": "下載未儲存的聊天",
   "chat.storage_error.download_raw": "下載復原資料",

@@ -9,6 +9,7 @@
 <script src="/admin/static/js/marked-highlight.umd.js"></script>
 <script src="/admin/static/js/chat_history_storage.js"></script>
 <script src="/admin/static/js/chat_record_store.js"></script>
+<script src="/admin/static/js/chat_media_store.js"></script>
 <script src="/admin/static/js/chat_indexeddb_store.js"></script>
 <script src="/admin/static/js/chat_history_migration.js"></script>
 
@@ -4903,21 +4904,45 @@
             this.downloadPendingChatHistory();
             return;
         }
-        const loaded = this.chatHistoryStore().load();
-        if (!loaded.ok) {
+        // Export the live record store. The legacy whole-history blob is a
+        // snapshot frozen at migration time, so reading it here would produce a
+        // file that silently omits every chat saved or edited since.
+        const store = this.chatRecordStore();
+        const listed = await store.listIndex();
+        if (!listed.ok) {
             this.chatStorageIssue = {
-                kind: loaded.kind,
-                raw: loaded.raw ?? null,
+                kind: listed.kind || 'unavailable',
+                raw: listed.raw ?? null,
                 pendingJson: null,
             };
-            if (loaded.raw != null) this.downloadPendingChatHistory();
+            if (listed.raw != null) this.downloadPendingChatHistory();
             return;
         }
-        if (!loaded.history.length) {
+        const history = [];
+        const unreadable = [];
+        for (const entry of listed.entries) {
+            const got = await store.get(entry.id);
+            if (got.ok && got.record) {
+                history.push(got.record);
+            } else if (got.raw != null) {
+                unreadable.push({ id: entry.id, raw: got.raw });
+            }
+        }
+        if (!history.length && !unreadable.length) {
             alert(window.t('chat.no_chats_to_export'));
             return;
         }
-        this._downloadChatData(JSON.stringify(loaded.history, null, 2), 'omlx-chats.json');
+        this._downloadChatData(JSON.stringify(history, null, 2), 'omlx-chats.json');
+        if (unreadable.length) {
+            // That file is short by unreadable.length chats. Hand over the bytes
+            // still on disk instead of letting an incomplete backup pass as one.
+            this.noteChatStorageIssue({
+                kind: 'corrupt',
+                action: 'export',
+                raw: unreadable[0].raw,
+                chatId: unreadable[0].id ?? null,
+            });
+        }
     },
 
     downloadPendingChatHistory() {
@@ -5559,6 +5584,23 @@
                 recordStore: store,
             });
             if (!moved.ok) {
+                if (moved.kind === 'incomplete') {
+                    // Legacy entries were refused that cannot become records. The
+                    // records that did migrate are already in the store, so
+                    // listing them would show a short history and the refused
+                    // chats would look like they never existed. Stop before the
+                    // list reaches the UI: the legacy value is retained, offered
+                    // for download, and nothing further is written.
+                    this._pendingChatHistory = null;
+                    let raw = null;
+                    try { raw = localStorage.getItem(CHAT_HISTORY_STORAGE_KEY); } catch { }
+                    this.noteChatStorageIssue({
+                        kind: 'incomplete',
+                        action: 'load',
+                        raw,
+                    });
+                    return false;
+                }
                 if (moved.kind === 'corrupt' || moved.kind === 'unavailable') {
                     this._pendingChatHistory = null;
                     this.noteChatStorageIssue({
@@ -5898,29 +5940,12 @@
         const existingIndex = baseHistory.findIndex(c => c.id === chatId);
         const existingChat = existingIndex >= 0 ? baseHistory[existingIndex] : null;
 
-        // Strip base64 image data from content arrays to avoid localStorage quota issues
-        const messagesForStorage = messagesToSave.map(msg => {
-            if (!Array.isArray(msg.content)) return msg;
-            return {
-                ...msg,
-                content: msg.content.map(part => {
-                    if (part.type === 'image_url') {
-                        return { type: 'image_url', image_url: { url: '' } };
-                    }
-                    if (part.type === 'file') {
-                        return {
-                            type: 'file',
-                            file: {
-                                filename: part.file?.filename || '',
-                                mime_type: part.file?.mime_type || '',
-                                data: '',
-                            },
-                        };
-                    }
-                    return part;
-                })
-            };
-        });
+        // Media passes through intact: the record store offloads inline base64 to
+        // its blobs store and stores a digest reference, so attachments survive
+        // reload. The localStorage backend has nowhere to put the bytes and blanks
+        // them inside its own put(), keeping that limitation in the backend rather
+        // than repeated in every caller.
+        const messagesForStorage = messagesToSave;
 
         const title = this.resolveAutoChatTitle(messagesToSave, existingChat);
 
@@ -7380,28 +7405,9 @@
         };
         this.chatSessions[branchId] = branchSession;
 
-        const messagesForStorage = branchMessages.map(msg => {
-            if (!Array.isArray(msg.content)) return msg;
-            return {
-                ...msg,
-                content: msg.content.map(part => {
-                    if (part.type === 'image_url') {
-                        return { type: 'image_url', image_url: { url: '' } };
-                    }
-                    if (part.type === 'file') {
-                        return {
-                            type: 'file',
-                            file: {
-                                filename: part.file?.filename || '',
-                                mime_type: part.file?.mime_type || '',
-                                data: '',
-                            },
-                        };
-                    }
-                    return part;
-                })
-            };
-        });
+        // Same as the save path: media is offloaded by the record store, not
+        // blanked here, so a branched chat keeps its attachments.
+        const messagesForStorage = branchMessages;
 
         const branchData = {
             id: branchId,

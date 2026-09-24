@@ -1745,6 +1745,7 @@
   "chat.storage_error.corrupt": "El historial almacenado está dañado o no se puede leer. Se ha conservado para recuperarlo y no se sobrescribirá.",
   "chat.storage_error.serialization": "No se pudo codificar el historial pendiente. La actividad nueva está en pausa para proteger el historial existente.",
   "chat.storage_error.unavailable": "El almacenamiento del navegador no está disponible. La actividad nueva está en pausa para proteger el historial existente.",
+  "chat.storage_error.incomplete": "Algunos chats no se pudieron convertir al nuevo formato de almacenamiento, por lo que la conversión se detuvo. No se sobrescribió ni se eliminó nada; tu historial original se ha conservado para que lo descargues.",
   "chat.storage_error.no_data_deleted": "No se eliminó ningún chat existente.",
   "chat.storage_error.download_pending": "Descargar chats sin guardar",
   "chat.storage_error.download_raw": "Descargar datos de recuperación",

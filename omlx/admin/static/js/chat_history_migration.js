@@ -177,6 +177,30 @@
             };
         }
 
+        // A rejected entry that is not a duplicate is a legacy chat whose content
+        // never became a record. Writing the marker here would point the app at
+        // the new store and make that chat unreachable — retained in the legacy
+        // value, but invisible and nobody the wiser. Refuse to call this done.
+        //
+        // Duplicate ids are exempt: the first occurrence is kept, so nothing is
+        // lost and blocking would pin the user to the old backend for nothing.
+        // Any *new* rejection reason blocks by default — the safe bias is to
+        // assume an unrecognised rejection means somebody lost a chat.
+        const unaccounted = rejected.filter((r) => r.reason !== 'duplicate-id');
+        if (unaccounted.length) {
+            return {
+                ok: false,
+                kind: 'incomplete',
+                migrated,
+                skipped,
+                rejected,
+                unaccounted,
+                bytes,
+                expected,
+                retained: true,
+            };
+        }
+
         const meta = await recordStore.setMeta({
             backend: recordStore.backend,
             [MIGRATION_META_KEY]: {
@@ -198,6 +222,8 @@
             migrated,
             skipped,
             rejected,
+            // always present so a caller can assert nothing was left behind
+            unaccounted: [],
             bytes,
             expected,
             verified: expected,
