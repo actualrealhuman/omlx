@@ -115,15 +115,23 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Permit an artifact not built from the current canonical private source",
     )
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--dry-run",
         action="store_true",
-        help="Validate and print the installation plan without changing anything",
+        help=(
+            "Validate and print the plan without changing anything. This is the "
+            "default when neither --dry-run nor --yes is given."
+        ),
     )
-    parser.add_argument(
+    mode.add_argument(
         "--yes",
         action="store_true",
-        help="Required confirmation for an actual installation",
+        help=(
+            "Perform the actual installation: stop the server, exchange the bundles, "
+            "restart, verify, and roll back on failure. Without it the run is a dry "
+            "run that changes nothing and still exits 0."
+        ),
     )
     return parser.parse_args()
 
@@ -268,24 +276,37 @@ def find_latest_artifact(*, canonical: bool) -> Path:
     # Skipping an unparseable bundle and falling back to the next-newest valid
     # one is preserved -- only the order of work changes.
     ranked: list[tuple[int, Path]] = []
+    unreadable: list[str] = []
     for app in ARTIFACTS_DIR.glob("*/oMLX.app"):
         try:
             number = bundle_identity(app).build_number
-        except (OSError, ValueError):
+        except (OSError, ValueError) as exc:
+            unreadable.append(f"{app.parent.name}: {exc}")
             continue
         ranked.append((number, app.resolve()))
 
     if not ranked:
-        raise ValueError(f"no valid oMLX artifacts found under {ARTIFACTS_DIR}")
+        message = f"no readable oMLX bundles found under {ARTIFACTS_DIR}"
+        if unreadable:
+            message += f" -- {'; '.join(unreadable)}"
+        raise ValueError(message)
 
+    reasons: list[str] = []
     for _, app in sorted(ranked, key=lambda item: item[0], reverse=True):
         try:
             validate_bundle(app, canonical=canonical)
-        except (OSError, ValueError, subprocess.SubprocessError):
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            reasons.append(f"{app.parent.name}: {exc}")
             continue
         return app
 
-    raise ValueError(f"no valid oMLX artifacts found under {ARTIFACTS_DIR}")
+    # The reason matters more than the verdict. The common cause is an artifact
+    # built before the current tip, which --allow-noncanonical resolves; a bare
+    # "no valid artifacts" left operators rebuilding when they only needed the flag.
+    message = f"no valid oMLX artifacts found under {ARTIFACTS_DIR} -- {'; '.join(reasons)}"
+    if unreadable:
+        message += f" (also unreadable: {'; '.join(unreadable)})"
+    raise ValueError(message)
 
 
 def reject_downgrade(
@@ -373,9 +394,41 @@ def _identity_dict(identity: BundleIdentity | None) -> dict[str, Any] | None:
     return asdict(identity) if identity is not None else None
 
 
+# What an actual installation does, spelled out so a dry run can present the plan
+# for reading before anything is committed to it.
+DRY_RUN_STEPS: tuple[str, ...] = (
+    "copy the artifact to a staging bundle beside the live app",
+    "re-validate the staged bundle's signature and identity",
+    "stop the running server gracefully through the control socket",
+    "atomically exchange the live and staged bundles",
+    "launch the new app and wait for the replacement server",
+    "verify /health reports the incoming build identity",
+    "retain the superseded bundle under the backup directory",
+    "roll all of the above back automatically if any step fails",
+)
+
+
+def _announce(message: str) -> None:
+    # stderr, so stdout stays a single parseable JSON document.
+    print(f"install_build: {message}", file=sys.stderr, flush=True)
+
+
 def install(args: argparse.Namespace) -> dict[str, Any]:
     if args.server_timeout <= 0 or args.app_exit_timeout <= 0:
         raise ValueError("timeouts must be positive")
+
+    # Stated up front: the mode should never be something you infer from how the
+    # run happened to end.
+    if args.yes:
+        _announce(
+            "INSTALL -- will stop the running server, replace the app bundle, "
+            "and restart it"
+        )
+    else:
+        _announce(
+            "DRY RUN -- validating only; nothing is stopped, copied, replaced, or "
+            "restarted. Pass --yes to perform the installation."
+        )
 
     canonical = not args.allow_noncanonical
     artifact = (
@@ -398,12 +451,16 @@ def install(args: argparse.Namespace) -> dict[str, Any]:
         "installed": _identity_dict(installed),
         "backup_root": str(args.backup_dir.expanduser()),
     }
-    if args.dry_run:
-        return {"ok": True, "dry_run": True, **plan}
     if not args.yes:
-        raise ValueError(
-            "installation plan validated; rerun with --yes to stop, install, and restart"
-        )
+        # A dry run is a completed run, not a refusal. This path used to raise, so
+        # main() printed "installation failed:" over a plan that had validated fine
+        # and exited 1 -- every safe invocation looked like a broken promote.
+        return {
+            "ok": True,
+            "dry_run": True,
+            **plan,
+            "would_do": list(DRY_RUN_STEPS),
+        }
 
     stage = live_app.parent / f".oMLX-install-{uuid.uuid4().hex}.app"
     had_live_app = live_app.exists()
@@ -492,18 +549,26 @@ def install(args: argparse.Namespace) -> dict[str, Any]:
 
 def main() -> int:
     args = parse_args()
+    # A dry run that cannot finish is a failed dry run, not a failed install --
+    # the wording should not imply the app was touched.
+    label = "installation" if args.yes else "dry run"
     try:
         result = install(args)
     except Exception as exc:
         if isinstance(exc, OSError) and exc.errno in {errno.EACCES, errno.EPERM}:
             print(
-                f"installation failed: no permission to update {args.live_app}: {exc}",
+                f"{label} failed: no permission to update {args.live_app}: {exc}",
                 file=sys.stderr,
             )
         else:
-            print(f"installation failed: {exc}", file=sys.stderr)
+            print(f"{label} failed: {exc}", file=sys.stderr)
         return 1
     print(json.dumps(result, indent=2, sort_keys=True))
+    _announce(
+        "dry run complete -- nothing was changed"
+        if result.get("dry_run")
+        else "installation complete"
+    )
     return 0
 
 

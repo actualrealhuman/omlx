@@ -79,12 +79,17 @@ branches, opening a pull request, or triggering hosted CI.
    artifacts default to a version/build/revision-specific directory under
    `apps/omlx-mac/build/Artifacts/`, so a different build cannot overwrite the
    previous staged bundle.
-6. Dry-run `apps/omlx-mac/Scripts/install_build.py --dry-run`, which verifies
-   the signature, version, build number, channel, revision, branch, feature
-   array, and downgrade policy. With no `--app` it selects the newest valid
-   build under `build/Artifacts` by build number, which is the usual case; pass
-   `--app /path/to/oMLX.app` only to force an older or non-default artifact.
-7. Install only with an explicit `apps/omlx-mac/Scripts/install_build.py --yes`.
+6. Dry-run first: `apps/omlx-mac/Scripts/install_build.py` with no mode flag is
+   already a dry run. It verifies the signature, version, build number, channel,
+   revision, branch, feature array, and downgrade policy, then prints the plan and
+   the steps it would take, and exits 0 having changed nothing. `--dry-run` is the
+   explicit spelling of the same thing. With no `--app` it selects the newest valid
+   build under `build/Artifacts` by build number; pass `--app /path/to/oMLX.app`
+   only to force an older or non-default artifact. If it reports no valid artifact,
+   read the reason it prints — an artifact built before the current tip needs
+   `--allow-noncanonical`, and reinstalling the build that is already installed
+   needs `--allow-downgrade`.
+7. Install with an explicit `apps/omlx-mac/Scripts/install_build.py --yes`.
    It gracefully stops the old server, atomically exchanges the app bundles,
    launches and verifies the new server identity, retains the previous bundle
    under `~/Library/Application Support/oMLX/app-backups/`, and automatically
