@@ -69,7 +69,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--app",
         type=Path,
-        help="Artifact to install (default: highest canonical build in build/Artifacts)",
+        help=(
+            "Artifact to install. Omit this to install the newest valid build "
+            "under build/Artifacts (highest build number), which is the usual "
+            "case -- pass it only to select an older or non-default artifact."
+        ),
     )
     parser.add_argument(
         "--live-app",
@@ -256,16 +260,32 @@ def validate_bundle(app: Path, *, canonical: bool) -> BundleIdentity:
 
 
 def find_latest_artifact(*, canonical: bool) -> Path:
-    candidates: list[tuple[int, Path]] = []
+    # Rank on the build number read straight from each Info.plist, then fully
+    # validate newest-first and return the first bundle that passes. Validating
+    # every candidate up front runs a deep codesign pass over each staged
+    # bundle: with half a dozen builds that measured 25s to throw five of six
+    # results away, and install() re-validates the chosen artifact regardless.
+    # Skipping an unparseable bundle and falling back to the next-newest valid
+    # one is preserved -- only the order of work changes.
+    ranked: list[tuple[int, Path]] = []
     for app in ARTIFACTS_DIR.glob("*/oMLX.app"):
         try:
-            identity = validate_bundle(app, canonical=canonical)
+            number = bundle_identity(app).build_number
+        except (OSError, ValueError):
+            continue
+        ranked.append((number, app.resolve()))
+
+    if not ranked:
+        raise ValueError(f"no valid oMLX artifacts found under {ARTIFACTS_DIR}")
+
+    for _, app in sorted(ranked, key=lambda item: item[0], reverse=True):
+        try:
+            validate_bundle(app, canonical=canonical)
         except (OSError, ValueError, subprocess.SubprocessError):
             continue
-        candidates.append((identity.build_number, app.resolve()))
-    if not candidates:
-        raise ValueError(f"no valid oMLX artifacts found under {ARTIFACTS_DIR}")
-    return max(candidates, key=lambda item: item[0])[1]
+        return app
+
+    raise ValueError(f"no valid oMLX artifacts found under {ARTIFACTS_DIR}")
 
 
 def reject_downgrade(

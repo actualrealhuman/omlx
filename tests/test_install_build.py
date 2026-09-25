@@ -148,3 +148,70 @@ def test_health_failure_swaps_the_previous_app_back(tmp_path, monkeypatch):
 
     assert len(swaps) == 2
     assert opens == [live_app, live_app]
+
+
+def _make_artifacts(root: Path, builds: list[int]) -> dict[int, Path]:
+    apps: dict[int, Path] = {}
+    for build in builds:
+        directory = root / f"0.7.0.dev2-build{build}-{'a' * 12}"
+        apps[build] = _fake_app(directory / "oMLX.app", build=build)
+    return apps
+
+
+def test_find_latest_artifact_picks_the_highest_build_number(tmp_path, monkeypatch):
+    root = tmp_path / "Artifacts"
+    apps = _make_artifacts(root, [2690, 2912, 2910])
+    monkeypatch.setattr(install_build, "ARTIFACTS_DIR", root)
+    monkeypatch.setattr(install_build, "verify_signature", lambda *_a, **_k: None)
+
+    assert install_build.find_latest_artifact(canonical=False) == apps[2912].resolve()
+
+
+def test_find_latest_artifact_validates_newest_first_and_stops(tmp_path, monkeypatch):
+    # Deep signature verification is the expensive step (a full pass over every
+    # embedded Mach-O in a ~1 GB bundle), so selection must not pay for it on
+    # artifacts it is going to discard anyway. Ranking happens on the plist.
+    root = tmp_path / "Artifacts"
+    apps = _make_artifacts(root, [2690, 2691, 2912, 2910])
+    verified: list[Path] = []
+
+    monkeypatch.setattr(install_build, "ARTIFACTS_DIR", root)
+    monkeypatch.setattr(
+        install_build,
+        "verify_signature",
+        lambda app, *_a, **_k: verified.append(Path(app)),
+    )
+
+    assert install_build.find_latest_artifact(canonical=False) == apps[2912].resolve()
+    assert verified == [apps[2912].resolve()]
+
+
+def test_find_latest_artifact_falls_back_when_the_newest_is_invalid(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "Artifacts"
+    apps = _make_artifacts(root, [2910, 2912])
+    broken = apps[2912].resolve()
+
+    def verify(app, *_a, **_k):
+        if Path(app) == broken:
+            raise ValueError(f"invalid app signature for {app}")
+
+    monkeypatch.setattr(install_build, "ARTIFACTS_DIR", root)
+    monkeypatch.setattr(install_build, "verify_signature", verify)
+
+    assert install_build.find_latest_artifact(canonical=False) == apps[2910].resolve()
+
+
+def test_find_latest_artifact_reports_when_nothing_validates(tmp_path, monkeypatch):
+    root = tmp_path / "Artifacts"
+    _make_artifacts(root, [2910, 2912])
+
+    def verify(*_a, **_k):
+        raise ValueError("invalid app signature")
+
+    monkeypatch.setattr(install_build, "ARTIFACTS_DIR", root)
+    monkeypatch.setattr(install_build, "verify_signature", verify)
+
+    with pytest.raises(ValueError, match="no valid oMLX artifacts found"):
+        install_build.find_latest_artifact(canonical=False)
