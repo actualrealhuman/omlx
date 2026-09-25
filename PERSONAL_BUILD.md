@@ -81,13 +81,46 @@ branches, opening a pull request, or triggering hosted CI.
    previous staged bundle.
 6. Dry-run `apps/omlx-mac/Scripts/install_build.py --dry-run`, which verifies
    the signature, version, build number, channel, revision, branch, feature
-   array, and downgrade policy. Pass `--app /path/to/oMLX.app` to select an
-   artifact instead of using the newest canonical one.
+   array, and downgrade policy. With no `--app` it selects the newest valid
+   build under `build/Artifacts` by build number, which is the usual case; pass
+   `--app /path/to/oMLX.app` only to force an older or non-default artifact.
 7. Install only with an explicit `apps/omlx-mac/Scripts/install_build.py --yes`.
    It gracefully stops the old server, atomically exchanges the app bundles,
    launches and verifies the new server identity, retains the previous bundle
    under `~/Library/Application Support/oMLX/app-backups/`, and automatically
    rolls back if verification fails.
+
+### Installing while oMLX serves the agent that runs the install
+
+If the private build is also the model backend for the coding agent driving the
+install, step 7 stops the server that is generating that agent's own tokens. Plan
+for this instead of discovering it mid-install.
+
+- The agent survives the stop -- it is a separate process tree -- and the installer
+  completes, self-verifies, and rolls back without it. What the agent loses is the
+  ability to *report* the outcome, because reporting requires inference from a server
+  that is currently down.
+- The outage is bounded by `--server-timeout` (default 90s). A multi-gigabyte model
+  may not finish reloading inside that window, in which case verification fails and
+  the installer reverts to the retained bundle -- a safe result, but the new build is
+  not installed, and only the log says why.
+- Prefix caches die with the server. An agent holding a long context must re-prefill
+  from scratch on its first post-restart request, which can exceed the prefill memory
+  guard and end the session outright rather than merely delaying it.
+
+So run step 7 from a normal terminal, not from inside the agent session -- the
+installer needs nothing from the agent. Start a fresh agent session afterwards to
+confirm the replacement, and verify it over HTTP as well as on disk, since a correct
+bundle that is not being served looks identical to a failed install from the UI:
+
+```sh
+curl -s http://127.0.0.1:8000/health          # build.source_revision, build_number
+curl -s http://127.0.0.1:8000/admin/static/js/<asset>.js | shasum -a 256
+```
+
+Static assets carry `ETag` and `Last-Modified` but no `Cache-Control`, so a browser
+may reuse a cached copy; hard-reload before concluding that a client-side fix did
+not land.
 
 A dated integration branch is disposable review space, never a private release
 source. For an intentional local-only Release build from another branch, the
