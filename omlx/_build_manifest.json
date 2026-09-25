@@ -8,6 +8,7 @@
     "battery-power",
     "live-context",
     "chat-history-safety",
+    "chat-storage-indexeddb",
     "chat-edit-autosize",
     "stream-recovery",
     "safe-edit-cancel",
