@@ -10,6 +10,9 @@
   derivation still deferred; phase 4b (storage meter and two-mode export/import)
   is not started. The stack is merged into the private build. Nothing published.
 - Extends: `0001-chat-history-storage-safety.md`
+- Amended 2026-09-25: the persistence path no longer requires a secure context,
+  and the backend normalises reactive component state before writing. See
+  *Plain HTTP on a trusted network* and *Reactive state and the structured clone*.
 
 ## Context
 
@@ -140,7 +143,9 @@ check already prevents actual loss.
 
 `navigator.storage.estimate()` provides the origin-wide headline number only.
 The actionable breakdown must come from app metadata so the meter never has to
-read every chat:
+read every chat — which matters twice over, because `navigator.storage` is a
+secure-context API and is simply absent on the plain-HTTP deployment, where the
+meter has to stand on app metadata alone:
 
 - `blobs.size` is a file stat and free
 - `chats.bytes` is stamped at save time
@@ -148,6 +153,11 @@ read every chat:
 Present media and text separately, with the largest items listed and individually
 deletable, and request `navigator.storage.persist()` so the browser stops
 evicting under pressure.
+
+Both `estimate()` and `persist()` hang off `navigator.storage`, so on a non-secure
+origin the panel shows usage from app metadata and omits the persistence row rather
+than erroring. `browserStorageQuota()` in the IndexedDB backend is the single
+guarded accessor; nothing else in the app touches `navigator.storage` directly.
 
 Deletion actions must show their work: what will be removed, how much it frees,
 reference counts, a backup offered beforehand, and the space actually reclaimed.
@@ -185,6 +195,60 @@ Per-device, per-browser. No sync, no accounts, no conflict resolution beyond the
 reads as correct for the product rather than as an unfinished step toward
 something larger.
 
+### Plain HTTP on a trusted network
+
+**The supported deployment is ordinary HTTP on a trusted LAN or VPN address. The
+persistence path must not require HTTPS and must not require `navigator.storage`.**
+Solving a storage failure here by moving the server to TLS is explicitly out of
+scope: the network configuration is not the bug.
+
+The browser splits these capabilities apart the moment the origin is not `https`
+and not a loopback name:
+
+| capability | secure context | plain HTTP on a LAN/VPN host |
+| --- | --- | --- |
+| `indexedDB` | present | **present** |
+| `navigator.storage` | present | **absent** |
+| `crypto.subtle` | present | **absent** |
+| `crypto.getRandomValues` | present | present |
+
+So capability detection is asked of IndexedDB itself — `globalThis.indexedDB`,
+confirmed with a real `open()` probe — and is never inferred from
+`navigator.storage` or `window.isSecureContext`. Treating either of those as a
+precondition strands a configuration in which IndexedDB works perfectly.
+`navigator.storage` is an enhancement: quota reporting and eviction resistance.
+Where it is absent the meter reports "unavailable" and the app keeps saving.
+
+`crypto.subtle` is the one genuine loss. Content addressing has no hash to work
+with, so `chat_media_store.js` reports `supported: false` and attachments are
+stored **inline in the chat record** rather than in the `blobs` store. The `0001`
+principle still holds — full originals are preserved and survive reload — but
+deduplication, digest verification on import, and the mark-and-sweep collector have
+nothing to act on. That is the price of the deployment, not a defect, and the
+browser harness reports those rows as notes rather than failures.
+
+### Reactive state and the structured clone
+
+IndexedDB writes run the structured clone algorithm, which rejects a `Proxy`
+outright with `DataCloneError`. Component state is Alpine, so a chat taken from the
+live list is a proxy at every level, and a shallow spread leaves the nested
+`messages` array proxied anyway. **The backend normalises the record to plain data
+before every write**, rather than relying on each caller to hand it something
+inert. The `localStorage` backend never needed this because `JSON.stringify` reads
+transparently through proxies; the IndexedDB swap introduced the constraint.
+
+**Deliberately not a JSON round-trip.** `JSON.parse(JSON.stringify(x))` drops
+functions and symbols, turns `Date` into a string, and throws on the circular
+references that IndexedDB itself supports. The walk unwraps plain objects and
+arrays, passes `Date`, `Blob`, and typed arrays through unchanged, preserves `Map`
+and `Set`, survives cycles, and leaves anything genuinely uncloneable in place so
+the store still rejects it and the caller reports it. The backend must never
+silently discard data in order to make a write succeed.
+
+A clone failure is classified as `serialization`, not `unavailable`. The earlier
+mapping told the user their browser storage was gone because one field had the
+wrong shape, and paused persistence across every chat.
+
 ## Consequences
 
 - Attachments survive reload, and cross-model regenerate becomes possible.
@@ -199,6 +263,9 @@ something larger.
 - A garbage collector becomes a permanent subsystem with its own failure modes.
 - Existing stripped attachments are unrecoverable. Migration preserves data from
   install forward and resurrects nothing retroactively.
+- On a plain-HTTP origin there is no content addressing: attachments ride inline
+  in the chat record, so a repeated image costs its full size every time and the
+  collector has no blobs to sweep. The meter's capacity guidance has to say so.
 
 ## Migration
 
@@ -262,18 +329,33 @@ request for elevated storage and prompting for it on first load is presumptuous
 for a quick-chat feature. Offer it in the storage panel with a plain explanation
 of what it prevents, and show its current state. Phase 3 does not call it.
 
+**Does the storage redesign require HTTPS?** No, and it must not. The intended
+deployment is ordinary HTTP on a trusted local network, where IndexedDB works but
+`navigator.storage` and `crypto.subtle` are absent. A browser reported
+"Browser storage is unavailable" on such an origin after the IndexedDB swap, and
+the tempting fix — gate the feature on a secure context, or on
+`navigator.storage` being present — would have made the deployment unsupported
+rather than made the code correct. Capability is asked of IndexedDB directly;
+everything else degrades. See *Plain HTTP on a trusted network*.
+
 ## References
 
 - `0001-chat-history-storage-safety.md`
 - `omlx/admin/static/js/chat_record_store.js` — localStorage backend
 - `omlx/admin/static/js/chat_indexeddb_store.js` — IndexedDB backend
+- `omlx/admin/static/js/chat_media_store.js` — content addressing; degrades to
+  inline attachments when `crypto.subtle` is unavailable
 - `omlx/admin/static/js/chat_history_migration.js` — legacy and backend migration
 - `tests/chat_history_storage.test.cjs`
 - `tests/chat_record_store.test.cjs`
 - `tests/chat_indexeddb_store.test.cjs`
+- `tests/chat_media_store.test.cjs`
 - `tests/chat_history_migration.test.cjs`
 - `tests/chat_backend_migration.test.cjs`
+- `tests/chat_app_integration.test.cjs` — extracts and runs the real `chatApp()`
+  object from the template, including a simulated plain-HTTP origin
 - `tests/test_chat_ui_overhaul.py`
+- `tests/browser/run.sh` — `LAN=1` serves the non-secure origin
 
 ## Testing caveat
 
@@ -288,7 +370,20 @@ A real-browser harness now lives at `tests/browser/` (`bash tests/browser/run.sh
 static server, no oMLX server, no model) and covers the semantics the fake can only
 approximate: upgrade blocking, real blob storage, persistence across a page reload,
 attachment survival, the mark-and-sweep collector, and the compare-and-set conflict
-path. It reports 24/26 with zero failures; the two non-passing rows are an
-informational notice and the manual two-tab conflict card, which still needs a human
-driving two tabs. For IndexedDB semantics in this codebase, trust the browser harness
-over the node number.
+path. It reports 31 checks passing with zero failures on a secure origin.
+
+`LAN=1 bash tests/browser/run.sh` binds every interface and opens the page over the
+machine's LAN address, so the same suite runs against a **non-secure** origin —
+`navigator.storage` and `crypto.subtle` absent, IndexedDB present. There it reports
+27 passing with zero failures; the rows that depend on those two APIs report as
+notes instead, because the honest result is "not applicable here", not "broken".
+Loopback cannot detect anything secure-context-gated, so before this option existed
+the harness was structurally incapable of catching the bug described above. For
+IndexedDB semantics in this codebase, trust the browser harness over the node number.
+
+**A fake must not be more forgiving than the thing it stands in for.** The node
+suites stayed green straight through the `DataCloneError` bug: `fake_indexeddb.cjs`
+fell back to JSON whenever a write failed, quietly accepting values a real store
+rejects — proxies among them. It now runs `structuredClone` strictly and lets the
+error surface. A stand-in that swallows an error to stay convenient has stopped
+testing the contract, and a green suite then actively misleads.
