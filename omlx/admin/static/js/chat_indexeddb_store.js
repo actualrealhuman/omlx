@@ -93,6 +93,98 @@
         }
     }
 
+    // Alpine keeps the chat list in deeply reactive Proxy trees, so a record read
+    // out of component state is a Proxy, sometimes nested. IndexedDB writes go
+    // through the structured clone algorithm, which throws DataCloneError on a
+    // Proxy, and the caller then reports the browser as having no storage when the
+    // real problem is one object's shape. The tree is walked and Proxies are
+    // replaced by plain copies of their own enumerable properties.
+    //
+    // Deliberately not a JSON round-trip: that would drop functions and symbols and
+    // turn every Date into a string, so a record could come back subtly different
+    // from what was put, and it would reject the circular references IndexedDB
+    // stores without complaint. Anything genuinely uncloneable is left in place so
+    // the store rejects it and the caller reports it — the backend must not quietly
+    // discard data it cannot take.
+    //
+    // Cycles survive because each output is registered before its children are
+    // filled, so a self-referencing record keeps its shape.
+    const MAX_RECORD_DEPTH = 100;
+    // Host objects the structured clone algorithm accepts as they are. A Proxy in
+    // front of one reports the wrapped tag, so this covers reactive dates too.
+    const CLONEABLE_TAGS = new Set([
+        '[object Date]', '[object RegExp]', '[object ArrayBuffer]',
+        '[object DataView]', '[object Blob]', '[object File]',
+        '[object ImageData]', '[object DOMException]', '[object Error]',
+    ]);
+
+    const TYPED_ARRAY_TAG = /^\[object [A-Za-z0-9]*Array\]$/;
+
+    function toPlainStructure(value, seen, depth) {
+        if (value === null || typeof value !== 'object') return value;
+        const tag = Object.prototype.toString.call(value);
+        if (CLONEABLE_TAGS.has(tag)) return value;
+        // Typed arrays and their proxies clone directly; plain arrays do not.
+        if (tag !== '[object Array]' && TYPED_ARRAY_TAG.test(tag)) return value;
+        if (depth > MAX_RECORD_DEPTH) {
+            throw new RangeError('chat record nesting exceeds ' + MAX_RECORD_DEPTH + ' levels');
+        }
+        if (seen.has(value)) return seen.get(value);
+
+        if (tag === '[object Map]') {
+            const map = new Map();
+            seen.set(value, map);
+            try {
+                for (const entry of value) {
+                    map.set(toPlainStructure(entry[0], seen, depth + 1), toPlainStructure(entry[1], seen, depth + 1));
+                }
+            } finally { seen.delete(value); }
+            return map;
+        }
+        if (tag === '[object Set]') {
+            const set = new Set();
+            seen.set(value, set);
+            try {
+                for (const entry of value) set.add(toPlainStructure(entry, seen, depth + 1));
+            } finally { seen.delete(value); }
+            return set;
+        }
+
+        const out = Array.isArray(value) ? [] : {};
+        seen.set(value, out);
+        try {
+            if (Array.isArray(value)) {
+                for (let i = 0; i < value.length; i += 1) out[i] = toPlainStructure(value[i], seen, depth + 1);
+                return out;
+            }
+            // A plain object, or a Proxy standing in for one.
+            for (const key of Object.keys(value)) out[key] = toPlainStructure(value[key], seen, depth + 1);
+            return out;
+        } finally {
+            seen.delete(value);
+        }
+    }
+
+    function toStorable(value) {
+        return toPlainStructure(value, new Map(), 0);
+    }
+
+    // navigator.storage is a secure-context-only API: over plain HTTP on a LAN or
+    // Tailscale hostname Chrome leaves it undefined even though IndexedDB works
+    // there. It is an enhancement — quota reporting and eviction resistance — and
+    // never a precondition for saving chats, so every access goes through here and
+    // reports "absent" rather than throwing. persist() is deliberately never
+    // called: the ADR keeps that request panel-only.
+    function storageManager() {
+        try {
+            const nav = typeof navigator !== 'undefined' ? navigator : null;
+            const sm = nav && nav.storage;
+            return sm && typeof sm.estimate === 'function' ? sm : null;
+        } catch {
+            return null;
+        }
+    }
+
     function createIndexedDBRecordStore(options = {}) {
         const idb = options.indexedDB;
         if (!idb) throw new TypeError('createIndexedDBRecordStore requires indexedDB');
@@ -147,8 +239,15 @@
         }
 
         function classify(error) {
-            const quota = error?.name === 'QuotaExceededError'
-                || error?.name === 'NS_ERROR_DOM_QUOTA_REACHED'
+            const name = error?.name || '';
+            // A value that cannot be cloned is a shape problem in the record, not a
+            // dead store. Labelling it 'unavailable' tells the user their browser
+            // storage is gone when the truth is that one field was unserializable.
+            if (name === 'DataCloneError' || /could not be cloned/i.test(String(error?.message || ''))) {
+                return 'serialization';
+            }
+            const quota = name === 'QuotaExceededError'
+                || name === 'NS_ERROR_DOM_QUOTA_REACHED'
                 || /quota/i.test(String(error?.message || ''));
             return quota ? 'quota' : 'unavailable';
         }
@@ -219,7 +318,18 @@
                     return { ok: false, kind: classify(error), error };
                 }
             }
-            const payload = { ...record, messages: offloaded.messages };
+            // Rebuild the candidate as plain data. A record taken from component
+            // state is an Alpine reactive tree, and even after the spread above the
+            // nested messages array is still a Proxy — which the structured clone
+            // inside IDBObjectStore.put() refuses outright with DataCloneError.
+            // Doing it here keeps the constraint in the backend instead of in
+            // every caller.
+            let payload;
+            try {
+                payload = toStorable({ ...record, messages: offloaded.messages });
+            } catch (error) {
+                return { ok: false, kind: 'serialization', error };
+            }
             const newBlobs = Array.isArray(offloaded.blobs) ? offloaded.blobs : [];
 
             let tx;
@@ -398,7 +508,8 @@
                 const store = tx.objectStore(META);
                 const row = await reqToPromise(store.get('app'));
                 const base = row && row.value && typeof row.value === 'object' ? row.value : {};
-                store.put({ key: 'app', value: { ...base, ...patch, schemaVersion: DB_VERSION } });
+                const merged = toStorable({ ...base, ...patch, schemaVersion: DB_VERSION });
+                store.put({ key: 'app', value: merged });
                 await txDone(tx);
                 return { ok: true };
             } catch (error) {
@@ -565,14 +676,24 @@
         };
     }
 
-    // Cheap capability probe. Private browsing and some configurations reject
-    // IndexedDB outright, and the caller must fall back rather than assume.
-    async function isIndexedDBAvailable(indexedDB) {
-        if (!indexedDB || typeof indexedDB.open !== 'function') return false;
+    // Cheap capability probe, asked of IndexedDB itself. Private browsing and some
+    // configurations reject IndexedDB outright, and the caller must fall back rather
+    // than assume.
+    //
+    // Deliberately independent of `navigator.storage` and of
+    // `window.isSecureContext`: Chrome leaves both absent/false on a plain-HTTP
+    // LAN or Tailscale origin while IndexedDB works perfectly there. Consulting
+    // them here would report the store as unavailable on a configuration that is
+    // fully supported, so the probe opens a database and finds out for real.
+    async function isIndexedDBAvailable(idb) {
+        const api = idb
+            || (typeof globalThis !== 'undefined' ? globalThis.indexedDB : undefined)
+            || (typeof self !== 'undefined' ? self.indexedDB : undefined);
+        if (!api || typeof api.open !== 'function') return false;
         const probe = '__omlx_capability_probe__';
         try {
             const db = await new Promise((resolve, reject) => {
-                const request = indexedDB.open(probe, 1);
+                const request = api.open(probe, 1);
                 request.onupgradeneeded = () => {
                     if (!request.result.objectStoreNames.contains('probe')) {
                         request.result.createObjectStore('probe');
@@ -583,20 +704,48 @@
                 request.onblocked = () => reject(new Error('probe blocked'));
             });
             db.close();
-            try { indexedDB.deleteDatabase(probe); } catch {}
+            try { api.deleteDatabase(probe); } catch {}
             return true;
         } catch {
-            try { indexedDB.deleteDatabase(probe); } catch {}
+            try { api.deleteDatabase(probe); } catch {}
             return false;
+        }
+    }
+
+    // Origin-wide quota, as an enhancement. Reports `available: false` — never
+    // throws — when the browser withholds navigator.storage, which is the normal
+    // state over plain HTTP. Chat saving does not depend on this.
+    async function browserQuota() {
+        const sm = storageManager();
+        if (!sm) {
+            return { ok: true, available: false, quota: null, usage: null, persisted: null };
+        }
+        try {
+            const est = await sm.estimate();
+            let persisted = null;
+            if (typeof sm.persisted === 'function') {
+                try { persisted = await sm.persisted(); } catch {}
+            }
+            return {
+                ok: true,
+                available: true,
+                quota: est?.quota ?? null,
+                usage: est?.usage ?? null,
+                persisted,
+            };
+        } catch (error) {
+            return { ok: false, available: false, quota: null, usage: null, persisted: null, error };
         }
     }
 
     root.createIndexedDBRecordStore = createIndexedDBRecordStore;
     root.isIndexedDBAvailable = isIndexedDBAvailable;
+    root.browserStorageQuota = browserQuota;
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = {
             createIndexedDBRecordStore,
             isIndexedDBAvailable,
+            browserStorageQuota: browserQuota,
             DB_NAME,
             DB_VERSION,
         };

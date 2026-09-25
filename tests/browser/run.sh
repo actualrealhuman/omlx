@@ -26,7 +26,15 @@ if ! SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" 2>/dev/null && pwd); then
     exit 1
 fi
 ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
-HOST=127.0.0.1
+# 127.0.0.1 is a secure context in every browser, so on its own this harness can
+# never exercise the plain-HTTP configuration the app actually ships on. Run with
+# LAN=1 to bind every interface and open the page over the machine's LAN address:
+# navigator.storage and crypto.subtle then disappear while IndexedDB keeps working,
+# which is the LAN/Tailscale case. HOST=<addr> overrides the bind address directly.
+HOST=${HOST:-127.0.0.1}
+if [ "${LAN:-0}" = "1" ]; then
+    HOST=0.0.0.0
+fi
 START_PORT=${PORT:-8765}
 SCAN=50
 
@@ -58,7 +66,33 @@ if ! PORT=$(free_port "$START_PORT"); then
     exit 1
 fi
 
-URL="http://${HOST}:${PORT}/tests/browser/index.html"
+# A wildcard bind is addressed through the machine's own LAN address, so the
+# browser actually loads a non-secure origin rather than a loopback one.
+lan_addr() {
+    if command -v ipconfig >/dev/null 2>&1; then
+        ipconfig getifaddr en0 2>/dev/null && return 0
+    fi
+    if command -v hostname >/dev/null 2>&1; then
+        hostname -I 2>/dev/null | cut -d' ' -f1
+    fi
+}
+
+DISPLAY_HOST=$HOST
+if [ "$HOST" = "0.0.0.0" ]; then
+    DISPLAY_HOST=$(lan_addr)
+    if [ -z "$DISPLAY_HOST" ]; then
+        printf 'LAN=1 was requested but no LAN address could be determined; falling back to 127.0.0.1,\n' >&2
+        printf 'which is a secure context and therefore does not test the plain-HTTP case.\n' >&2
+        DISPLAY_HOST=127.0.0.1
+    fi
+fi
+
+# Readiness is probed on loopback: a wildcard bind is always reachable there,
+# whereas the LAN address may be filtered by a firewall on this host.
+PROBE_HOST=$HOST
+if [ "$HOST" = "0.0.0.0" ]; then PROBE_HOST=127.0.0.1; fi
+
+URL="http://${DISPLAY_HOST}:${PORT}/tests/browser/index.html"
 LOG="${TMPDIR:-/tmp}/omlx-chat-storage-harness-${PORT}.log"
 
 python3 -m http.server "$PORT" --bind "$HOST" --directory "$ROOT" >"$LOG" 2>&1 &
@@ -73,7 +107,7 @@ trap cleanup INT TERM EXIT
 
 # Do not open a browser against a socket that is not listening yet.
 i=0
-until python3 - "$HOST" "$PORT" <<'PY'
+until python3 - "$PROBE_HOST" "$PORT" <<'PY'
 import socket, sys
 s = socket.socket()
 s.settimeout(0.3)
@@ -100,10 +134,18 @@ do
 done
 
 printf '\n  oMLX chat storage — real IndexedDB harness\n\n'
-printf '  origin   %s\n' "http://${HOST}:${PORT}"
+printf '  origin   %s\n' "http://${DISPLAY_HOST}:${PORT}"
 printf '  page     %s\n' "$URL"
 printf '  root     %s\n' "$ROOT"
 printf '  log      %s\n\n' "$LOG"
+if [ "$DISPLAY_HOST" = "127.0.0.1" ] || [ "$DISPLAY_HOST" = "localhost" ]; then
+    printf '  This origin is a secure context: navigator.storage and crypto.subtle are\n'
+    printf '  present. Run LAN=1 to test the plain-HTTP case, where both are absent.\n\n'
+else
+    printf '  This origin is NOT a secure context: navigator.storage and crypto.subtle are\n'
+    printf '  absent while IndexedDB still works. That is the LAN / Tailscale case, and it\n'
+    printf '  is a supported deployment — the quota and persistence rows report as notes.\n\n'
+fi
 printf '  Leave this running while you test. Press Ctrl-C to stop the server.\n\n'
 
 if command -v open >/dev/null 2>&1; then

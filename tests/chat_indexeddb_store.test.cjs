@@ -10,6 +10,7 @@ const assert = require('node:assert/strict');
 const {
     createIndexedDBRecordStore,
     isIndexedDBAvailable,
+    browserStorageQuota,
 } = require('../omlx/admin/static/js/chat_indexeddb_store.js');
 const { FakeIndexedDB } = require('./helpers/fake_indexeddb.cjs');
 
@@ -279,4 +280,196 @@ test('close releases the connection and reopen works', async () => {
     await store.close();
     await store.open();
     assert.equal((await store.get('a')).record.title, 'Chat a');
+});
+
+// ---- reactive state ----
+
+// Alpine wraps component state in deeply reactive Proxies, so a chat taken from
+// the live list is a Proxy at every level. IndexedDB writes run the structured
+// clone algorithm, which rejects a Proxy outright with DataCloneError, and the
+// backend used to surface that as "storage unavailable" — a browser-wide claim
+// made because of one field's shape. The backend now normalises before writing.
+//
+// Faithful to Alpine in the two ways that matter here: proxies are cached per
+// target, so a cycle reads back as the same proxy each time; and only plain
+// objects and arrays are wrapped, leaving Date and friends untouched.
+function reactiveTree(value, cache) {
+    const seen = cache || new WeakMap();
+    if (value === null || typeof value !== 'object') return value;
+    const tag = Object.prototype.toString.call(value);
+    if (tag !== '[object Object]' && !Array.isArray(value)) return value;
+    if (seen.has(value)) return seen.get(value);
+    const copy = Array.isArray(value) ? value.slice() : Object.assign({}, value);
+    const proxy = new Proxy(copy, {
+        get(target, key, receiver) {
+            return reactiveTree(Reflect.get(target, key, receiver), seen);
+        },
+    });
+    seen.set(value, proxy);
+    return proxy;
+}
+
+test('a reactive Proxy record from component state is writable', async () => {
+    const { store } = await makeStore();
+    const rec = reactiveTree(chat('reactive', {
+        messages: [
+            { role: 'user', content: 'string content' },
+            { role: 'assistant', content: [{ type: 'text', text: 'parted content' }] },
+        ],
+        modelSettingsByModel: { 'm1': { temperature: 0.3 } },
+    }));
+
+    const put = await store.put(rec);
+    assert.equal(put.ok, true, `put must not fail on reactive state: ${put.kind} ${put.error}`);
+
+    const got = await store.get('reactive');
+    assert.equal(got.ok, true);
+    assert.equal(got.record.messages[0].content, 'string content');
+    assert.deepEqual(got.record.messages[1].content, [{ type: 'text', text: 'parted content' }]);
+    assert.equal(got.record.modelSettingsByModel.m1.temperature, 0.3);
+});
+
+test('a reactive Proxy record with a nested Proxy messages array is writable', async () => {
+    const { store } = await makeStore();
+    // The exact shape that reached the store before the fix: a plain top level
+    // with a Proxy still wrapped around the nested array.
+    const messages = reactiveTree([{ role: 'user', content: 'nested' }]);
+    const put = await store.put({ id: 'nested', messages });
+    assert.equal(put.ok, true, `nested reactive write failed: ${put.kind} ${put.error}`);
+    assert.equal((await store.get('nested')).record.messages[0].content, 'nested');
+});
+
+test('a record holding a function reports serialization, not unavailable', async () => {
+    const { store } = await makeStore();
+    const rec = chat('fn');
+    rec.unclonable = function nope() { return 'nope'; };
+    const put = await store.put(rec);
+    assert.equal(put.ok, false);
+    assert.equal(put.kind, 'serialization',
+        'an uncloneable field must not be reported as the browser having no storage');
+});
+
+test('a circular record still round-trips, as IndexedDB allows it', async () => {
+    const { store } = await makeStore();
+    const rec = chat('loop');
+    rec.self = rec;
+    const put = await store.put(rec);
+    assert.equal(put.ok, true, `circular record rejected: ${put.kind} ${put.error}`);
+    const got = await store.get('loop');
+    assert.equal(got.ok, true);
+    assert.equal(got.record.self.id, 'loop');
+});
+
+test('a reactive circular record round-trips', async () => {
+    const { store } = await makeStore();
+    const plain = chat('rxloop');
+    plain.self = plain;
+    const rec = reactiveTree(plain);
+    const put = await store.put(rec);
+    assert.equal(put.ok, true, `reactive circular record rejected: ${put.kind} ${put.error}`);
+    assert.equal((await store.get('rxloop')).record.self.id, 'rxloop');
+});
+
+test('a date reached through reactive state is stored as a date', async () => {
+    const { store } = await makeStore();
+    const when = new Date('2026-03-04T05:06:07.000Z');
+    // Alpine does not proxy Date, so the date arrives nested inside a Proxy.
+    const put = await store.put(reactiveTree({ id: 'rxdate', at: when, messages: [] }));
+    assert.equal(put.ok, true, `put failed: ${put.kind} ${put.error}`);
+    const got = await store.get('rxdate');
+    assert.ok(got.record.at instanceof Date, 'the Date must survive as a Date, not a string');
+    assert.equal(got.record.at.toISOString(), when.toISOString());
+});
+
+test('a reactive record is writable through the compare-and-set path too', async () => {
+    const { store } = await makeStore();
+    await store.put(chat('a', { title: 'v1' }));
+    const put = await store.put(reactiveTree(chat('a', { title: 'v2' })), { expectRev: 1 });
+    assert.equal(put.ok, true);
+    assert.equal(put.rev, 2);
+    assert.equal((await store.get('a')).record.title, 'v2');
+});
+
+// ---- capability detection ----
+
+test('isIndexedDBAvailable falls back to globalThis.indexedDB', async () => {
+    const indexedDB = new FakeIndexedDB();
+    globalThis.indexedDB = indexedDB;
+    try {
+        assert.equal(await isIndexedDBAvailable(), true);
+    } finally {
+        delete globalThis.indexedDB;
+    }
+});
+
+test('isIndexedDBAvailable ignores navigator.storage and reports IndexedDB on its own', async () => {
+    // A plain-HTTP LAN origin looks like this: no navigator.storage, no secure
+    // context, working IndexedDB. The probe must answer from IndexedDB alone.
+    const hadNavigator = Object.hasOwn(globalThis, 'navigator');
+    const savedNavigator = globalThis.navigator;
+    try {
+        if (hadNavigator) {
+            try { delete globalThis.navigator; } catch { globalThis.navigator = undefined; }
+        }
+        assert.equal(globalThis.navigator && globalThis.navigator.storage, undefined);
+        const indexedDB = new FakeIndexedDB();
+        assert.equal(await isIndexedDBAvailable(indexedDB), true);
+    } finally {
+        if (hadNavigator) globalThis.navigator = savedNavigator;
+    }
+});
+
+test('browserStorageQuota degrades instead of throwing when navigator.storage is absent', async () => {
+    const hadNavigator = Object.hasOwn(globalThis, 'navigator');
+    const savedNavigator = globalThis.navigator;
+    try {
+        if (hadNavigator) {
+            try { delete globalThis.navigator; } catch { globalThis.navigator = undefined; }
+        }
+        const q = await browserStorageQuota();
+        assert.equal(q.ok, true);
+        assert.equal(q.available, false);
+        assert.equal(q.quota, null);
+        assert.equal(q.usage, null);
+        assert.equal(q.persisted, null);
+    } finally {
+        if (hadNavigator) globalThis.navigator = savedNavigator;
+    }
+});
+
+test('browserStorageQuota reports the estimate when navigator.storage is present', async () => {
+    const savedNavigator = globalThis.navigator;
+    const fake = {
+        estimate: async () => ({ quota: 12345, usage: 678 }),
+        persisted: async () => true,
+    };
+    try {
+        Object.defineProperty(globalThis, 'navigator', { value: { storage: fake }, configurable: true, writable: true });
+        const q = await browserStorageQuota();
+        assert.equal(q.ok, true);
+        assert.equal(q.available, true);
+        assert.equal(q.quota, 12345);
+        assert.equal(q.usage, 678);
+        assert.equal(q.persisted, true);
+    } finally {
+        if (savedNavigator === undefined) delete globalThis.navigator;
+        else Object.defineProperty(globalThis, 'navigator', { value: savedNavigator, configurable: true, writable: true });
+    }
+});
+
+test('browserStorageQuota reports a failed estimate without throwing', async () => {
+    const savedNavigator = globalThis.navigator;
+    try {
+        Object.defineProperty(globalThis, 'navigator', {
+            value: { storage: { estimate: async () => { throw new Error('blocked'); } } },
+            configurable: true,
+            writable: true,
+        });
+        const q = await browserStorageQuota();
+        assert.equal(q.ok, false);
+        assert.equal(q.available, false);
+    } finally {
+        if (savedNavigator === undefined) delete globalThis.navigator;
+        else Object.defineProperty(globalThis, 'navigator', { value: savedNavigator, configurable: true, writable: true });
+    }
 });

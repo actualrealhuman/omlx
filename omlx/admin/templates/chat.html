@@ -4727,14 +4727,21 @@
     // capacity and its atomic compare-and-set; when it is unavailable — private
     // browsing, disabled storage, a blocked upgrade — the app stays on the
     // localStorage record store instead of failing to start.
+    //
+    // Capability is asked of IndexedDB itself. navigator.storage and
+    // isSecureContext are not consulted: over plain HTTP on a LAN or Tailscale
+    // hostname Chrome reports both as absent/false while IndexedDB works, and
+    // treating either as a precondition would needlessly strand that setup.
     async initChatStorage() {
         if (this._chatStorageReady) return this._chatRecordStore;
 
         const local = this.localRecordStore();
+        const idbApi = (typeof globalThis !== 'undefined' && globalThis.indexedDB)
+            || (typeof window !== 'undefined' ? window.indexedDB : undefined);
 
         let available = false;
         try {
-            available = await isIndexedDBAvailable(window.indexedDB);
+            available = await isIndexedDBAvailable(idbApi);
         } catch (error) {
             console.warn('IndexedDB capability probe failed:', error);
             available = false;
@@ -4747,7 +4754,7 @@
             return this._chatRecordStore;
         }
 
-        const idb = createIndexedDBRecordStore({ indexedDB: window.indexedDB });
+        const idb = createIndexedDBRecordStore({ indexedDB: idbApi });
         try {
             await idb.open();
         } catch (error) {

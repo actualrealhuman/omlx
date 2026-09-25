@@ -413,6 +413,18 @@
     render();
   }
 
+  // A capability the browser may withhold by design. navigator.storage is not
+  // exposed at all on a plain-HTTP origin, and crypto.subtle likewise. Their
+  // absence is reported, never failed: they are enhancements, and the checks that
+  // matter have already proven chat storage works without them.
+  function checkOptional(name, available, fn, absentDetail) {
+    if (!available) {
+      note(name, absentDetail || 'capability absent on this origin — optional, chat storage unaffected');
+      return Promise.resolve();
+    }
+    return check(name, fn);
+  }
+
   function browserName() {
     var ua = navigator.userAgent;
     var m = ua.match(/(Firefox|Edg|OPR|Chrome|Safari)\/([\d.]+)/g) || [];
@@ -1005,15 +1017,26 @@
         .then(function (stored) {
           assert(stored && stored.messages[0].content === token, 'seed not readable before reload');
           var ref = stored.messages[1].content[1];
-          assert(ref && ref.image_url && ref.image_url.digest,
-            'the inline image was not offloaded to a digest reference before the reload');
-          assert(JSON.stringify(stored).indexOf(imgB64) === -1,
-            'raw base64 is still inside the stored record — offload did not happen');
+          var addressed = !!(ref && ref.image_url && ref.image_url.digest);
+          if (addressed) {
+            assert(JSON.stringify(stored).indexOf(imgB64) === -1,
+              'raw base64 is still inside the stored record — offload did not happen');
+          } else {
+            // crypto.subtle is a secure-context-only API. On a plain-HTTP LAN or
+            // Tailscale origin there is nothing to digest the bytes with, so the
+            // attachment rides inline in the record instead. Losing it would be the
+            // real failure; not deduplicating it is not.
+            assert(JSON.stringify(stored).indexOf(imgB64) !== -1,
+              'without content addressing the attachment must be held inline, and it is not');
+            note('14 · content addressing unavailable on this origin',
+              'crypto.subtle is absent (insecure context), so the attachment is stored inline in the '
+              + 'record rather than offloaded to the blobs store. It still has to survive the reload.');
+          }
           addRow({ group: currentGroup, name: '14 · persistence across reload — seeded ' + id
             + ' at rev ' + stored.rev + ', reloading the page…', status: 'run', detail: token });
           saveResults();
           saveJson(RELOAD_KEY, { id: id, token: token, rev: stored.rev, at: Date.now(),
-            imgB64: imgB64, digest: ref.image_url.digest });
+            imgB64: imgB64, digest: addressed ? ref.image_url.digest : null });
           render();
           // tag the heartbeat so the returning page runs the suite instead of
           // concluding a second tab owns the databases
@@ -1074,17 +1097,28 @@
             assert(part.image_url.url === 'data:image/png;base64,' + pending.imgB64,
               'ATTACHMENT BYTES LOST OR ALTERED ACROSS RELOAD — read '
               + JSON.stringify(String(part.image_url.url).slice(0, 40)));
-            assert(part.image_url.digest === pending.digest, 'digest changed across reload');
+            if (pending.digest) {
+              assert(part.image_url.digest === pending.digest, 'digest changed across reload');
+            }
             // The resolved view deliberately carries the bytes back inline — that is
             // what makes the attachment render. The thing that must not hold them is
             // the stored row, so check the raw record rather than this one.
             return rawGet(TEST_DB, 'chats', pending.id);
           }).then(function (raw) {
-            assert(raw && JSON.stringify(raw).indexOf(pending.imgB64) === -1,
-              'the stored record still carries inline base64 — offload did not happen');
-            return rawGet(TEST_DB, 'blobs', pending.digest);
+            if (pending.digest) {
+              assert(raw && JSON.stringify(raw).indexOf(pending.imgB64) === -1,
+                'the stored record still carries inline base64 — offload did not happen');
+              return rawGet(TEST_DB, 'blobs', pending.digest);
+            }
+            // No digest on this origin, so the bytes belong in the record itself.
+            assert(raw && JSON.stringify(raw).indexOf(pending.imgB64) !== -1,
+              'without content addressing the attachment must be held inline in the stored row');
+            return null;
           }).then(function (blob) {
-            assert(blob, 'no blob under that digest in the blobs store');
+            if (!blob) {
+              return 'image held inline in the record after a real reload · bytes identical · '
+                + 'no blobs store on this origin (crypto.subtle absent)';
+            }
             assert(blob.data === pending.imgB64, 'the stored blob bytes differ from what was written');
             assert(blob.digest === pending.digest, 'blob digest mismatch');
             return 'image resolved from the blobs store after a real reload · digest '
@@ -1094,32 +1128,198 @@
       })
       .then(function () {
         localStorage.removeItem(RELOAD_KEY);
+        return reactiveChecks();
+      })
+      .then(function () {
         return tailChecks();
       });
   }
 
-  function tailChecks() {
-    return check('15 · navigator.storage.persisted() reads without throwing (not requested)', function () {
-      if (!navigator.storage || typeof navigator.storage.persisted !== 'function') {
-        throw new Error('navigator.storage.persisted is unavailable in this browser');
-      }
-      return navigator.storage.persisted().then(function (p) {
-        assert(typeof p === 'boolean', 'persisted() returned ' + typeof p);
-        return 'persisted = ' + p + ' (this harness never calls persist(); that stays a panel decision)';
+  // ---- reactive component state ----
+  // The app keeps chats in Alpine reactive Proxies. IndexedDB writes go through
+  // the structured clone algorithm, which rejects a Proxy outright, so a record
+  // taken from live component state used to fail and the UI blamed the browser's
+  // storage. This group writes reactive state the way the app actually does.
+  //
+  // Mirrors Alpine: proxies are cached per target so a cycle reads back as the
+  // same proxy, and only plain objects and arrays are wrapped.
+  function reactiveTree(value, cache) {
+    var seen = cache || new WeakMap();
+    if (value === null || typeof value !== 'object') return value;
+    var tag = Object.prototype.toString.call(value);
+    if (tag !== '[object Object]' && !Array.isArray(value)) return value;
+    if (seen.has(value)) return seen.get(value);
+    var copy = Array.isArray(value) ? value.slice() : Object.assign({}, value);
+    var proxy = new Proxy(copy, {
+      get: function (target, key, receiver) {
+        return reactiveTree(Reflect.get(target, key, receiver), seen);
+      },
+    });
+    seen.set(value, proxy);
+    return proxy;
+  }
+
+  function reactiveChecks() {
+    group('Reactive component state (Alpine Proxies)');
+
+    var PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+    return check('R1 · a reactive Proxy record is writable', function () {
+      var rec = reactiveTree({
+        id: 'rx-' + Date.now(), title: 'reactive', model: 'm',
+        createdAt: 1700, updatedAt: Date.now(),
+        messages: [
+          { role: 'user', content: 'string content' },
+          { role: 'assistant', content: [{ type: 'text', text: 'parted content' }] },
+        ],
+      });
+      var id = rec.id;
+      return mainStore().put(rec).then(function (r) {
+        assert(r.ok === true, 'put on reactive state failed: ' + r.kind + ' ' + errText(r.error));
+        return mainStore().get(id);
+      }).then(function (g) {
+        assert(g.ok && g.record, 'read-back failed');
+        assert(g.record.messages[0].content === 'string content', 'string content lost');
+        assert(g.record.messages[1].content[0].text === 'parted content', 'parted content lost');
+        return 'reactive record stored and read back at rev ' + g.record.rev;
       });
     })
 
     .then(function () {
-      return check('16 · navigator.storage.estimate() returns plausible quota / usage', function () {
-        return navigator.storage.estimate().then(function (e) {
-          assert(typeof e.quota === 'number' && e.quota > 0, 'quota is ' + e.quota);
-          assert(typeof e.usage === 'number' && e.usage >= 0, 'usage is ' + e.usage);
-          assert(e.usage <= e.quota, 'usage ' + e.usage + ' exceeds quota ' + e.quota);
-          updateEstimate(e);
-          return 'quota ' + fmtBytes(e.quota) + ' · usage ' + fmtBytes(e.usage)
-            + ' · ' + (e.usage / e.quota * 100).toFixed(4) + '% used';
+      return check('R2 · a nested Proxy messages array is writable', function () {
+        var id = 'rx-nested-' + Date.now();
+        return mainStore().put({ id: id, messages: reactiveTree([{ role: 'user', content: 'nested' }]) })
+          .then(function (r) {
+            assert(r.ok === true, 'nested reactive put failed: ' + r.kind + ' ' + errText(r.error));
+            return mainStore().get(id);
+          })
+          .then(function (g) {
+            assert(g.record.messages[0].content === 'nested', 'nested content lost');
+            return 'nested reactive array stored';
+          });
+      });
+    })
+
+    .then(function () {
+      return check('R3 · reactive state carrying an inline attachment is writable', function () {
+        var id = 'rx-attach-' + Date.now();
+        var rec = reactiveTree({
+          id: id, title: 'rx attach', model: 'm', createdAt: 1700, updatedAt: Date.now(),
+          messages: [{ role: 'user', content: [
+            { type: 'text', text: 'look' },
+            { type: 'image_url', image_url: { url: PNG } },
+          ] }],
+        });
+        return mainStore().put(rec).then(function (r) {
+          assert(r.ok === true, 'reactive attachment put failed: ' + r.kind + ' ' + errText(r.error));
+          return mainStore().get(id);
+        }).then(function (g) {
+          assert(g.ok && g.record, 'read-back failed');
+          var url = g.record.messages[0].content[1].image_url.url;
+          assert(typeof url === 'string' && url.indexOf('data:image/png;base64,') === 0,
+            'the attachment must come back inline, got: ' + String(url).slice(0, 40));
+          return 'attachment survived a reactive write (' + url.length + ' chars resolved)';
         });
       });
+    })
+
+    .then(function () {
+      return check('R4 · reactive state round-trips through a compare-and-set', function () {
+        var id = 'rx-cas-' + Date.now();
+        return mainStore().put({ id: id, title: 'v1', messages: [] }).then(function (a) {
+          assert(a.ok === true, 'seed put failed');
+          return mainStore().put(reactiveTree({ id: id, title: 'v2', messages: [] }), { expectRev: a.rev });
+        }).then(function (r) {
+          assert(r.ok === true, 'reactive compare-and-set failed: ' + r.kind + ' ' + errText(r.error));
+          assert(r.rev === 2, 'rev is ' + r.rev + '; expected 2');
+          return 'reactive write accepted at rev ' + r.rev;
+        });
+      });
+    })
+
+    .then(function () {
+      return check('R5 · an uncloneable field reports serialization, not unavailable', function () {
+        var rec = { id: 'rx-fn-' + Date.now(), title: 'fn', messages: [] };
+        rec.unclonable = function nope() { return 'nope'; };
+        return mainStore().put(rec).then(function (r) {
+          assert(r.ok === false, 'a function-valued field must not be stored');
+          assert(r.kind === 'serialization',
+            'kind is ' + r.kind + '; an uncloneable field must not be reported as "unavailable"');
+          return 'reported ' + r.kind + ' — the banner will not claim the browser has no storage';
+        });
+      });
+    })
+
+    .then(function () {
+      return check('R7 · a reactive circular record round-trips', function () {
+        var id = 'rx-loop-' + Date.now();
+        var plain = { id: id, title: 'loop', messages: [] };
+        plain.self = plain;
+        return mainStore().put(reactiveTree(plain)).then(function (r) {
+          assert(r.ok === true, 'reactive circular put failed: ' + r.kind + ' ' + errText(r.error));
+          return mainStore().get(id);
+        }).then(function (g) {
+          assert(g.ok && g.record && g.record.self && g.record.self.id === id,
+            'the cycle must survive; IndexedDB allows it and so must the normaliser');
+          return 'cycle preserved through reactive state';
+        });
+      });
+    })
+
+    .then(function () {
+      return checkOptional(
+        'R6 · navigator.storage quota readout works when exposed',
+        !!(navigator.storage && typeof navigator.storage.estimate === 'function'),
+        function () {
+          return browserStorageQuota().then(function (q) {
+            assert(q.ok === true, 'quota lookup failed: ' + errText(q.error));
+            assert(q.available === true, 'expected the estimate to be available on this origin');
+            assert(typeof q.quota === 'number' && q.quota > 0, 'quota is ' + q.quota);
+            return 'quota ' + fmtBytes(q.quota) + ' · usage ' + fmtBytes(q.usage) + ' · persisted = ' + q.persisted;
+          });
+        },
+        'navigator.storage is not exposed on this origin (insecure context). Quota reporting is an '
+        + 'enhancement — the checks above already prove chat storage works without it.');
+    })
+
+    .then(function () {
+      note('Origin', (location.origin || location.href)
+        + ' · isSecureContext = ' + window.isSecureContext
+        + ' · navigator.storage = ' + (navigator.storage ? 'present' : 'absent')
+        + ' · indexedDB = ' + (indexedDB ? 'present' : 'absent')
+        + ' · crypto.subtle = ' + (window.crypto && window.crypto.subtle ? 'present' : 'absent'));
+    });
+  }
+
+  function tailChecks() {
+    return checkOptional(
+      '15 · navigator.storage.persisted() reads without throwing (not requested)',
+      !!(navigator.storage && typeof navigator.storage.persisted === 'function'),
+      function () {
+        return navigator.storage.persisted().then(function (p) {
+          assert(typeof p === 'boolean', 'persisted() returned ' + typeof p);
+          return 'persisted = ' + p + ' (this harness never calls persist(); that stays a panel decision)';
+        });
+      },
+      'navigator.storage is not exposed on this origin (plain HTTP). Persistence requests are '
+      + 'panel-only by design and their absence does not affect chat storage.')
+
+    .then(function () {
+      return checkOptional(
+        '16 · navigator.storage.estimate() returns plausible quota / usage',
+        !!(navigator.storage && typeof navigator.storage.estimate === 'function'),
+        function () {
+          return navigator.storage.estimate().then(function (e) {
+            assert(typeof e.quota === 'number' && e.quota > 0, 'quota is ' + e.quota);
+            assert(typeof e.usage === 'number' && e.usage >= 0, 'usage is ' + e.usage);
+            assert(e.usage <= e.quota, 'usage ' + e.usage + ' exceeds quota ' + e.quota);
+            updateEstimate(e);
+            return 'quota ' + fmtBytes(e.quota) + ' · usage ' + fmtBytes(e.usage)
+              + ' · ' + (e.usage / e.quota * 100).toFixed(4) + '% used';
+          });
+        },
+        'navigator.storage.estimate() is unavailable on this origin (plain HTTP) — the quota '
+        + 'readout is skipped and chat storage is unaffected.')
     })
 
     .then(function () {
@@ -1195,7 +1395,9 @@
     })
 
     .then(function () {
-      return check('18b · mark-and-sweep collector removes only unreferenced blobs', function () {
+      return checkOptional('18b · mark-and-sweep collector removes only unreferenced blobs',
+        !!(mainStore().media && mainStore().media.supported),
+        function () {
         var store = mainStore();
         var keepB64 = btoa('KEEP-ME-attachment-payload');
         var orphanB64 = btoa('ORPHANED-attachment-payload');
@@ -1256,7 +1458,9 @@
             return 'referenced blob kept and still resolving · 1 orphan swept ('
               + orphanDigest.slice(0, 14) + '…) · ' + swept.bytesFreed + ' bytes freed · remove() left blobs alone';
           });
-      });
+      },
+        'content addressing needs crypto.subtle, which this origin withholds (insecure context). Nothing '
+        + 'is offloaded to the blobs store, so there is nothing to sweep — attachments are held inline.');
     })
 
     .then(function () {

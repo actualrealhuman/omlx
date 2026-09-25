@@ -426,3 +426,138 @@ test('the English storage warnings never tell the user to delete anything', () =
             `${k} tells the user to delete data — never the advice for a storage warning`);
     }
 });
+
+// ---- reactive state ----
+// Alpine hands the save path a Proxy tree. IndexedDB's structured clone rejects a
+// Proxy outright, so before the backend normalised, every save from live component
+// state failed and the UI said "Browser storage is unavailable". Nothing above this
+// line could see it: the module tests all passed plain objects.
+
+function reactiveTree(value, cache) {
+    const seen = cache || new WeakMap();
+    if (value === null || typeof value !== 'object') return value;
+    const tag = Object.prototype.toString.call(value);
+    if (tag !== '[object Object]' && !Array.isArray(value)) return value;
+    if (seen.has(value)) return seen.get(value);
+    const copy = Array.isArray(value) ? value.slice() : Object.assign({}, value);
+    const proxy = new Proxy(copy, {
+        get(target, key, receiver) {
+            return reactiveTree(Reflect.get(target, key, receiver), seen);
+        },
+    });
+    seen.set(value, proxy);
+    return proxy;
+}
+
+test('saveChatRecord accepts a reactive chat, the shape Alpine hands it', async () => {
+    const h = await idbApp();
+    const ok = await h.app.saveChatRecord(
+        reactiveTree(chat('rx', [textMsg('user', 'hello from reactive state')])),
+        { action: 'chat' });
+    assert.equal(ok, true, 'a reactive chat must save, not be reported as a storage failure');
+    assert.equal(h.app.chatStorageIssue, null, 'no banner may be raised');
+
+    const back = reload(h);
+    await back.app.initChatStorage();
+    assert.equal(await back.app.loadChatHistory(), true);
+    const stored = back.app.chatHistory.find((c) => c.id === 'rx');
+    assert.ok(stored, 'the reactive chat must come back off disk');
+    assert.equal(stored.messages[0].content, 'hello from reactive state');
+});
+
+test('saveChatRecord accepts a reactive chat carrying an inline attachment', async () => {
+    const h = await idbApp();
+    const ok = await h.app.saveChatRecord(
+        reactiveTree(chat('rx-img', [textMsg('user', 'look'), imageMsg('user')])),
+        { action: 'chat' });
+    assert.equal(ok, true, `reactive attachment save failed: ${JSON.stringify(h.app.chatStorageIssue)}`);
+    assert.equal(h.app.chatStorageIssue, null);
+
+    const back = reload(h);
+    await back.app.initChatStorage();
+    await back.app.loadChatHistory();
+    const stored = back.app.chatHistory.find((c) => c.id === 'rx-img');
+    assert.ok(stored);
+    const url = stored.messages[1].content[1].image_url.url;
+    assert.equal(url, dataUrl(), 'the attachment must survive byte-identical');
+});
+
+test('saveChatHistory accepts a reactive history array', async () => {
+    const h = await idbApp();
+    const list = reactiveTree([chat('r1', [textMsg('user', 'a')]), chat('r2', [textMsg('user', 'b')])]);
+    const ok = await h.app.saveChatHistory(list, { action: 'save' });
+    assert.equal(ok, true, 'a reactive history must save');
+    assert.equal(h.app.chatStorageIssue, null);
+
+    const back = reload(h);
+    await back.app.initChatStorage();
+    await back.app.loadChatHistory();
+    assert.deepEqual(host(back.app.chatHistory.map((c) => c.id).sort()), ['r1', 'r2']);
+});
+
+// ---- plain-HTTP origin ----
+// The supported deployment is ordinary HTTP on a trusted LAN or Tailscale address.
+// Chrome then reports isSecureContext false and withholds navigator.storage and
+// crypto.subtle, while IndexedDB works normally. Serving over HTTPS is not an
+// acceptable fix, so this pins the behaviour that makes it unnecessary.
+
+test('a plain-HTTP origin still selects IndexedDB and saves chats', async () => {
+    const h = createChatApp({ indexedDB: new FakeIndexedDB(), insecure: true });
+    assert.equal(h.window.isSecureContext, false);
+    assert.equal(h.window.navigator.storage, undefined, 'navigator.storage must be absent');
+    assert.equal(h.window.crypto.subtle, undefined, 'crypto.subtle must be absent');
+
+    await h.app.initChatStorage();
+    assert.equal(h.app.chatStorageBackend, 'indexedDB',
+        'IndexedDB must still be chosen when navigator.storage is missing');
+    assert.equal(h.app.chatStorageIssue, null);
+
+    const ok = await h.app.saveChatRecord(
+        reactiveTree(chat('lan', [textMsg('user', 'over the LAN'), imageMsg('user')])),
+        { action: 'chat' });
+    assert.equal(ok, true, 'saving must work over plain HTTP');
+    assert.equal(h.app.chatStorageIssue, null);
+
+    const back = reload(h);
+    await back.app.initChatStorage();
+    assert.equal(await back.app.loadChatHistory(), true, 'history must load over plain HTTP');
+    const stored = back.app.chatHistory.find((c) => c.id === 'lan');
+    assert.ok(stored, 'the chat must survive');
+    assert.equal(stored.messages[0].content, 'over the LAN');
+});
+
+test('without crypto.subtle attachments are kept inline, not dropped', async () => {
+    const h = createChatApp({ indexedDB: new FakeIndexedDB(), insecure: true });
+    await h.app.initChatStorage();
+    const store = h.app.chatRecordStore();
+    assert.equal(store.media.supported, false,
+        'content addressing needs crypto.subtle, which an insecure origin does not have');
+
+    const b64 = PNG_B64;
+    const ok = await h.app.saveChatRecord(chat('inline', [imageMsg('user', b64)]), { action: 'chat' });
+    assert.equal(ok, true);
+    assert.equal(h.app.chatStorageIssue, null);
+
+    const back = reload(h);
+    await back.app.initChatStorage();
+    await back.app.loadChatHistory();
+    const stored = back.app.chatHistory.find((c) => c.id === 'inline');
+    assert.ok(stored, 'the chat must not be lost with its attachment');
+    const part = stored.messages[0].content[1];
+    assert.equal(part.image_url.url, dataUrl(b64),
+        'the attachment must be held inline and come back byte-identical');
+    assert.equal(part.image_url.mediaDropped, undefined,
+        'an inline attachment must not be reported as dropped');
+});
+
+test('the app never consults navigator.storage on the save path', async () => {
+    const h = createChatApp({ indexedDB: new FakeIndexedDB(), insecure: true });
+    // navigator.storage is absent, so any unguarded read would throw. If the save
+    // path completes, nothing on it reached for it.
+    await h.app.initChatStorage();
+    const ok = await h.app.saveChatHistory([chat('nosm', [textMsg('user', 'x')])]);
+    assert.equal(ok, true);
+    const listed = await h.app.chatRecordStore().listIndex();
+    assert.equal(listed.ok, true);
+    assert.equal(h.app.chatStorageIssue, null);
+});

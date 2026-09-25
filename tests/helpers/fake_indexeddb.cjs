@@ -173,11 +173,11 @@ class FakeObjectStore {
 }
 
 function structuredCloneish(value) {
-    try {
-        return structuredClone(value);
-    } catch {
-        return JSON.parse(JSON.stringify(value));
-    }
+    // No JSON fallback. A real store runs the structured clone algorithm and
+    // raises DataCloneError on anything it cannot take — a Proxy among them. The
+    // fallback that used to sit here silently accepted those values, which is how
+    // a reactive-state write bug reached a release with every node test green.
+    return structuredClone(value);
 }
 
 class FakeTransaction {

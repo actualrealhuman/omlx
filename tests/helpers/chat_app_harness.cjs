@@ -132,7 +132,15 @@ function makeDom(localStorage) {
     return document;
 }
 
-function makeWindow(localStorage, document, indexedDB) {
+function makeWindow(localStorage, document, indexedDB, options = {}) {
+    // A plain-HTTP origin — the LAN / Tailscale deployment the app is meant to
+    // serve on — is not a secure context. Chrome then leaves navigator.storage
+    // undefined and strips crypto.subtle, while IndexedDB keeps working. Tests
+    // that only ever run with both present cannot see that configuration at all.
+    const insecure = options.insecure === true;
+    const cryptoStub = insecure
+        ? { getRandomValues: (a) => globalThis.crypto.getRandomValues(a) }
+        : globalThis.crypto;
     const win = {
         localStorage,
         sessionStorage: makeStorage(),
@@ -141,18 +149,19 @@ function makeWindow(localStorage, document, indexedDB) {
         innerWidth: 1280,
         innerHeight: 900,
         devicePixelRatio: 2,
+        isSecureContext: !insecure,
         location: { href: 'http://localhost/chat', origin: 'http://localhost', pathname: '/chat', search: '', hash: '' },
         navigator: {
             userAgent: 'node-test-harness',
             language: 'en',
             onLine: true,
             clipboard: { writeText() { return Promise.resolve(); } },
-            storage: {
+            storage: insecure ? undefined : {
                 persisted() { return Promise.resolve(false); },
                 estimate() { return Promise.resolve({ quota: 10 * 1024 * 1024 * 1024, usage: 0 }); },
             },
         },
-        crypto: globalThis.crypto,
+        crypto: cryptoStub,
         matchMedia(query) {
             return { matches: false, media: query, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} };
         },
@@ -218,7 +227,7 @@ function createChatApp(options = {}) {
     const localStorage = options.localStorage || makeStorage();
     const fakeIdb = options.indexedDB === null ? null : (options.indexedDB || new FakeIndexedDB());
     const document = makeDom(localStorage);
-    const window = makeWindow(localStorage, document, fakeIdb);
+    const window = makeWindow(localStorage, document, fakeIdb, options);
 
     const context = vm.createContext(window);
     const libs = makeLibStubs();
@@ -231,7 +240,11 @@ function createChatApp(options = {}) {
     context.navigator = window.navigator;
     context.location = window.location;
     context.matchMedia = window.matchMedia;
-    context.crypto = globalThis.crypto;
+    // Must come from the window stub, not the host realm: an insecure-origin test
+    // deliberately removes crypto.subtle, and re-assigning the host crypto here
+    // would quietly put it back.
+    context.crypto = window.crypto;
+    context.isSecureContext = window.isSecureContext;
     context.t = window.t;
     context.alert = (m) => { window._alerts.push(m); };
     context.confirm = () => false;
