@@ -1187,6 +1187,7 @@ def test_step_prefill_reclaims_before_first_guard(
         "_prefill_step_size_for_progress",
         "_base_prefill_step_size",
         "_contended_prefill_cap",
+        "_cooperative_prefill_cap",
         "_decode_contention",
         "_others_decoding",
         "_should_clear_after_chunk",

@@ -5378,8 +5378,9 @@ async def update_global_settings(
     # The dashboard sends all cache fields. Unchanged values must not unload engines.
     cache_changed = False
     if request.cache_inspection is not None:
-        global_settings.cache.cache_inspection = request.cache_inspection
-        cache_changed = True
+        if request.cache_inspection != global_settings.cache.cache_inspection:
+            global_settings.cache.cache_inspection = request.cache_inspection
+            cache_changed = True
     if request.cache_enabled is not None:
         if request.cache_enabled != global_settings.cache.enabled:
             global_settings.cache.enabled = request.cache_enabled

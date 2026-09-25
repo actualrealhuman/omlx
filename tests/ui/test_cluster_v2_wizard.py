@@ -1191,10 +1191,14 @@ def test_dark_tensor_controls_use_explicit_high_contrast_palette():
     assert "[data-cluster-v2-strategy-picker]" in stylesheet
     assert 'button[data-selected="true"]' in stylesheet
     assert "[data-cluster-v2-strategy-recommended]" in stylesheet
-    assert "color: #f8fafc !important" in stylesheet
+    # Personal high-contrast dark theme deliberately overrides the upstream
+    # cluster-v2 foregrounds: the strategy picker selected label is pure white
+    # (#ffffff, not #f8fafc) and cluster-active metrics are #f5f5f5 (not
+    # #d4d4d8). See the explicit-foreground rules in dashboard.css.
+    assert "color: #ffffff !important" in stylesheet
     assert ".cluster-v2-tensor-segment--2 { background: #52525b; }" in stylesheet
     assert '[data-theme="dark"] [data-cluster-v2-active] .text-neutral-600' in stylesheet
-    assert "color: #d4d4d8 !important" in stylesheet
+    assert "color: #f5f5f5 !important" in stylesheet
 
     tensor_bar = template.split("data-cluster-v2-split-bar-tensor", 1)[1].split(
         "</template>", 1
