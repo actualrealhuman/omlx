@@ -90,28 +90,43 @@ def test_chat_history_is_sorted_and_committed_without_automatic_trimming():
     html = _template()
     save = _section(
         html,
-        "    saveCurrentChat(",
+        "    async saveCurrentChat(",
         "    startRenamingChat(chat)",
     )
 
     assert "const nextHistory = [...baseHistory]" in save
     assert save.index("this.sortChatHistory(nextHistory)") < save.index(
-        "this.saveChatHistory(nextHistory"
+        "this.saveChatRecord(chatData"
     )
+    # The hot path commits a single record; it must not rewrite the whole corpus.
+    assert "this.saveChatHistory(nextHistory" not in save
     assert "MAX_CHAT_HISTORY_SIZE" not in html
     assert "chatHistory.pop()" not in html
 
 
 def test_chat_history_failures_are_visible_and_preserve_recovery_data():
     html = _template()
-    save = _section(html, "    saveChatHistory(", "    async startNewChat(")
-    load = _section(html, "    loadChatHistory()", "    saveChatHistory(")
+    save = _section(html, "    async saveChatHistory(", "    async saveChatRecord(")
+    record = _section(html, "    async saveChatRecord(", "    async startNewChat(")
+    load = _section(html, "    async loadChatHistory(", "    async saveChatHistory(")
+    failure = _section(html, "    handleRecordWriteFailure(", "    _downloadChatData(")
 
-    assert "this.chatHistoryStore().save(nextHistory)" in save
+    # A failed whole-history save keeps the candidate in memory and reports it.
+    assert "await store.put(chat" in save
     assert "this._pendingChatHistory = nextHistory" in save
-    assert "pendingJson: result.serialized" in save
+    assert "pendingJson: JSON.stringify(nextHistory)" in save
     assert "this.chatHistory = nextHistory" in save
-    assert save.index("if (!result.ok)") < save.index("this.chatHistory = nextHistory")
+    assert save.index("if (failures.length)") < save.index("this.chatHistory = nextHistory")
+
+    # A failed single-record save never discards the candidate either.
+    assert "this.handleRecordWriteFailure(chat.id, put, chat)" in record
+    assert "this.chatStorageIssue = null" in record
+
+    # Bytes still on disk are handed back for backup, and a refused concurrent
+    # write is surfaced as a conflict rather than silently clobbering.
+    assert "raw: result.raw ?? null" in failure
+    assert "kind: 'conflict'" in failure
+
     assert "this.chatStorageIssue" in load
     assert "chat.storage_error.no_data_deleted" in html
     assert "downloadPendingChatHistory()" in html
@@ -123,7 +138,7 @@ def test_retry_commits_the_pending_candidate_and_rehydrates_sessions():
     section = _section(
         _template(),
         "    async retryChatHistorySave()",
-        "    importChats(event)",
+        "    async importChats(event)",
     )
 
     assert "pending = this._pendingChatHistory" in section
@@ -139,16 +154,18 @@ def test_send_stops_before_inference_when_the_user_turn_cannot_be_saved():
         "    async sendTranscriptionMessage()",
     )
 
-    save_guard = "if (!this.saveCurrentChat(chatId, chatSession.messages"
+    # The user turn is persisted *and awaited* before inference starts, so a
+    # failed save cannot leave a streamed reply with nothing committed behind it.
+    save_guard = "if (!await this.saveCurrentChat(chatId, chatSession.messages"
     assert save_guard in section
     assert section.index(save_guard) < section.index("await this.streamResponse({")
 
 
 def test_import_is_all_or_nothing_and_has_no_count_cap():
-    section = _section(_template(), "    importChats(event)", "    async saveApiKey()")
+    section = _section(_template(), "    async importChats(event)", "    async saveApiKey()")
 
     assert "const nextHistory" in section
-    assert "if (!this.saveChatHistory(nextHistory" in section
+    assert "if (!await this.saveChatHistory(nextHistory" in section
     assert ".slice(0," not in section
 
 
@@ -160,11 +177,11 @@ def test_chat_navigation_preserves_the_previous_chat_timestamp():
     load = _section(
         html,
         "    async loadChat(chatId)",
-        "    saveCurrentChat(",
+        "    async saveCurrentChat(",
     )
     save = _section(
         html,
-        "    saveCurrentChat(",
+        "    async saveCurrentChat(",
         "    startRenamingChat(chat)",
     )
 
