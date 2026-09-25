@@ -355,17 +355,74 @@ test('a stale save through the app is refused and the stored attachment survives
 
 // ---- i18n ----
 
-test('every locale carries the incomplete-migration banner the app now shows', () => {
+// Key parity, not a locale count. A hardcoded count broke the day upstream added
+// cs.json: it failed for the wrong reason (ten files, not nine) while staying silent
+// on the reason that mattered (the new locale had none of our strings). Parity fails
+// for the reason that matters and survives a locale being added on either side.
+test('every locale is in key parity with en.json', () => {
     const dir = path.join(__dirname, '..', 'omlx', 'admin', 'i18n');
     const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
-    assert.equal(files.length, 9, 'expected nine locale files');
+    assert.ok(files.includes('en.json'), 'en.json is the reference and must exist');
+    const enKeys = Object.keys(JSON.parse(fs.readFileSync(path.join(dir, 'en.json'), 'utf8'))).sort();
+
     for (const f of files) {
-        const dict = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
-        const v = dict['chat.storage_error.incomplete'];
-        assert.ok(typeof v === 'string' && v.length > 20,
-            `${f} is missing a usable chat.storage_error.incomplete string`);
-        // The banner must not tell the user to delete anything.
-        assert.equal(/\b(delete all|clear (your )?history|erase)\b/i.test(v), false,
-            `${f} tells the user to delete data — that is never the advice for this banner`);
+        const keys = Object.keys(JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'))).sort();
+        const missing = enKeys.filter((k) => !keys.includes(k));
+        const extra = keys.filter((k) => !enKeys.includes(k));
+        assert.deepEqual(missing, [],
+            `${f} is missing ${missing.length} key(s) that en.json has — users of that `
+            + `locale see raw dotted keys. First few: ${missing.slice(0, 6).join(', ')}`);
+        assert.deepEqual(extra, [],
+            `${f} carries ${extra.length} key(s) en.json does not. First few: ${extra.slice(0, 6).join(', ')}`);
+    }
+});
+
+// No length thresholds here. They cannot work across scripts: zh's "聊天记录未保存" is
+// a complete 7-character sentence, and fr's "Télécharger les discussions non
+// enregistrées" is a correct 44-character button. Any absolute bound is wrong for some
+// locale, and a threshold that a correct string violates gets the guard removed rather
+// than the string fixed. These checks are script-independent instead.
+const NON_LATIN = ['ja', 'ko', 'zh', 'zh-TW', 'ru'];
+
+test('the storage strings are real copy, not placeholders', () => {
+    const dir = path.join(__dirname, '..', 'omlx', 'admin', 'i18n');
+    const en = JSON.parse(fs.readFileSync(path.join(dir, 'en.json'), 'utf8'));
+    const keys = Object.keys(en).filter((k) => k.startsWith('chat.storage_error') || k === 'chat.multi_tab_notice');
+    assert.ok(keys.length >= 15, `expected the full storage-safety family, found ${keys.length}`);
+
+    for (const file of fs.readdirSync(dir).filter((x) => x.endsWith('.json'))) {
+        const locale = file.replace(/\.json$/, '');
+        const dict = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8'));
+
+        for (const k of keys) {
+            const v = dict[k];
+            assert.ok(typeof v === 'string' && v.trim().length > 0,
+                `${file} · ${k} has no copy`);
+            assert.equal(v.trim(), v, `${file} · ${k} has stray whitespace`);
+            assert.equal(v.includes('storage_error.'), false,
+                `${file} · ${k} holds a dotted key where it should hold copy`);
+
+            // Untranslated English left in place is the failure a length check misses.
+            if (locale !== 'en') {
+                assert.notEqual(v, en[k],
+                    `${file} · ${k} is still the English string — not translated`);
+            }
+            if (NON_LATIN.includes(locale)) {
+                assert.ok(/[^\x00-\x7f]/.test(v),
+                    `${file} · ${k} is pure ASCII in a non-Latin locale — untranslated`);
+            }
+        }
+    }
+});
+
+// English patterns only, and deliberately so. Running these against cs/ja/ko would
+// match nothing and report green — a guard that cannot fail is worse than none.
+test('the English storage warnings never tell the user to delete anything', () => {
+    const en = JSON.parse(fs.readFileSync(
+        path.join(__dirname, '..', 'omlx', 'admin', 'i18n', 'en.json'), 'utf8'));
+    for (const [k, v] of Object.entries(en)) {
+        if (!k.startsWith('chat.storage_error') && k !== 'chat.multi_tab_notice') continue;
+        assert.equal(/\b(delete all|clear (your )?history|erase|wipe|drop)\b/i.test(v), false,
+            `${k} tells the user to delete data — never the advice for a storage warning`);
     }
 });
