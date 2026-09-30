@@ -168,6 +168,12 @@ Global and model profiles may share display names while retaining separate IDs. 
 
 Startup reference repair is covered in `tests/test_model_settings_profiles.py`: missing references are cleared without replacing saved values, originals are backed up under `<base_path>/profile-reference-backup-*`, and subsequent loads do not write again. Retries with unchanged originals reuse the same content-hash backup directory and fill missing files. Mismatched backups prevent repair. Invalid storage, unsupported versions, backup failures, and failed writes must not persist inferred repairs. A rollback failure aborts startup and logs the backup path.
 
+### Per-model generation concurrency
+
+Run `python -m pytest tests/test_engine_pool.py tests/test_model_settings_profiles.py tests/test_admin_model_settings.py tests/test_admin_profiles_api.py -q` to check positive-integer validation, API clearing with `null`, model-profile round trips, independent per-engine configuration, and reload when the effective cap changes. `None` inherits the global scheduler limit; an explicit value must be a positive integer. Each local batched LLM/VLM engine receives its own scheduler config, with the value applied to both `max_num_seqs` (request admission) and `completion_batch_size` (mlx-lm's live decode batch). An explicit value equal to the global limit is equivalent to inheritance and does not require a reload.
+
+The override applies to local `BatchedEngine` and `VLMBatchedEngine` generation, including the batched fallback used by DFlash. A changed effective cap invalidates an already-loaded engine; unpinned models are unloaded and load with the new cap on the next request, while pinned models are reloaded. Distributed deployments are controlled by their remote worker scheduler. Embedding, reranking, audio, and diffusion engines use their own batching paths, so this generation setting does not change those limits.
+
 ## Qwen tool-call recovery
 
 Run `python -m pytest tests/test_tool_calling.py tests/integration/test_e2e_streaming.py -q`. Final Qwen parsing preserves unknown tool names for client feedback, recovers complete functions missing only the outer envelope close at normal EOF, and reports unrecoverable siblings without a successful stop. Cases cover all three streaming APIs, chunk boundaries, repeated calls, literal tags in arguments, schema validation and length stops. Other parser families and reasoning-channel promotion keep their existing rules.

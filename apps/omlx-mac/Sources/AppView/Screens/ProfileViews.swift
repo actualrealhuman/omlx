@@ -686,7 +686,7 @@ struct ProfileDetailCard: View {
     private var sections: some View {
         let s = settings
         let hasSampling = ["temperature", "top_p", "top_k", "min_p"].contains { s[$0] != nil }
-        let hasCapacity = ["model_type_override", "max_context_window", "max_tokens", "ttl_seconds"]
+        let hasCapacity = ["model_type_override", "max_context_window", "max_tokens", "ttl_seconds", "max_concurrent_requests"]
             .contains { s[$0] != nil }
         let hasPenalty = ["repetition_penalty", "presence_penalty"].contains { s[$0] != nil }
         let behaviorKeys = [
@@ -784,6 +784,10 @@ struct ProfileDetailCard: View {
                 .map { String(localized: "profile.detail.capacity.tokens.raw",
                               defaultValue: "\($0) tk",
                               comment: "Raw token count for max tokens; placeholder is the integer count") }),
+            (String(localized: "profile.detail.capacity.max_concurrent_requests",
+                    defaultValue: "Max Requests",
+                    comment: "Capacity stat label for the per-model concurrent request limit"),
+             s["max_concurrent_requests"].flatMap { intOf($0) }.map(String.init)),
             (String(localized: "profile.detail.capacity.ttl",
                     defaultValue: "TTL",
                     comment: "Capacity stat label: time-to-live for the model in memory"),

@@ -108,6 +108,40 @@ class TestProfileRoutes:
         assert r.status_code == 200
         assert r.json() == {"profiles": []}
 
+    def test_model_concurrency_profile_is_saved_and_applied(self, client):
+        c, mgr = client
+        response = c.post(
+            "/admin/api/models/model-a/profiles",
+            json={
+                "name": "bounded",
+                "display_name": "Bounded",
+                "settings": {"max_concurrent_requests": 2},
+                "also_save_as_template": True,
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert mgr.get_profile("model-a", "bounded")["settings"] == {
+            "max_concurrent_requests": 2
+        }
+        assert mgr.get_template("bounded")["settings"] == {}
+
+        response = c.post("/admin/api/models/model-a/profiles/bounded/apply")
+        assert response.status_code == 200, response.text
+        assert response.json()["settings"]["max_concurrent_requests"] == 2
+
+    @pytest.mark.parametrize("value", [0, 1.0, "2", True])
+    def test_model_concurrency_profile_rejects_non_positive_or_non_integer(self, client, value):
+        c, _ = client
+        response = c.post(
+            "/admin/api/models/model-a/profiles",
+            json={
+                "name": "invalid",
+                "display_name": "Invalid",
+                "settings": {"max_concurrent_requests": value},
+            },
+        )
+        assert response.status_code == 422
+
     def test_create_and_list_profile(self, client):
         c, _ = client
         r = c.post(

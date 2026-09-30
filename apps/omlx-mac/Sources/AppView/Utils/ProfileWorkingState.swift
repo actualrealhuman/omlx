@@ -138,6 +138,7 @@ enum ProfileSettingsKey {
     static let forcedCtKwargs = "forced_ct_kwargs"
 
     // Model-specific
+    static let maxConcurrentRequests = "max_concurrent_requests"
     static let modelTypeOverride = "model_type_override"
     static let trustRemoteCode = "trust_remote_code"
     static let turboquantKvEnabled = "turboquant_kv_enabled"

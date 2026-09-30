@@ -479,6 +479,32 @@ final class ModelSettingsScreenVMTests: XCTestCase {
         }
     }
 
+    func testMaxConcurrentRequestsProfileSnapshotAndPatchPreserveInheritance() throws {
+        let vm = ModelSettingsScreenVM()
+        XCTAssertNil(vm.currentSettingsDict()[ProfileSettingsKey.maxConcurrentRequests])
+
+        vm.maxConcurrentRequests = "3"
+        XCTAssertEqual(
+            vm.currentSettingsDict()[ProfileSettingsKey.maxConcurrentRequests]?.value as? Int,
+            3
+        )
+        vm.maxConcurrentRequests = ""
+        XCTAssertNil(vm.currentSettingsDict()[ProfileSettingsKey.maxConcurrentRequests])
+
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        let cases: [(Int??, String)] = [
+            (nil, "{}"),
+            (.some(nil), #"{"max_concurrent_requests":null}"#),
+            (.some(3), #"{"max_concurrent_requests":3}"#),
+        ]
+        for (value, expected) in cases {
+            var patch = ModelSettingsPatch()
+            patch.maxConcurrentRequests = value
+            XCTAssertEqual(String(decoding: try encoder.encode(patch), as: UTF8.self), expected)
+        }
+    }
+
     func testSharedAneSettingsPreserveSplitAndExcludeOtherBackendOptions() {
         let vm = ModelSettingsScreenVM()
         vm.qwen35AnePrefillEnabled = true

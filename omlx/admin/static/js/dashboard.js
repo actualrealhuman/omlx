@@ -227,6 +227,7 @@
                 model_type_override: '',
                 max_context_window: null,
                 max_tokens: null,
+                max_concurrent_requests: null,
                 temperature: null,
                 top_p: null,
                 top_k: null,
@@ -1434,6 +1435,7 @@
                 const isDiffusion = !!ms.is_diffusion_model;
 
                 for (const k of this.profileFields.universal.concat(this.profileFields.model_specific)) {
+                    if (k === 'max_concurrent_requests' && !ms.supports_max_concurrent_requests) continue;
                     if (k === 'enable_thinking' && this.selectedModel?.thinking_forced) continue;
                     if (k === 'chat_template_kwargs' || k === 'forced_ct_kwargs') continue;  // handle below
                     if (isDiffusion && this.isDiffusionUnsupportedProfileField(k)) continue;
@@ -1859,6 +1861,10 @@
                     model_type_override: s.model_type_override || '',
                     max_context_window: s.max_context_window || null,
                     max_tokens: s.max_tokens || null,
+                    max_concurrent_requests: s.max_concurrent_requests ?? null,
+                    supports_max_concurrent_requests:
+                        !isDiffusion && !model?.distributed
+                        && ['batched', 'vlm'].includes(model?.engine_type || 'batched'),
                     temperature: isOcr ? 0.0 : (s.temperature ?? null),
                     top_p: s.top_p ?? null,
                     top_k: s.top_k ?? null,
@@ -2013,6 +2019,7 @@
                 ms.force_sampling = false;
                 ms.max_context_window = null;
                 ms.max_tokens = null;
+                ms.max_concurrent_requests = null;
                 ms.reasoning_parser = null;
                 ms.guided_grammar_enabled = false;
                 ms.guided_grammar = '';
@@ -2879,6 +2886,14 @@
                                 model_type_override: this.modelSettings.model_type_override || null,
                                 max_context_window: this.modelSettings.max_context_window || null,
                                 max_tokens: this.modelSettings.max_tokens || null,
+                                ...(this.modelSettings.supports_max_concurrent_requests
+                                    ? {
+                                        max_concurrent_requests: this.modelSettings.max_concurrent_requests == null
+                                            || this.modelSettings.max_concurrent_requests === ''
+                                            ? null
+                                            : this.modelSettings.max_concurrent_requests,
+                                    }
+                                    : {}),
                                 temperature: Number.isFinite(this.modelSettings.temperature) ? this.modelSettings.temperature : null,
                                 top_p: Number.isFinite(this.modelSettings.top_p) ? this.modelSettings.top_p : null,
                                 top_k: Number.isFinite(this.modelSettings.top_k) ? this.modelSettings.top_k : null,

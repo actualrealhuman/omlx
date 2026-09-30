@@ -987,6 +987,20 @@ private struct BasicTab: View {
                                               comment: "Placeholder shown when Max Tokens is empty (server default applies)"),
                           mono: true, width: .controlCompact)
             }
+            if vm.supportsPerModelConcurrency {
+                Row(label: String(localized: "settings.basic.max_concurrent_requests.label",
+                              defaultValue: "Maximum Concurrent Requests",
+                              comment: "Row label for the per-model concurrency limit"),
+                sublabel: String(localized: "settings.basic.max_concurrent_requests.sub",
+                                 defaultValue: "Empty uses the server limit",
+                                 comment: "Sublabel for the per-model concurrency limit")) {
+                TextInput(text: vm.bindProfile($vm.maxConcurrentRequests),
+                          placeholder: String(localized: "settings.basic.max_concurrent_requests.placeholder",
+                                              defaultValue: "Server default",
+                                              comment: "Placeholder when the per-model concurrency limit inherits the server setting"),
+                          mono: true, width: .controlCompact)
+                }
+            }
             Row(label: String(localized: "settings.basic.temperature.label",
                               defaultValue: "Temperature",
                               comment: "Row label for the sampling temperature field"),

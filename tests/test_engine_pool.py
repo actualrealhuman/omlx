@@ -1812,6 +1812,67 @@ class TestEnginePoolAsync:
         assert pool._engine_runtime_signature("model-a", dflash) != pure_signature
         assert pool._engine_runtime_signature("model-a", vlm_mtp) != pure_signature
 
+    def test_concurrency_change_splits_runtime_signature(self, pool_with_mock_engines):
+        from omlx.model_settings import ModelSettings
+        from omlx.scheduler import SchedulerConfig
+
+        pool = pool_with_mock_engines
+        pool._scheduler_config = SchedulerConfig(
+            max_num_seqs=4, completion_batch_size=4
+        )
+        inherited = pool._engine_runtime_signature("model-a", ModelSettings())
+        equal_override = pool._engine_runtime_signature(
+            "model-a", ModelSettings(max_concurrent_requests=4)
+        )
+        limited = pool._engine_runtime_signature(
+            "model-a", ModelSettings(max_concurrent_requests=1)
+        )
+
+        assert inherited == equal_override
+        assert inherited != limited
+
+    @pytest.mark.asyncio
+    async def test_concurrency_change_reloads_engine_with_new_scheduler_cap(
+        self, pool_with_mock_engines
+    ):
+        from omlx.model_settings import ModelSettings
+        from omlx.scheduler import SchedulerConfig
+
+        pool = pool_with_mock_engines
+        pool._scheduler_config = SchedulerConfig(
+            max_num_seqs=4, completion_batch_size=4
+        )
+        pool._settings_manager = MagicMock()
+        pool._settings_manager.get_settings.return_value = ModelSettings(
+            max_concurrent_requests=4
+        )
+
+        first_engine = MagicMock()
+        first_engine.start = AsyncMock()
+        first_engine.stop = AsyncMock()
+        second_engine = MagicMock()
+        second_engine.start = AsyncMock()
+        second_engine.stop = AsyncMock()
+
+        with patch(
+            "omlx.engine_pool.BatchedEngine",
+            side_effect=[first_engine, second_engine],
+        ) as batched_engine:
+            first = await pool.get_engine(
+                "model-a", runtime_settings=ModelSettings(max_concurrent_requests=4)
+            )
+            second = await pool.get_engine(
+                "model-a", runtime_settings=ModelSettings(max_concurrent_requests=1)
+            )
+
+        first_config = batched_engine.call_args_list[0].kwargs["scheduler_config"]
+        second_config = batched_engine.call_args_list[1].kwargs["scheduler_config"]
+        assert first is first_engine
+        assert second is second_engine
+        first_engine.stop.assert_awaited_once()
+        assert (first_config.max_num_seqs, first_config.completion_batch_size) == (4, 4)
+        assert (second_config.max_num_seqs, second_config.completion_batch_size) == (1, 1)
+
     @pytest.mark.asyncio
     async def test_base_request_reloads_after_profile_variant(
         self, pool_with_mock_engines
@@ -1879,11 +1940,13 @@ class TestEnginePoolAsync:
             engine = await pool.get_engine("embed-model")
 
         assert engine is mock_engine
-        MockEmbeddingEngine.assert_called_once_with(
-            model_name=str(model_path),
-            trust_remote_code=False,
-            scheduler_config=scheduler_config,
-        )
+        per_model_config = MockEmbeddingEngine.call_args.kwargs["scheduler_config"]
+        assert per_model_config is not scheduler_config
+        assert per_model_config.embedding_batch_size == scheduler_config.embedding_batch_size
+        assert per_model_config.model_name == "embed-model"
+        assert per_model_config.model_path == str(model_path)
+        assert scheduler_config.model_name == ""
+        assert scheduler_config.model_path == ""
 
     @pytest.mark.asyncio
     async def test_embedding_engine_receives_fallback_scheduler_config(self, tmp_path):
@@ -1910,11 +1973,10 @@ class TestEnginePoolAsync:
             engine = await pool.get_engine("embed-model")
 
         assert engine is mock_engine
-        MockEmbeddingEngine.assert_called_once_with(
-            model_name=str(model_path),
-            trust_remote_code=False,
-            scheduler_config=pool._scheduler_config,
-        )
+        per_model_config = MockEmbeddingEngine.call_args.kwargs["scheduler_config"]
+        assert per_model_config is not pool._scheduler_config
+        assert per_model_config.model_name == "embed-model"
+        assert per_model_config.model_path == str(model_path)
 
     @pytest.mark.asyncio
     async def test_apply_embedding_batch_size_updates_loaded_embedding_engines(self):
@@ -4411,15 +4473,13 @@ class TestFailedLoadReclaim:
 
 
 class TestSchedulerConfigModelId:
-    """engine_pool sets model_name=model_id and model_path=entry.model_path
-    on the shared scheduler config so the scheduler uses the engine pool's
-    canonical model_id (not a filesystem snapshot hash) for tracker lookups."""
+    """Each engine receives its own scheduler config with canonical model IDs."""
 
     async def test_wires_model_name_and_model_path(self, small_mock_model_dir):
-        """engine_pool sets model_name=model_id and model_path on the
-        scheduler config when loading an engine."""
+        """Loading an engine leaves the global fallback config untouched."""
         pool = _make_pool(ceiling=10 * 1024**3)
         pool.discover_models(str(small_mock_model_dir))
+        shared_config = pool._scheduler_config
 
         mock_engine = MagicMock()
         mock_engine.start = AsyncMock()
@@ -4427,11 +4487,68 @@ class TestSchedulerConfigModelId:
         with patch(
             "omlx.engine_pool.BatchedEngine",
             return_value=mock_engine,
-        ):
+        ) as mock_batched_engine:
             await pool.get_engine("model-a")
 
-        assert pool._scheduler_config.model_name == "model-a"
-        assert pool._scheduler_config.model_path == str(small_mock_model_dir / "model-a")
+        per_model_config = mock_batched_engine.call_args.kwargs["scheduler_config"]
+        assert per_model_config is not shared_config
+        assert per_model_config.model_name == "model-a"
+        assert per_model_config.model_path == str(small_mock_model_dir / "model-a")
+        assert shared_config.model_name == ""
+        assert shared_config.model_path == ""
+
+    @pytest.mark.asyncio
+    async def test_model_caps_are_independent_for_llm_and_vlm(self, tmp_path):
+        from omlx.model_settings import ModelSettings
+        from omlx.scheduler import SchedulerConfig
+
+        model_paths = {}
+        for model_id in ("model-a", "model-b", "model-c"):
+            path = tmp_path / model_id
+            path.mkdir()
+            (path / "config.json").write_text(json.dumps({"model_type": "llama"}))
+            (path / "model.safetensors").write_bytes(b"weights")
+            model_paths[model_id] = str(path)
+
+        global_config = SchedulerConfig(max_num_seqs=4, completion_batch_size=4)
+        pool = _make_pool(ceiling=10 * 1024**3, scheduler_config=global_config)
+        pool.discover_models(str(tmp_path))
+        pool.get_entry("model-b").engine_type = "vlm"
+        pool.get_entry("model-b").model_type = "vlm"
+
+        llm_engine = MagicMock()
+        llm_engine.start = AsyncMock()
+        vlm_engine = MagicMock()
+        vlm_engine.start = AsyncMock()
+        inherited_engine = MagicMock()
+        inherited_engine.start = AsyncMock()
+
+        with (
+            patch("omlx.engine_pool.BatchedEngine", side_effect=[llm_engine, inherited_engine]) as llm,
+            patch("omlx.engine_pool.VLMBatchedEngine", return_value=vlm_engine) as vlm,
+        ):
+            await pool.get_engine(
+                "model-a", runtime_settings=ModelSettings(max_concurrent_requests=1)
+            )
+            await pool.get_engine(
+                "model-b", runtime_settings=ModelSettings(max_concurrent_requests=8)
+            )
+            await pool.get_engine("model-c", runtime_settings=ModelSettings())
+
+        llm_config_a = llm.call_args_list[0].kwargs["scheduler_config"]
+        vlm_config_b = vlm.call_args.kwargs["scheduler_config"]
+        llm_config_c = llm.call_args_list[1].kwargs["scheduler_config"]
+        assert (llm_config_a.max_num_seqs, llm_config_a.completion_batch_size) == (1, 1)
+        assert (vlm_config_b.max_num_seqs, vlm_config_b.completion_batch_size) == (8, 8)
+        assert (llm_config_c.max_num_seqs, llm_config_c.completion_batch_size) == (4, 4)
+        assert len({id(llm_config_a), id(vlm_config_b), id(llm_config_c)}) == 3
+        assert global_config.max_num_seqs == 4
+        assert global_config.completion_batch_size == 4
+        assert global_config.model_name == ""
+        assert global_config.model_path == ""
+        assert [llm_config_a.model_path, vlm_config_b.model_path, llm_config_c.model_path] == [
+            model_paths["model-a"], model_paths["model-b"], model_paths["model-c"]
+        ]
 
 
 class _StubEnforcer:

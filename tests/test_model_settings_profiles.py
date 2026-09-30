@@ -15,6 +15,27 @@ def mgr(tmp_path):
 
 
 class TestProfilesCRUD:
+    def test_model_concurrency_setting_round_trips_in_model_profile(self, mgr, tmp_path):
+        mgr.save_profile(
+            "model-a", "limited", "Limited", None, {"max_concurrent_requests": 3}
+        )
+
+        restored = ModelSettingsManager(tmp_path)
+        profile = restored.get_profile("model-a", "limited")
+        assert profile["settings"]["max_concurrent_requests"] == 3
+
+        applied = restored.apply_profile("model-a", "limited")
+        assert applied.max_concurrent_requests == 3
+
+    def test_model_concurrency_setting_serializes_and_rejects_invalid_values(self):
+        settings = ModelSettings(max_concurrent_requests=8)
+        assert settings.to_dict()["max_concurrent_requests"] == 8
+        assert ModelSettings.from_dict(settings.to_dict()).max_concurrent_requests == 8
+
+        for value in (0, -1, True, 1.5):
+            with pytest.raises(ValueError, match="positive integer or None"):
+                ModelSettings(max_concurrent_requests=value)
+
     def test_list_profiles_empty_by_default(self, mgr):
         assert mgr.list_profiles("model-a") == []
 

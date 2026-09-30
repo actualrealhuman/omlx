@@ -29,6 +29,7 @@ struct ModelDTO: Codable, Equatable, Sendable, Identifiable {
     let isDefault: Bool?
     let isFavorite: Bool?
     let engineType: String?
+    var distributed: Bool? = nil
     let modelType: String?
     /// Lower-level config-derived model class (e.g. `deepseek_v32`,
     /// `glm_moe_dsa`). Used to gate the IndexCache row to DSA models.
@@ -87,6 +88,7 @@ struct ModelSettingsDTO: Codable, Equatable, Sendable {
     let modelTypeOverride: String?
     let maxContextWindow: Int?
     let maxTokens: Int?
+    let maxConcurrentRequests: Int?
     let temperature: Double?
     let topP: Double?
     let topK: Int?
@@ -180,6 +182,7 @@ struct ModelSettingsPatch: Encodable, Equatable, Sendable {
     var modelTypeOverride: String? = nil
     var maxContextWindow: Int? = nil
     var maxTokens: Int? = nil
+    var maxConcurrentRequests: Int?? = nil // nil omits; .some(nil) clears inheritance override.
     var temperature: Double? = nil
     var topP: Double? = nil
     var topK: Int? = nil

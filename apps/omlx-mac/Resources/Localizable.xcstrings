@@ -12591,6 +12591,18 @@
         }
       }
     },
+    "profile.detail.capacity.max_concurrent_requests" : {
+      "comment" : "Capacity stat label for the per-model concurrent request limit",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Max Requests"
+          }
+        }
+      }
+    },
     "profile.detail.capacity.tokens" : {
       "comment" : "Token count rendered next to a Capacity stat; placeholder is the formatted count",
       "extractionState" : "extracted_with_value",
@@ -21318,6 +21330,54 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "生成 Token 的上限（空 = 默认）"
+          }
+        }
+      }
+    },
+    "settings.basic.max_concurrent_requests.label" : {
+      "comment" : "Row label for the per-model concurrency limit",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Maximum Concurrent Requests"
+          }
+        }
+      }
+    },
+    "settings.basic.max_concurrent_requests.sub" : {
+      "comment" : "Sublabel for the per-model concurrency limit",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Empty uses the server limit"
+          }
+        }
+      }
+    },
+    "settings.basic.max_concurrent_requests.placeholder" : {
+      "comment" : "Placeholder when the per-model concurrency limit inherits the server setting",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server default"
+          }
+        }
+      }
+    },
+    "settings.basic.max_concurrent_requests.invalid" : {
+      "comment" : "Validation error for per-model concurrent request limit",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enter a whole number greater than zero."
           }
         }
       }

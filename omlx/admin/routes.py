@@ -307,6 +307,7 @@ class ModelSettingsRequest(BaseModel):
     chat_template_kwargs: dict[str, Any] | None = None
     forced_ct_kwargs: list[str] | None = None
     ttl_seconds: int | None = None
+    max_concurrent_requests: int | None = Field(default=None, strict=True, ge=1)
     index_cache_freq: int | None = None
     enable_thinking: bool | None = None
     # Keep  thinking blocks in historical turns (None = auto, True when the
@@ -2821,6 +2822,8 @@ async def update_model_settings(
             entry.engine_type = type_to_engine.get(detected_type, "batched")
     if "max_context_window" in sent:
         current_settings.max_context_window = request.max_context_window
+    if "max_concurrent_requests" in sent:
+        current_settings.max_concurrent_requests = request.max_concurrent_requests
     if "max_tokens" in sent:
         current_settings.max_tokens = request.max_tokens
     if "temperature" in sent:

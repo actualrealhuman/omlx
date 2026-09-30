@@ -215,11 +215,12 @@ Load LLMs, VLMs, embedding models, and rerankers within the same server. Models 
 
 ### Per-Model Settings
 
-Configure sampling parameters, chat template kwargs, TTL, model alias, model type override, and more per model directly from the admin panel. Changes apply immediately without server restart.
+Configure sampling parameters, chat template kwargs, TTL, model alias, model type override, and more per model directly from the admin panel. Changes apply without restarting the server; load-time settings may rebuild an active model.
 
 - **Model alias**: set a custom API-visible name. `/v1/models` returns the alias, and requests accept both the alias and directory name.
 - **Model type override**: manually set a model as LLM or VLM regardless of auto-detection.
-- **Profiles**: save named bundles of per-model settings and switch between them from the admin panel. A profile can optionally be exposed as its own model: `/v1/models` then also lists `<model>:<profile>` (e.g. `qwen3-8b:thinking`), which serves on the same engine as the base model with the profile's settings overlaid per request — no extra memory, no reload. When the base model has an alias, the exposed ID is advertised as `<alias>:<profile>`; the directory-name form keeps working, just like for the base model.
+- **Maximum concurrent requests**: set an optional limit for local LLM/VLM generation. An empty value inherits the server-wide scheduler limit. The override bounds both admitted requests and the active decode batch; changing the effective limit rebuilds a loaded model. This applies to local batched engines, including DFlash's batched fallback. Distributed deployments use the worker scheduler's limit, while embedding, reranking, audio, and diffusion engines use their own batching paths.
+- **Profiles**: save named bundles of per-model settings and switch between them from the admin panel. A profile can optionally be exposed as its own model: `/v1/models` then also lists `<model>:<profile>` (e.g. `qwen3-8b:thinking`), which serves requests with the profile's settings overlaid on the base model. Request-time settings share the loaded engine; load-time settings such as concurrency may rebuild that engine when the effective value changes. When the base model has an alias, the exposed ID is advertised as `<alias>:<profile>`; the directory-name form keeps working, just like for the base model.
 
 <p align="center">
   <img src="docs/images/omlx_ChatTemplateKwargs.png" alt="oMLX Chat Template Kwargs" width="480">

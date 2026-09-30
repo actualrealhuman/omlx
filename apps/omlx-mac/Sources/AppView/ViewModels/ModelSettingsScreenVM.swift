@@ -25,7 +25,7 @@ final class ModelSettingsScreenVM {
     }
 
     enum Field: Sendable {
-        case alias, modelType, contextLength, maxTokens
+        case alias, modelType, contextLength, maxTokens, maxConcurrentRequests
         case temperature, topP, topK, minP
         case repetitionPenalty, presencePenalty, ttl
         case enableThinking, qwen4PleSsdOffload
@@ -241,6 +241,7 @@ final class ModelSettingsScreenVM {
     var modelTypeOverride: String = ""
     var contextLength: String = ""
     var maxTokens: String = ""
+    var maxConcurrentRequests: String = ""
     var temperature: String = ""
     var topP: String = ""
     var topK: String = ""
@@ -419,6 +420,12 @@ final class ModelSettingsScreenVM {
         return Self.diffusionConfigModelTypes.contains(type)
     }
 
+    var supportsPerModelConcurrency: Bool {
+        !isDiffusionModel
+            && model?.distributed != true
+            && ["batched", "vlm"].contains(model?.engineType ?? "batched")
+    }
+
     var thinkingForced: Bool { model?.thinkingForced == true }
 
     static func aneFractionOptions(current: String, presets: [Double]) -> [(String, String)] {
@@ -493,6 +500,8 @@ final class ModelSettingsScreenVM {
         case .mtpEnabled, .mtpAdaptiveMaxDepth, .vlmMtpEnabled, .vlmMtpDraftModel:
             return true
         case .vlmMtpDraftBlockSize:
+            return true
+        case .maxConcurrentRequests:
             return true
         case .alias, .modelType, .contextLength, .maxTokens:
             return false
@@ -577,6 +586,7 @@ final class ModelSettingsScreenVM {
                 self.modelTypeOverride = s?.modelTypeOverride ?? ""
                 self.contextLength = s?.maxContextWindow.map(String.init) ?? ""
                 self.maxTokens = s?.maxTokens.map(String.init) ?? ""
+                self.maxConcurrentRequests = s?.maxConcurrentRequests.map(String.init) ?? ""
                 self.temperature = s?.temperature.map { String($0) } ?? ""
                 self.topP = s?.topP.map { String($0) } ?? ""
                 self.topK = s?.topK.map(String.init) ?? ""
@@ -697,6 +707,18 @@ final class ModelSettingsScreenVM {
         case .modelType:               patch.modelTypeOverride = modelTypeOverride.isEmpty ? nil : modelTypeOverride
         case .contextLength:           patch.maxContextWindow = Int(contextLength)
         case .maxTokens:               patch.maxTokens = Int(maxTokens)
+        case .maxConcurrentRequests:
+            let raw = maxConcurrentRequests.trimmingCharacters(in: .whitespaces)
+            if raw.isEmpty {
+                patch.maxConcurrentRequests = .some(nil)
+            } else if let value = Int(raw), value >= 1 {
+                patch.maxConcurrentRequests = .some(value)
+            } else {
+                self.lastError = String(localized: "settings.basic.max_concurrent_requests.invalid",
+                                         defaultValue: "Enter a whole number greater than zero.",
+                                         comment: "Validation error for per-model concurrent request limit")
+                return
+            }
         case .temperature:
             switch SamplingValidator.temperature(temperature) {
             case .success(let v): patch.temperature = v
@@ -1268,7 +1290,12 @@ final class ModelSettingsScreenVM {
             )
         }
 
-        // Model-specific — experimental
+        // Model-specific — scheduler and experimental settings. This field
+        // is intentionally separate from sampling and only applies to
+        // per-model profiles.
+        if supportsPerModelConcurrency {
+            putInt(ProfileSettingsKey.maxConcurrentRequests, maxConcurrentRequests)
+        }
         if !isDiffusion {
             putBool(ProfileSettingsKey.turboquantKvEnabled, turboquantKvEnabled)
             if turboquantKvEnabled, let bits = Double(turboquantKvBits) {
@@ -1550,7 +1577,7 @@ final class ModelSettingsScreenVM {
         let displayName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanName = "p-" + UUID().uuidString.lowercased().prefix(28)
         guard !displayName.isEmpty, scope != .preset else { return }
-        guard validateAneWorkingSettings() else { return }
+        guard validateAneWorkingSettings(), validateMaxConcurrentRequests() else { return }
         let settings = currentSettingsDict()
         do {
             switch scope {
@@ -1594,7 +1621,7 @@ final class ModelSettingsScreenVM {
     func updateProfileWithWorking(scope: ProfileScope, name: String, client: OMLXClient) async {
         let targetModelID = modelID
         guard scope != .preset else { return }
-        guard validateAneWorkingSettings() else { return }
+        guard validateAneWorkingSettings(), validateMaxConcurrentRequests() else { return }
         let settings = currentSettingsDict()
         do {
             switch scope {
@@ -1627,6 +1654,18 @@ final class ModelSettingsScreenVM {
         } catch {
             self.lastError = error.omlxDescription
         }
+    }
+
+    private func validateMaxConcurrentRequests() -> Bool {
+        guard supportsPerModelConcurrency else { return true }
+        let raw = maxConcurrentRequests.trimmingCharacters(in: .whitespaces)
+        guard raw.isEmpty || (Int(raw).map { $0 >= 1 } ?? false) else {
+            lastError = String(localized: "settings.basic.max_concurrent_requests.invalid",
+                               defaultValue: "Enter a whole number greater than zero.",
+                               comment: "Validation error for per-model concurrent request limit")
+            return false
+        }
+        return true
     }
 
     private func validateAneWorkingSettings() -> Bool {

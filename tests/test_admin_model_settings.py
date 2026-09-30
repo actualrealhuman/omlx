@@ -501,6 +501,35 @@ async def test_mtp_draft_tokens_is_persisted_not_dropped(depth):
 
 
 @pytest.mark.asyncio
+async def test_max_concurrent_requests_persists_and_null_clears_override():
+    pool, _ = _failed_pool()
+    settings = ModelSettings(max_concurrent_requests=6)
+
+    result = await _update_settings(
+        pool,
+        settings,
+        admin_routes.ModelSettingsRequest(max_concurrent_requests=2),
+    )
+    assert settings.max_concurrent_requests == 2
+    assert result["settings"]["max_concurrent_requests"] == 2
+
+    await _update_settings(
+        pool,
+        settings,
+        admin_routes.ModelSettingsRequest(max_concurrent_requests=None),
+    )
+    assert settings.max_concurrent_requests is None
+
+
+@pytest.mark.parametrize("value", [0, -1, 1.0, 1.5, "2", True])
+def test_max_concurrent_requests_requires_a_positive_strict_integer(value):
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
+        admin_routes.ModelSettingsRequest(max_concurrent_requests=value)
+
+
+@pytest.mark.asyncio
 async def test_preserve_thinking_and_turboquant_skip_last_are_persisted():
     """Same silent-drop class as #2823 for the other two engine settings."""
     pool, _ = _failed_pool()

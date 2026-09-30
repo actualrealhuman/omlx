@@ -309,6 +309,8 @@ class ModelSettings:
 
     # Sampling parameters (None means use global default)
     max_context_window: Optional[int] = None
+    # Per-model limit on simultaneously admitted generation requests (None = global scheduler setting).
+    max_concurrent_requests: int | None = None
     max_tokens: Optional[int] = None
     temperature: Optional[float] = None
     top_p: Optional[float] = None
@@ -491,6 +493,11 @@ class ModelSettings:
     active_profile_name: Optional[str] = None  # Name of the currently-applied profile
 
     def __post_init__(self) -> None:
+        if self.max_concurrent_requests is not None and (
+            type(self.max_concurrent_requests) is not int
+            or self.max_concurrent_requests < 1
+        ):
+            raise ValueError("max_concurrent_requests must be a positive integer or None")
         if self.qwen35_oq_a8_enabled and self.qwen35_oq_a8_min_tokens < 1:
             raise ValueError("qwen35_oq_a8_min_tokens must be at least 1")
         # Both accelerate the same Qwen3.5 prefill projections by wrapping

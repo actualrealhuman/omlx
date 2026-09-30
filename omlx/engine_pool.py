@@ -992,6 +992,18 @@ class EnginePool:
         def add(key: str, value: object) -> None:
             signature.append((key, self._canonical_signature_value(value)))
 
+        # Scheduler construction captures both the admitted-sequence limit
+        # and BatchGenerator's active-generation batch ceiling. Include the
+        # effective per-model value so changing the override (or its global
+        # fallback) recreates an already-loaded engine.
+        model_max_concurrent = getattr(settings, "max_concurrent_requests", None)
+        effective_max_concurrent = (
+            model_max_concurrent
+            if model_max_concurrent is not None
+            else self._scheduler_config.max_num_seqs
+        )
+        add("max_concurrent_requests", effective_max_concurrent)
+
         # Security/load gates.
         add("trust_remote_code", bool(data.get("trust_remote_code", False)))
         add("index_cache_freq", normalized_index_cache_freq())
@@ -1174,6 +1186,21 @@ class EnginePool:
             add("vlm_mtp_draft_block_size", data.get("vlm_mtp_draft_block_size"))
 
         return tuple(signature)
+
+    def _scheduler_config_for_model(
+        self, model_id: str, model_path: str, model_settings: object | None
+    ) -> SchedulerConfig:
+        """Return an independent scheduler config with any model concurrency override."""
+        scheduler_config = copy.copy(self._scheduler_config)
+        scheduler_config.model_name = model_id
+        scheduler_config.model_path = model_path
+        max_concurrent = getattr(model_settings, "max_concurrent_requests", None)
+        if max_concurrent is not None:
+            # These are the two runtime bounds on live decode sequences:
+            # Scheduler admission and mlx-lm BatchGenerator batch admission.
+            scheduler_config.max_num_seqs = max_concurrent
+            scheduler_config.completion_batch_size = max_concurrent
+        return scheduler_config
 
     @property
     def model_count(self) -> int:
@@ -3205,11 +3232,11 @@ class EnginePool:
                 include_ane_reservation=False,
             )
 
-            # Wire the correct model_id / model_path into the shared scheduler
-            # config so every engine (Batched/VLM/DFlash/Embedding) sees the
-            # right values when it builds `SchedulerConfig` internally.
-            self._scheduler_config.model_name = model_id
-            self._scheduler_config.model_path = entry.model_path
+            # Each loaded model gets its own scheduler config. A model
+            # override must never leak into the shared global fallback.
+            scheduler_config = self._scheduler_config_for_model(
+                model_id, entry.model_path, model_settings
+            )
 
             # Native MTP forces LM-only dispatch even for VLM models. Vision
             # encoder weights are ignored because the patched mtp_forward only
@@ -3283,7 +3310,7 @@ class EnginePool:
                             ),
                             model_settings=model_settings,
                             fallback_engine_type=effective_type,
-                            scheduler_config=self._scheduler_config,
+                            scheduler_config=scheduler_config,
                             omlx_ssd_cache_dir=getattr(
                                 self._scheduler_config, "paged_ssd_cache_dir", None
                             ),
@@ -3350,7 +3377,7 @@ class EnginePool:
                     engine = EmbeddingEngine(
                         model_name=entry.model_path,
                         trust_remote_code=trc,
-                        scheduler_config=self._scheduler_config,
+                        scheduler_config=scheduler_config,
                     )
                 elif effective_type == "reranker":
                     engine = RerankerEngine(
@@ -3361,7 +3388,7 @@ class EnginePool:
                     engine = VLMBatchedEngine(
                         model_name=entry.model_path,
                         trust_remote_code=trc,
-                        scheduler_config=self._scheduler_config,
+                        scheduler_config=scheduler_config,
                         model_settings=model_settings,
                         prefill_eviction_callback=prefill_eviction_callback,
                     )
@@ -3378,7 +3405,7 @@ class EnginePool:
                     engine = BatchedEngine(
                         model_name=entry.model_path,
                         trust_remote_code=trc,
-                        scheduler_config=self._scheduler_config,
+                        scheduler_config=scheduler_config,
                         model_settings=model_settings,
                         prefill_eviction_callback=prefill_eviction_callback,
                     )
