@@ -1284,6 +1284,7 @@ def test_step_prefill_reclaims_before_first_guard(monitor, expected_gathered):
         _record_chunk_transient=MagicMock(),
         _maybe_record_fixed_state_bytes=MagicMock(),
         _reserve_qsa_index_capacity=MagicMock(),
+        _mark_inference_activity=lambda: events.append("inference"),
     )
     ns.running = {}
     ns._decode_fairness = True
@@ -1335,6 +1336,7 @@ def test_step_prefill_reclaims_before_first_guard(monitor, expected_gathered):
     # The whole prompt (3 prefill tokens plus the last) is reserved before
     # the first guard reads current usage.
     assert events[:4] == ["sync", ("reserve", 4), "adaptive", "guard"]
+    assert events.index("guard") < events.index("inference") < events.index("model")
     ns._record_chunk_transient.assert_called_once_with(
         2,
         11 * _GB,

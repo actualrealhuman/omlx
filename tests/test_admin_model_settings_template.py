@@ -594,6 +594,7 @@ test('Template matching ignores nested dictionary ordering', () => {
 
 
 DASHBOARD_BLOCK_IDS = (
+    "inference_throttle",
     "serving_stats",
     "usage_history",
     "active_models",
@@ -677,7 +678,8 @@ const plain = value => JSON.parse(JSON.stringify(value));
 assert.equal(lib.COLUMNS, 24);
 assert.equal(lib.MIN_W, 6);
 const def = lib.defaultLayout();
-assert.equal(def.blocks.length, 8);
+assert.equal(def.blocks.length, 9);
+assert.equal(def.blocks[0].id, 'inference_throttle');
 assert.ok(def.blocks.every((b, i) => b.x === 0 && b.y === i && b.w === 24));
 assert.deepEqual(plain(lib.normalizeLayout(null)), plain(def));
 assert.deepEqual(plain(lib.normalizeLayout({ blocks: 'nope' })), plain(def));
@@ -699,6 +701,10 @@ assert.deepEqual(plain(messy.blocks), [
     { id: 'applications', x: 0, y: 1, w: 24 },
 ]);
 assert.deepEqual(plain(lib.normalizeLayout({ width: 'full', blocks: [] }).blocks), []);
+assert.deepEqual(
+    plain(lib.normalizeLayout({ blocks: [{ id: 'serving_stats', x: 0, y: 0, w: 24 }] }).blocks),
+    [{ id: 'serving_stats', x: 0, y: 0, w: 24 }],
+);
 assert.equal(lib.widthClass('wide'), 'max-w-[90rem]');
 assert.equal(lib.widthClass('bogus'), 'max-w-7xl');
 """

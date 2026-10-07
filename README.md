@@ -162,6 +162,8 @@ Supports text LLMs, vision-language models (VLM), OCR models, embeddings, and re
 
 Web UI at `/admin` for real-time monitoring, model management, chat, benchmark, and per-model settings. Supports English, Korean, Japanese, Chinese, French, Russian, Spanish, and Brazilian Portuguese. All CDN dependencies are vendored for fully offline operation.
 
+**Inference Throttle** in Settings → Performance adjusts pacing for supported local batched generation across engines in the process. Choose 10–100%; changes apply immediately without a restart. Add its dashboard widget from the layout tray for a live control. At 100%, generation follows the normal full-speed path; lower values set a best-effort target share and do not promise a particular electrical power level. See [Inference Throttle scope](docs/decisions/inference-throttle.md).
+
 <p align="center">
   <img src="docs/images/Screenshot 2026-02-10 at 00.45.34.png" alt="oMLX Admin Dashboard" width="720">
 </p>

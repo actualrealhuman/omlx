@@ -135,7 +135,7 @@
             // Global settings
             globalSettings: {
                 base_path: '',
-                server: { host: '127.0.0.1', port: 8000, log_level: 'info', sse_keepalive_mode: 'chunk', burst_decode_mode: 'balanced', preserve_mid_system_cache: true, qwen4_gdn_decode_wide_proj: false, distributed_inference_enabled: false, distributed_inference_active: false, max_audio_upload_size: '100MB' },
+                server: { host: '127.0.0.1', port: 8000, log_level: 'info', sse_keepalive_mode: 'chunk', burst_decode_mode: 'balanced', inference_share: 1.0, preserve_mid_system_cache: true, qwen4_gdn_decode_wide_proj: false, distributed_inference_enabled: false, distributed_inference_active: false, max_audio_upload_size: '100MB' },
                 model: { model_dirs: [''], model_fallback: false, hide_helper_models: false },
                 memory: { prefill_memory_guard: true, memory_guard_tier: 'balanced', memory_guard_custom_ceiling_gb: 0 },
                 scheduler: { max_concurrent_requests: 8, embedding_batch_size: 32, chunked_prefill: false, prefill_priority: 'context', decode_fairness: true },
@@ -174,6 +174,14 @@
                 idle_timeout: { idle_timeout_seconds: null },
                 system: { total_memory_bytes: 0, total_memory: '', auto_model_memory: '', ssd_total_bytes: 0, ssd_total: '' },
             },
+            inferenceThrottlePercent: 100,
+            inferenceThrottleNumericDraft: '100',
+            _inferenceThrottleNumericDirty: false,
+            inferenceThrottleError: '',
+            _inferenceThrottleSequence: 0,
+            _inferenceThrottleSavedSequence: 0,
+            _inferenceThrottleTimer: null,
+            _inferenceThrottleWritePromise: null,
 
             // Web search "Test search" button state
             webSearchTest: { running: false, ok: null, message: '' },
@@ -937,6 +945,7 @@
 
             async resetGlobalSettingsDefaults() {
                 if (this.saving || this.loadingGlobalSettings || this.resettingGlobalSettings || this.showGlobalResetNotice) return;
+                this.globalSettings.server.inference_share = this.inferenceThrottlePercent / 100;
                 const previous = {
                     globalSettings: JSON.parse(JSON.stringify(this.globalSettings)),
                     globalDefaultsPending: this.globalDefaultsPending,
@@ -961,7 +970,8 @@
                             if (['base_path', 'model_dirs', 'model_dir', 'effective_model_dirs',
                                 'ssd_cache_dir', 'config_path', 'hf_cache_path', 'ca_bundle',
                                 'api_key', 'api_key_set', 'sub_keys', 'endpoint',
-                                'distributed_inference_active'].includes(key)) continue;
+                                'distributed_inference_active'].includes(key)
+                                || (section === 'server' && key === 'inference_share')) continue;
                             if (Object.hasOwn(defaults[section], key)) {
                                 s[section][key] = defaults[section][key];
                             }
@@ -985,6 +995,7 @@
 
             cancelGlobalSettingsReset() {
                 if (this.globalResetSnapshot) Object.assign(this, this.globalResetSnapshot);
+                this.globalSettings.server.inference_share = this.inferenceThrottlePercent / 100;
                 this.confirmGlobalSettingsReset();
             },
 
@@ -993,7 +1004,114 @@
                 this.showGlobalResetNotice = false;
             },
 
+            inferenceThrottleStatus() {
+                const percent = Number(this.inferenceThrottlePercent);
+                return percent >= 100
+                    ? window.t('settings.inference_throttle.status_full')
+                    : window.t('settings.inference_throttle.status_power')
+                        .replace('{percent}', String(percent));
+            },
+
+            inferenceThrottleSaveStatus() {
+                if (this._inferenceThrottleTimer !== null
+                    || this._inferenceThrottleWritePromise) {
+                    return window.t('settings.inference_throttle.saving');
+                }
+                if (this.inferenceThrottleError || this._inferenceThrottleSequence === 0
+                    || this._inferenceThrottleSavedSequence < this._inferenceThrottleSequence) return '';
+                return window.t('settings.inference_throttle.saved');
+            },
+
+            stageInferenceThrottleNumeric(rawValue) {
+                this.inferenceThrottleNumericDraft = String(rawValue ?? '');
+                this._inferenceThrottleNumericDirty = true;
+            },
+
+            commitInferenceThrottleNumeric(rawValue) {
+                const raw = String(rawValue ?? '').trim();
+                const percent = Number(raw);
+                if (!raw || !Number.isFinite(percent) || percent < 10 || percent > 100) {
+                    this.inferenceThrottleError = window.t('settings.inference_throttle.validation');
+                    this.inferenceThrottleNumericDraft = String(this.inferenceThrottlePercent);
+                    this._inferenceThrottleNumericDirty = false;
+                    return;
+                }
+                this.inferenceThrottleNumericDraft = raw;
+                this._inferenceThrottleNumericDirty = false;
+                this.queueInferenceThrottleUpdate(raw);
+                return this.flushInferenceThrottleUpdate();
+            },
+
+            queueInferenceThrottleUpdate(rawValue) {
+                const raw = String(rawValue ?? '').trim();
+                const percent = Number(raw);
+                if (!raw || !Number.isFinite(percent) || percent < 10 || percent > 100) {
+                    this.inferenceThrottleError = window.t('settings.inference_throttle.validation');
+                    return;
+                }
+                this.inferenceThrottleError = '';
+                this.inferenceThrottlePercent = percent;
+                this.inferenceThrottleNumericDraft = String(percent);
+                this._inferenceThrottleNumericDirty = false;
+                this.globalSettings.server.inference_share = percent / 100;
+                this._inferenceThrottleSequence += 1;
+                if (this._inferenceThrottleTimer !== null) {
+                    clearTimeout(this._inferenceThrottleTimer);
+                }
+                this._inferenceThrottleTimer = setTimeout(() => {
+                    this._inferenceThrottleTimer = null;
+                    this.flushInferenceThrottleUpdate();
+                }, 180);
+            },
+
+            async flushInferenceThrottleUpdate() {
+                if (this._inferenceThrottleTimer !== null) {
+                    clearTimeout(this._inferenceThrottleTimer);
+                    this._inferenceThrottleTimer = null;
+                }
+                if (this._inferenceThrottleWritePromise) {
+                    await this._inferenceThrottleWritePromise;
+                    if (this._inferenceThrottleSavedSequence < this._inferenceThrottleSequence
+                        && !this.inferenceThrottleError) {
+                        return this.flushInferenceThrottleUpdate();
+                    }
+                    return;
+                }
+                if (this._inferenceThrottleSavedSequence >= this._inferenceThrottleSequence) return;
+
+                const writeLatest = async () => {
+                    while (this._inferenceThrottleSavedSequence < this._inferenceThrottleSequence) {
+                        const sequence = this._inferenceThrottleSequence;
+                        const share = Number(this.inferenceThrottlePercent) / 100;
+                        try {
+                            const response = await fetch('/admin/api/global-settings', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ inference_share: share }),
+                            });
+                            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                            this._inferenceThrottleSavedSequence = sequence;
+                            if (sequence === this._inferenceThrottleSequence) {
+                                this.inferenceThrottleError = '';
+                            }
+                        } catch (error) {
+                            if (sequence !== this._inferenceThrottleSequence) continue;
+                            this.inferenceThrottleError = window.t('settings.inference_throttle.save_error');
+                            break;
+                        }
+                    }
+                };
+                this._inferenceThrottleWritePromise = writeLatest();
+                try {
+                    await this._inferenceThrottleWritePromise;
+                } finally {
+                    this._inferenceThrottleWritePromise = null;
+                }
+            },
+
             async loadGlobalSettings() {
+                const throttleSequenceAtStart = this._inferenceThrottleSequence;
+                const throttleSavedSequenceAtStart = this._inferenceThrottleSavedSequence;
                 this.loadingGlobalSettings = true;
                 try {
                     const response = await fetch('/admin/api/global-settings');
@@ -1004,10 +1122,27 @@
                         const modelDirs = data.model?.model_dirs?.length
                             ? data.model.model_dirs
                             : (data.model?.model_dir ? [data.model.model_dir] : ['']);
+                        const canSyncThrottle = throttleSequenceAtStart === this._inferenceThrottleSequence
+                            && throttleSavedSequenceAtStart === this._inferenceThrottleSavedSequence
+                            && this._inferenceThrottleSavedSequence >= this._inferenceThrottleSequence
+                            && !this._inferenceThrottleNumericDirty
+                            && this._inferenceThrottleTimer === null
+                            && !this._inferenceThrottleWritePromise;
+                        if (canSyncThrottle) {
+                            const savedShare = Number(data.server?.inference_share ?? 1);
+                            if (Number.isFinite(savedShare) && savedShare >= 0.1 && savedShare <= 1) {
+                                this.inferenceThrottlePercent = savedShare * 100;
+                                this.inferenceThrottleNumericDraft = String(this.inferenceThrottlePercent);
+                            }
+                        }
                         this.globalSettings = {
                             ...this.globalSettings,
                             ...data,
-                            server: { ...this.globalSettings.server, ...data.server },
+                            server: {
+                                ...this.globalSettings.server,
+                                ...data.server,
+                                inference_share: this.inferenceThrottlePercent / 100,
+                            },
                             model: { ...this.globalSettings.model, ...data.model, model_dirs: modelDirs },
                             memory: { ...this.globalSettings.memory, ...data.memory },
                             scheduler: { ...this.globalSettings.scheduler, ...data.scheduler },

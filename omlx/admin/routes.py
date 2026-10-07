@@ -12,6 +12,7 @@ import asyncio
 import inspect
 import json
 import logging
+import math
 import os
 import re
 import shlex
@@ -564,6 +565,7 @@ class UpdateTemplateRequest(BaseModel):
 DASHBOARD_COLUMNS = 24
 DASHBOARD_BLOCK_MIN_W = 6
 DASHBOARD_BLOCK_IDS = (
+    "inference_throttle",
     "serving_stats",
     "usage_history",
     "active_models",
@@ -623,6 +625,9 @@ class GlobalSettingsRequest(BaseModel):
     sse_keepalive_mode: str | None = None
     auto_start_on_launch: bool | None = None
     burst_decode_mode: str | None = None  # "off" / "light" / "balanced" / "aggressive"
+    inference_share: float | None = Field(
+        default=None, ge=0.1, le=1.0, allow_inf_nan=False
+    )
     preserve_mid_system_cache: bool | None = None
     gpu_keep_warm_interval: float | None = None
     qwen4_gdn_decode_wide_proj: bool | None = None
@@ -736,6 +741,13 @@ class GlobalSettingsRequest(BaseModel):
     # Auth settings
     api_key: str | None = None
     skip_api_key_verification: bool | None = None
+
+    @field_validator("inference_share", mode="before")
+    @classmethod
+    def _reject_boolean_inference_share(cls, value):
+        if isinstance(value, bool):
+            raise ValueError("inference_share must be a number")
+        return value
 
     @field_validator("idle_timeout_seconds", mode="before")
     @classmethod
@@ -4621,6 +4633,7 @@ def _global_settings_response(global_settings):
             "sse_keepalive_mode": global_settings.server.sse_keepalive_mode,
             "auto_start_on_launch": global_settings.server.auto_start_on_launch,
             "burst_decode_mode": global_settings.server.burst_decode_mode,
+            "inference_share": getattr(global_settings.server, "inference_share", 1.0),
             "qwen4_gdn_decode_wide_proj": global_settings.server.qwen4_gdn_decode_wide_proj,
             "preserve_mid_system_cache": getattr(
                 global_settings.server,
@@ -4925,6 +4938,20 @@ async def update_global_settings(
                     cfg.decode_burst_budget_single_s = single_s
         runtime_applied.append("burst_decode_mode")
         logger.info(f"Burst Decode mode set to '{mode}'")
+    if request.inference_share is not None:
+        share = float(request.inference_share)
+        if not math.isfinite(share) or not 0.1 <= share <= 1.0:
+            raise HTTPException(
+                status_code=400,
+                detail="inference_share must be a finite number between 0.1 and 1.0",
+            )
+        global_settings.server.inference_share = share
+        from ..server import _server_state
+
+        pool = _server_state.engine_pool
+        if pool is not None:
+            pool.configure_inference_share(share)
+        runtime_applied.append("inference_share")
     if request.auto_start_on_launch is not None:
         global_settings.server.auto_start_on_launch = request.auto_start_on_launch
         runtime_applied.append("auto_start_on_launch")

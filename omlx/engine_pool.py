@@ -52,6 +52,7 @@ from .exceptions import (
     ModelUnavailableError,
     describe_ceiling_binding,
 )
+from .inference_pacing import InferencePacer
 from .model_discovery import (
     VLM_NATIVE_TEXT_MODEL_TYPES,
     discover_models,
@@ -399,7 +400,13 @@ class EnginePool:
         self._gpu_keep_warm_interval: float = 0.0
         self._gpu_keep_warm_task: asyncio.Task[None] | None = None
         self._gpu_keep_warm_last_active = 0.0
+        # One coordinator is shared by supported batched text/VLM engines.
+        self._inference_pacer = InferencePacer()
         self.configure_hot_cache_budget()
+
+    def configure_inference_share(self, share: float) -> None:
+        """Apply the shared generation submission share to loaded and future engines."""
+        self._inference_pacer.set_share(share)
 
     def configure_gpu_keep_warm(self, interval_seconds: float) -> None:
         """Set the idle keep-warm period in seconds (0 or less disables it)."""
@@ -3710,6 +3717,7 @@ class EnginePool:
                         scheduler_config=self._scheduler_config,
                         model_settings=model_settings,
                         prefill_eviction_callback=prefill_eviction_callback,
+                        inference_pacer=self._inference_pacer,
                     )
                 elif entry.engine_type == "audio_stt":
                     engine = STTEngine(model_name=entry.model_path)
@@ -3727,6 +3735,7 @@ class EnginePool:
                         scheduler_config=self._scheduler_config,
                         model_settings=model_settings,
                         prefill_eviction_callback=prefill_eviction_callback,
+                        inference_pacer=self._inference_pacer,
                     )
 
             _is_dflash_engine = (
@@ -3763,6 +3772,7 @@ class EnginePool:
                             scheduler_config=self._scheduler_config,
                             model_settings=model_settings,
                             prefill_eviction_callback=prefill_eviction_callback,
+                            inference_pacer=self._inference_pacer,
                         )
                     else:
                         engine = BatchedEngine(
@@ -3771,6 +3781,7 @@ class EnginePool:
                             scheduler_config=self._scheduler_config,
                             model_settings=model_settings,
                             prefill_eviction_callback=prefill_eviction_callback,
+                            inference_pacer=self._inference_pacer,
                         )
                     try:
                         await engine.start()
@@ -3809,6 +3820,7 @@ class EnginePool:
                         scheduler_config=self._scheduler_config,
                         model_settings=model_settings,
                         prefill_eviction_callback=prefill_eviction_callback,
+                        inference_pacer=self._inference_pacer,
                     )
                     try:
                         await engine.start()
@@ -3845,6 +3857,7 @@ class EnginePool:
                         scheduler_config=self._scheduler_config,
                         model_settings=model_settings,
                         prefill_eviction_callback=prefill_eviction_callback,
+                        inference_pacer=self._inference_pacer,
                     )
                     try:
                         await engine.start()

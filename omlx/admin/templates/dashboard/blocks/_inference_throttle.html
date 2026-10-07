@@ -1,0 +1,10 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<section class="h-full rounded-2xl border border-neutral-200 bg-white p-5" aria-labelledby="inference-throttle-title">
+    <div class="mb-4 flex items-center gap-2">
+        <i data-lucide="gauge" class="h-4 w-4 text-neutral-500"></i>
+        <h2 id="inference-throttle-title" class="text-xs font-bold uppercase tracking-wider text-neutral-600">
+            {{ t('settings.inference_throttle.label') }}
+        </h2>
+    </div>
+    {% include 'dashboard/_inference_throttle_control.html' %}
+</section>

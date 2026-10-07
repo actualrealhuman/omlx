@@ -1754,6 +1754,9 @@ class SchedulerOutput:
     prefill_eviction_request: PrefillEvictionRequest | None = None
     # Whether any work was done
     has_work: bool = False
+    # True when this step entered a covered prompt/decode model operation.
+    # Unlike has_work, rejection and cache-maintenance paths do not set it.
+    inference_work: bool = False
 
 
 class _BoundarySnapshotProvider:
@@ -4151,6 +4154,7 @@ class Scheduler:
                     n_to_process,
                     model_kwargs,
                 )
+                self._mark_inference_activity()
                 prefill_out = prefill_model(
                     input_arr[:, :n_to_process],
                     cache=prompt_cache,
@@ -6261,6 +6265,7 @@ class Scheduler:
                 n,
                 chunk_kwargs,
             )
+            self._mark_inference_activity()
             prefill_out = prefill_model(chunk, cache=state.cache, **chunk_kwargs)
             if capture_from is not None:
                 self._dflash_seed_prefill(state.request, prefill_out, capture_from)
@@ -10610,6 +10615,20 @@ class Scheduler:
             request_id = self._pending_abort_ids.pop()
             self._do_abort_request(request_id)
 
+    def _mark_inference_activity(self) -> None:
+        """Mark entry into covered prompt/decode work for the current step."""
+        self._step_inference_work_started = True
+
+    def maintenance_step(self) -> None:
+        """Drain owner-thread cleanup without admitting or decoding requests.
+
+        This is safe to call while pacing rests: it performs pending aborts,
+        idle reclaim and completed async removals only.
+        """
+        self._process_pending_aborts()
+        self._process_pending_reclaim()
+        self._drain_pending_async_removes()
+
     def _cleanup_prefill_abort_request(
         self, request: "Request", temp_uid: int | None = None
     ) -> None:
@@ -11904,6 +11923,7 @@ class Scheduler:
                         prompt_token_ids[: request.specprefill_system_end]
                     )
 
+                    self._mark_inference_activity()
                     target_result = run_specprefill_target_prefill(
                         target_model=self.model,
                         request=request,
@@ -13567,6 +13587,7 @@ class Scheduler:
             SchedulerOutput with results of this step
         """
         output = SchedulerOutput()
+        self._step_inference_work_started = False
 
         # Publish decode activity for cross-engine prefill fairness (a
         # count of 0 removes the entry, so idle engines never throttle a
@@ -13651,6 +13672,7 @@ class Scheduler:
                 if self._moe_offload_slots_released:
                     self._moe_offload_slots_released = False
                     self.moe_offload_restore()
+                self._mark_inference_activity()
                 _t_decode_start = time.perf_counter()
                 if self.batch_generator is not None:
                     responses = list(self.batch_generator.next_generated())
@@ -13848,6 +13870,7 @@ class Scheduler:
 
         self._publish_admin_snapshot()
 
+        output.inference_work = self._step_inference_work_started
         return output
 
     def _publish_admin_snapshot(self) -> None:

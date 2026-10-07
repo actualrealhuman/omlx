@@ -2352,6 +2352,9 @@ def init_server(
     _server_state.engine_pool.configure_gpu_keep_warm(
         global_settings.server.gpu_keep_warm_interval if global_settings else 0.5
     )
+    _server_state.engine_pool.configure_inference_share(
+        global_settings.server.inference_share if global_settings else 1.0
+    )
     from .cluster.enrollment import configure_cluster_enrollment, get_cluster_enrollment
     from .cluster.incidents import configure_cluster_incidents
     from .cluster.pairing import configure_pairing_manager

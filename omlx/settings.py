@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import shutil
 from dataclasses import asdict, dataclass, field
@@ -198,6 +199,9 @@ class ServerSettings:
     sse_keepalive_mode: str = "chunk"
     auto_start_on_launch: bool = True
     burst_decode_mode: str = DEFAULT_BURST_DECODE_MODE
+    # Requested share of covered batched text/VLM scheduler activity.
+    # 1.0 preserves the unpaced default.
+    inference_share: float = 1.0
     preserve_mid_system_cache: bool = True
     qwen4_gdn_decode_wide_proj: bool = False
     distributed_inference_enabled: bool = False
@@ -213,6 +217,14 @@ class ServerSettings:
     # large resident models). Ticks stop after 5 minutes without requests.
     # 0 disables.
     gpu_keep_warm_interval: float = 0.5
+
+    def __post_init__(self) -> None:
+        if isinstance(self.inference_share, bool):
+            raise ValueError("inference_share must be a finite number")
+        value = float(self.inference_share)
+        if not math.isfinite(value) or not 0.1 <= value <= 1.0:
+            raise ValueError("inference_share must be between 0.1 and 1.0")
+        self.inference_share = value
 
     def max_audio_upload_bytes(self) -> int:
         """Configured audio upload limit in bytes. Non-positive sizes raise ValueError."""
@@ -245,6 +257,7 @@ class ServerSettings:
             sse_keepalive_mode=data.get("sse_keepalive_mode", "chunk"),
             auto_start_on_launch=data.get("auto_start_on_launch", True),
             burst_decode_mode=data.get("burst_decode_mode", DEFAULT_BURST_DECODE_MODE),
+            inference_share=data.get("inference_share", 1.0),
             preserve_mid_system_cache=data.get("preserve_mid_system_cache", True),
             qwen4_gdn_decode_wide_proj=data.get("qwen4_gdn_decode_wide_proj", False),
             distributed_inference_enabled=data.get(

@@ -40,6 +40,14 @@ balanced (0.1 s) and aggressive (0.2 s) burst settings. Include short replies,
 long replies, a second request admitted during decode, and disconnect/recovery.
 Report any custom budgets separately from the stock modes.
 
+# Inference throttle
+
+Run `python -m pytest -q tests/test_inference_pacing.py tests/test_engine_core.py tests/test_output_collector.py tests/test_admin_inference_throttle_ui.py tests/test_admin_model_settings_template.py tests/test_admin_usage.py` to check the shared submission pacer, settings persistence, engine-loop lifecycle, executor cancellation ownership, maintenance-only wakeups, interval-union accounting, first-chunk delivery, full-speed bypass, live mode changes, dashboard layout discovery and serialized live settings writes. Tests use fake clocks and controlled executors where applicable.
+
+The setting is off by default (`inference_share: 1.0`). Lower values request a share of covered scheduler-call wall time; they do not cap GPU utilization, electrical power, or all MLX work. The default nominal cycle is 400 ms; its WORK admission window is that duration multiplied by the requested share. This gives schedulers room for efficient chunks without imposing a hard cutoff. The pacer closes WORK admission, drains covered scheduler calls, then waits for the remaining requested REST. Natural idle time counts toward that wait. An already-running scheduler call can overrun the target; one continuous gate deferral is capped at one second, so the requested share is best effort.
+
+Coverage is limited to local batched text generation and the batched VLM text/prompt decode path. It excludes model loading and preparation, VLM image/vision preparation, standalone DFlash or diffusion, audio, and distributed or remote engines. DRAIN means covered scheduler calls have completed; no GPU-idle fence is observed, and same-stream work or excluded producers may continue on the device during REST. Hardware validation is still needed to characterize workload-specific latency and energy effects; the setting itself does not promise a measured power percentage.
+
 Cluster process-group tests use the `mock_cluster_ssh` fixture; remote teardown and serve-marker tests retain their own transport assertions. Mock-model engine tests skip explicit GC, while `test_engine_teardown.py` and `test_per_engine_threads.py` retain teardown and reclamation coverage. GLM5 execution tests reuse the eight-layer KDA/DSA fixture with dense and MoE layers; checkpoint-key tests retain the 45-layer configuration. The SDPA memory test retains the 8K/32K length ratio, head dimension 256, and 6:1 GQA ratio with fewer heads. DeepSeek V4.1 direct and converted engine checks run sequentially in one isolated subprocess with separate checkpoint directories.
 
 # Cache cleanup logging tests

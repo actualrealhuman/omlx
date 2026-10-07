@@ -41,6 +41,7 @@ from .exceptions import (
     PrefillMemoryExceededError,
     describe_ceiling_binding,
 )
+from .inference_pacing import PACING_DISABLED, InferencePacer, PacingPermit
 from .model_registry import get_registry
 from .output_collector import RequestOutputCollector, RequestStreamState
 from .request import Request, RequestOutput, SamplingParams
@@ -261,6 +262,8 @@ class EngineConfig:
     step_interval: float = 0.05  # Idle wait timeout; requests wake the loop
     stream_interval: int = 1  # Tokens to batch before streaming (1=every token)
     prefill_eviction_callback: Optional[Callable[[Any], Awaitable[bool]]] = None
+    # Shared across local batched engines. None preserves the original path.
+    inference_pacer: InferencePacer | None = None
     # Decode burst: run several scheduler.step() calls per run_in_executor
     # hand-off instead of one. Each decode token otherwise bounces back to the
     # event loop, ping-ponging the GIL with the asyncio loop + uvicorn on the
@@ -379,6 +382,9 @@ class EngineCore:
         self._wake_event: Optional[asyncio.Event] = None
         self._start_time: Optional[float] = None
         self._steps_executed = 0
+        # Executor callables keep this token so a stop/restart cannot revive
+        # work that was queued by an earlier engine lifecycle.
+        self._lifecycle_generation = 0
 
         # Drop transient aliases after ownership moves to the engine/scheduler
         # graph, so close()/deep_reset() can make that graph unreachable.
@@ -394,6 +400,10 @@ class EngineCore:
 
         self._loop = asyncio.get_running_loop()
         self._wake_event = asyncio.Event()
+        self._lifecycle_generation += 1
+        pacer = self.config.inference_pacer
+        if pacer is not None:
+            pacer.start_engine(self._engine_id)
         self._running = True
         self._start_time = time.time()
         self._task = asyncio.create_task(self._engine_loop())
@@ -401,7 +411,12 @@ class EngineCore:
 
     async def stop(self) -> None:
         """Stop the engine loop."""
+        self._lifecycle_generation += 1
         self._running = False
+        pacer = self.config.inference_pacer
+        if pacer is not None:
+            pacer.cancel_engine(self._engine_id)
+            pacer.set_engine_busy(self._engine_id, False)
         if self._wake_event is not None:
             self._wake_event.set()
         if self._task:
@@ -432,7 +447,12 @@ class EngineCore:
         else:
             loop.call_soon_threadsafe(event.set)
 
-    def _step_burst(self) -> list:
+    def _step_burst(
+        self,
+        permit: PacingPermit | None = None,
+        activity_intervals: list[tuple[float, float]] | None = None,
+        lifecycle_generation: int | None = None,
+    ) -> list:
         """Run scheduler.step() several times in one executor hand-off.
 
         Each decode token otherwise bounces back to the event loop, which
@@ -450,8 +470,41 @@ class EngineCore:
 
         Runs on the MLX executor thread. Returns the SchedulerOutputs in order.
         """
+        pacer = self.config.inference_pacer
+
+        def step_once():
+            nonlocal activity_intervals
+            if (
+                lifecycle_generation is not None
+                and lifecycle_generation != self._lifecycle_generation
+            ):
+                return None
+            if pacer is not None and pacer.full_speed_snapshot:
+                # A live switch to full speed ends old-generation accounting
+                # immediately. Lifecycle cancellation remains checked above.
+                activity_intervals = None
+            elif (
+                permit is not None
+                and pacer is not None
+                and not pacer.begin_step(permit)
+            ):
+                return None
+            started = time.monotonic() if activity_intervals is not None else 0.0
+            try:
+                output = self.scheduler.step()
+                return output
+            finally:
+                if (
+                    activity_intervals is not None
+                    and bool(getattr(self.scheduler, "_step_inference_work_started", False))
+                ):
+                    activity_intervals.append((started, time.monotonic()))
+
+        first = step_once()
+        if first is None:
+            return []
         max_steps = self.config.decode_burst_max_steps
-        outputs = [self.scheduler.step()]
+        outputs = [first]
         if max_steps <= 1:
             return outputs
         # Adaptive budget: single active request -> aggressive (nothing else to
@@ -484,7 +537,10 @@ class EngineCore:
                 or time.monotonic() >= deadline
             ):
                 break
-            outputs.append(self.scheduler.step())
+            next_output = step_once()
+            if next_output is None:
+                break
+            outputs.append(next_output)
         return outputs
 
     async def _engine_loop(self) -> None:
@@ -510,9 +566,88 @@ class EngineCore:
                     self._reap_orphaned_collectors(now)
 
                 if self.scheduler.has_requests():
-                    step_outputs = await loop.run_in_executor(
-                        self._mlx_executor, self._step_burst
-                    )
+                    pacer = self.config.inference_pacer
+                    permit = None
+                    if pacer is not None and not pacer.full_speed_snapshot:
+                        pacer.set_engine_busy(self._engine_id, True)
+                        acquisition = await pacer.acquire(
+                            self._engine_id,
+                            wake_event=self._wake_event,
+                        )
+                        if acquisition is PACING_DISABLED:
+                            # Full mode was published while we waited. Submit
+                            # the ordinary scheduler burst, not maintenance.
+                            if not self._running:
+                                break
+                            permit = None
+                        elif acquisition is None:
+                            if not self._running:
+                                break
+                            event = self._wake_event
+                            if event is not None:
+                                event.clear()
+                            await loop.run_in_executor(
+                                self._mlx_executor,
+                                self.scheduler.maintenance_step,
+                            )
+                            continue
+                        else:
+                            permit = acquisition
+
+                    lifecycle_generation = self._lifecycle_generation
+
+                    if permit is None:
+                        # Preserve the ordinary executor path at full speed:
+                        # no permit wrapper, timing list, or completion work.
+                        if pacer is None:
+                            step_outputs = await loop.run_in_executor(
+                                self._mlx_executor,
+                                self._step_burst,
+                            )
+                        else:
+                            step_outputs = await loop.run_in_executor(
+                                self._mlx_executor,
+                                self._step_burst,
+                                None,
+                                None,
+                                lifecycle_generation,
+                            )
+                    else:
+                        def run_burst(
+                            burst_permit=permit,
+                            burst_pacer=pacer,
+                            burst_lifecycle_generation=lifecycle_generation,
+                        ):
+                            intervals: list[tuple[float, float]] = []
+                            try:
+                                return self._step_burst(
+                                    burst_permit,
+                                    intervals,
+                                    burst_lifecycle_generation,
+                                )
+                            finally:
+                                if burst_pacer is not None:
+                                    burst_pacer.complete(burst_permit, intervals)
+
+                        # Shield the executor future: cancelling this loop task
+                        # cannot cancel a queued callable before its `finally`
+                        # releases the registered permit.
+                        concurrent_future = self._mlx_executor.submit(run_burst)
+                        wrapped_future = asyncio.wrap_future(
+                            concurrent_future, loop=loop
+                        )
+                        # If shutdown cancels this loop task, still retrieve a
+                        # later worker exception after the shielded job completes.
+                        wrapped_future.add_done_callback(
+                            lambda future: (
+                                None
+                                if future.cancelled()
+                                else future.exception()
+                            )
+                        )
+                        step_outputs = await asyncio.shield(wrapped_future)
+                    if not step_outputs:
+                        continue
                     self._steps_executed += len(step_outputs)
 
                     # Distribute every step's outputs to collectors (one or
@@ -608,6 +743,9 @@ class EngineCore:
                                     event.wait(), timeout=step_interval
                                 )
                 else:
+                    pacer = self.config.inference_pacer
+                    if pacer is not None and not pacer.full_speed_snapshot:
+                        pacer.set_engine_busy(self._engine_id, False)
                     event = self._wake_event
                     if event is None:
                         await asyncio.sleep(step_interval)

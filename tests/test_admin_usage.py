@@ -223,6 +223,7 @@ def test_global_settings_toggle_applies_at_runtime(client, tmp_path, monkeypatch
     )
     assert result["success"] is True
     assert gs.usage.usage_history is True
+
     metrics.record_request_complete(100, 20, 60, 0.5, 1.0, "canonical-model", 2.0)
     metrics.usage_history.flush()
     data = client.get("/admin/api/usage").json()
@@ -238,6 +239,41 @@ def test_global_settings_toggle_applies_at_runtime(client, tmp_path, monkeypatch
     assert gs.usage.usage_history is True
 
 
+def test_inference_share_live_update_accepts_exact_fraction_and_persists(
+    client, tmp_path, monkeypatch
+):
+    from omlx.admin import routes as admin_routes
+    from omlx.server import _server_state
+    from omlx.settings import GlobalSettings
+
+    client, _ = client
+    base_path = tmp_path / "settings"
+    gs = GlobalSettings(base_path=base_path)
+    monkeypatch.setattr(admin_routes, "_get_global_settings", lambda: gs)
+
+    class Pool:
+        def __init__(self):
+            self.shares = []
+
+        def configure_inference_share(self, share):
+            self.shares.append(share)
+
+    pool = Pool()
+    monkeypatch.setattr(_server_state, "engine_pool", pool)
+    result = asyncio.run(
+        admin_routes.update_global_settings(
+            request=admin_routes.GlobalSettingsRequest(inference_share=0.8325),
+            is_admin=True,
+        )
+    )
+
+    assert result["success"] is True
+    assert "inference_share" in result["runtime_applied"]
+    assert gs.server.inference_share == 0.8325
+    assert GlobalSettings.load(base_path=base_path).server.inference_share == 0.8325
+    assert pool.shares == [0.8325]
+
+
 def test_dashboard_renders_usage_history_switch_and_disabled_notice(client):
     client, _ = client
     html = client.get("/admin/dashboard").text
@@ -250,6 +286,18 @@ def test_dashboard_renders_usage_history_switch_and_disabled_notice(client):
     )
     assert "usage: { usage_history: true }" in javascript
     assert "usage_history: this.globalSettings.usage.usage_history" in javascript
+
+
+def test_dashboard_renders_default_inference_throttle_controls(client):
+    client, _ = client
+    response = client.get("/admin/dashboard")
+    assert response.status_code == 200
+    html = response.text
+    assert 'data-block="inference_throttle"' in html
+    assert html.count("data-inference-throttle-control") == 2
+    assert "Applies immediately · No restart" in html
+    assert "FULL THROTTLE • MAXIMUM POWER" in html
+    assert 'step="any"' in html
 
 
 def test_usage_history_i18n_keys_present_in_every_locale():

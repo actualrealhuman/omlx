@@ -87,6 +87,7 @@ class TestServerSettings:
             "sse_keepalive_mode": "chunk",
             "auto_start_on_launch": True,
             "burst_decode_mode": "balanced",
+            "inference_share": 1.0,
             "preserve_mid_system_cache": True,
             "qwen4_gdn_decode_wide_proj": False,
             "distributed_inference_enabled": False,
