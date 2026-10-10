@@ -385,6 +385,9 @@ class EngineCore:
         # Executor callables keep this token so a stop/restart cannot revive
         # work that was queued by an earlier engine lifecycle.
         self._lifecycle_generation = 0
+        # Set by the asyncio loop only when the pacer actually closes
+        # admission; consumed by the next scheduler burst on its owner thread.
+        self._pacer_admission_waited = threading.Event()
 
         # Drop transient aliases after ownership moves to the engine/scheduler
         # graph, so close()/deep_reset() can make that graph unreachable.
@@ -452,6 +455,7 @@ class EngineCore:
         permit: PacingPermit | None = None,
         activity_intervals: list[tuple[float, float]] | None = None,
         lifecycle_generation: int | None = None,
+        interrupt_mtp_timing: bool = False,
     ) -> list:
         """Run scheduler.step() several times in one executor hand-off.
 
@@ -473,7 +477,7 @@ class EngineCore:
         pacer = self.config.inference_pacer
 
         def step_once():
-            nonlocal activity_intervals
+            nonlocal activity_intervals, interrupt_mtp_timing
             if (
                 lifecycle_generation is not None
                 and lifecycle_generation != self._lifecycle_generation
@@ -489,6 +493,14 @@ class EngineCore:
                 and not pacer.begin_step(permit)
             ):
                 return None
+            if interrupt_mtp_timing:
+                interrupt_timing = getattr(
+                    self.scheduler, "interrupt_inference_timing", None
+                )
+                if interrupt_timing is not None:
+                    interrupt_timing()
+                self._pacer_admission_waited.clear()
+                interrupt_mtp_timing = False
             started = time.monotonic() if activity_intervals is not None else 0.0
             try:
                 output = self.scheduler.step()
@@ -556,6 +568,12 @@ class EngineCore:
         step_interval = self.config.step_interval
         stream_interval = self.config.stream_interval
         use_simple_streaming = stream_interval == 1
+        admission_waited = self._pacer_admission_waited.is_set()
+
+        def note_admission_wait() -> None:
+            nonlocal admission_waited
+            admission_waited = True
+            self._pacer_admission_waited.set()
 
         while self._running:
             try:
@@ -573,6 +591,7 @@ class EngineCore:
                         acquisition = await pacer.acquire(
                             self._engine_id,
                             wake_event=self._wake_event,
+                            on_admission_wait=note_admission_wait,
                         )
                         if acquisition is PACING_DISABLED:
                             # Full mode was published while we waited. Submit
@@ -604,6 +623,15 @@ class EngineCore:
                                 self._mlx_executor,
                                 self._step_burst,
                             )
+                        elif admission_waited:
+                            step_outputs = await loop.run_in_executor(
+                                self._mlx_executor,
+                                self._step_burst,
+                                None,
+                                None,
+                                lifecycle_generation,
+                                True,
+                            )
                         else:
                             step_outputs = await loop.run_in_executor(
                                 self._mlx_executor,
@@ -617,6 +645,7 @@ class EngineCore:
                             burst_permit=permit,
                             burst_pacer=pacer,
                             burst_lifecycle_generation=lifecycle_generation,
+                            burst_interrupt_mtp_timing=admission_waited,
                         ):
                             intervals: list[tuple[float, float]] = []
                             try:
@@ -624,6 +653,7 @@ class EngineCore:
                                     burst_permit,
                                     intervals,
                                     burst_lifecycle_generation,
+                                    burst_interrupt_mtp_timing,
                                 )
                             finally:
                                 if burst_pacer is not None:
@@ -648,6 +678,7 @@ class EngineCore:
                         step_outputs = await asyncio.shield(wrapped_future)
                     if not step_outputs:
                         continue
+                    admission_waited = False
                     self._steps_executed += len(step_outputs)
 
                     # Distribute every step's outputs to collectors (one or

@@ -267,12 +267,16 @@ class InferencePacer:
         self,
         engine_id: str,
         wake_event: asyncio.Event | None = None,
+        on_admission_wait: Callable[[], None] | None = None,
     ) -> PacingPermit | None | _PacingDisabled:
         """Wait asynchronously for a registered burst opportunity.
 
         A denied operation retains one deferral deadline across wakeups. When
         that deadline expires, it receives one forced permit even in REST so a
-        slow drain cannot produce an unbounded request stall.
+        slow drain cannot produce an unbounded request stall. The optional
+        callback runs once when admission is closed, before this call waits, so
+        consumers can exclude that external interval from their own latency
+        measurements.
         """
         if self.full_speed_snapshot:
             return PACING_DISABLED
@@ -282,6 +286,7 @@ class InferencePacer:
             self._engine_lifecycle.setdefault(engine_id, 0)
             wait_started = self._deferred_since.setdefault(engine_id, self._clock())
             self._waiters[engine_id] = (loop, event)
+        notified_wait = False
         try:
             while True:
                 with self._lock:
@@ -323,6 +328,9 @@ class InferencePacer:
                             delay,
                             max(0.001, self._max_deferral_s - (now - wait_started)),
                         )
+                if not notified_wait and on_admission_wait is not None:
+                    on_admission_wait()
+                    notified_wait = True
                 event_task = asyncio.create_task(event.wait())
                 wake_task = (
                     asyncio.create_task(wake_event.wait())

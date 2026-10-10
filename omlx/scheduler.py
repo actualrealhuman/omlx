@@ -10619,6 +10619,16 @@ class Scheduler:
         """Mark entry into covered prompt/decode work for the current step."""
         self._step_inference_work_started = True
 
+    def interrupt_inference_timing(self) -> None:
+        """Exclude a pacer admission wait from adaptive MTP cost samples.
+
+        Called by EngineCore on this scheduler's owner executor immediately
+        before the next scheduler step. The wait occurred outside the model
+        call, so it is not representative of ordinary or speculative decode
+        cost.
+        """
+        interrupt_batch_timing(self.batch_generator)
+
     def maintenance_step(self) -> None:
         """Drain owner-thread cleanup without admitting or decoding requests.
 

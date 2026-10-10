@@ -26,7 +26,12 @@ def test_default_share_admits_without_a_pacing_wait():
     async def run():
         pacer = InferencePacer()
         pacer.set_engine_busy("one", True)
-        assert await pacer.acquire("one") is PACING_DISABLED
+        waited = []
+        assert (
+            await pacer.acquire("one", on_admission_wait=lambda: waited.append(True))
+            is PACING_DISABLED
+        )
+        assert not waited
         assert not pacer._active
 
     asyncio.run(run())
@@ -63,7 +68,11 @@ def test_natural_idle_pays_rest_and_does_not_add_a_trailing_wait():
         clock = FakeClock()
         pacer = InferencePacer(0.5, work_quantum_s=0.1, clock=clock)
         pacer.set_engine_busy("one", True)
-        permit = await pacer.acquire("one")
+        waited = []
+        permit = await pacer.acquire(
+            "one", on_admission_wait=lambda: waited.append(True)
+        )
+        assert not waited
         assert permit is not None
         pacer.complete(permit, [(0.0, 0.01)])
 
@@ -74,6 +83,24 @@ def test_natural_idle_pays_rest_and_does_not_add_a_trailing_wait():
         next_permit = await pacer.acquire("one")
         assert next_permit is not None and not next_permit.forced
         pacer.complete(next_permit, [])
+
+    asyncio.run(run())
+
+
+def test_already_expired_deferral_grants_forced_permit_without_wait_signal():
+    async def run():
+        clock = FakeClock(1.1)
+        pacer = InferencePacer(0.5, work_quantum_s=0.1, clock=clock)
+        pacer.set_engine_busy("one", True)
+        pacer._deferred_since["one"] = 0.0
+        waited = []
+
+        permit = await pacer.acquire(
+            "one", on_admission_wait=lambda: waited.append(True)
+        )
+
+        assert permit is not None and permit.forced
+        assert not waited
 
     asyncio.run(run())
 
@@ -131,8 +158,12 @@ def test_cancelled_acquisition_cleans_async_waiter_and_child_tasks():
         clock.value = 0.051
         with pacer._lock:
             pacer._advance_locked(clock())
-        waiting = asyncio.create_task(pacer.acquire("two"))
+        admission_waited = threading.Event()
+        waiting = asyncio.create_task(
+            pacer.acquire("two", on_admission_wait=admission_waited.set)
+        )
         await asyncio.sleep(0)
+        assert admission_waited.is_set()
         waiting.cancel()
         with pytest.raises(asyncio.CancelledError):
             await waiting
@@ -204,9 +235,15 @@ def test_full_speed_transition_releases_rest_waiter_without_admission_delay():
         pacer.complete(owner, [(0.0, 0.04)])
         assert pacer.snapshot()["phase"] == "rest"
 
-        waiter = asyncio.create_task(pacer.acquire("waiting"))
+        waited = []
+        waiter = asyncio.create_task(
+            pacer.acquire(
+                "waiting", on_admission_wait=lambda: waited.append(True)
+            )
+        )
         await asyncio.sleep(0)
         assert "waiting" in pacer._waiters
+        assert waited == [True]
         pacer.set_share(1.0)
         assert await waiter is PACING_DISABLED
         assert not pacer._active
@@ -423,6 +460,9 @@ async def test_full_speed_engine_active_and_idle_paths_do_not_touch_pacer_lock(
 
     scheduler.has_requests = has_requests
     scheduler.step = MagicMock(side_effect=step)
+    scheduler.interrupt_inference_timing = MagicMock(
+        side_effect=AssertionError("full-speed mode interrupted MTP timing")
+    )
 
     release_lock = threading.Event()
     lock_acquired = threading.Event()
@@ -450,6 +490,7 @@ async def test_full_speed_engine_active_and_idle_paths_do_not_touch_pacer_lock(
             engine._wake_event.set()
             await asyncio.wait_for(engine._task, timeout=1.0)
             assert scheduler.step.call_count == 1
+            scheduler.interrupt_inference_timing.assert_not_called()
             assert not release_lock.is_set()
     finally:
         release_lock.set()
@@ -657,7 +698,10 @@ async def test_queued_executor_permit_survives_stop_until_worker_finally(
         engine = EngineCore(
             mock_model,
             mock_tokenizer,
-            config=EngineConfig(inference_pacer=pacer),
+            config=EngineConfig(
+                inference_pacer=pacer,
+                decode_burst_max_steps=1,
+            ),
         )
 
     scheduler = engine.scheduler
@@ -817,6 +861,10 @@ async def test_rest_wakeup_runs_only_maintenance_on_owner_executor(
     scheduler = engine.scheduler
     monkeypatch.setattr(scheduler, "has_requests", lambda: True)
     maintenance_called = threading.Event()
+    timing_interrupted = MagicMock()
+    monkeypatch.setattr(
+        scheduler, "interrupt_inference_timing", timing_interrupted
+    )
 
     def active_step():
         scheduler._step_inference_work_started = True
@@ -838,9 +886,140 @@ async def test_rest_wakeup_runs_only_maintenance_on_owner_executor(
         assert await asyncio.to_thread(maintenance_called.wait, 1.0)
         assert scheduler.step.call_count == steps_at_rest
         scheduler.maintenance_step.assert_called_once()
+        # Maintenance may wake a REST waiter but must leave the signal pending
+        # for the next actual decode step on the owner executor.
+        assert engine._pacer_admission_waited.is_set()
+        timing_interrupted.assert_not_called()
     finally:
         if engine._running:
             await engine.stop()
+        engine.close()
+
+
+@pytest.mark.asyncio
+async def test_admission_wait_interrupts_batch_timing_before_next_step(
+    mock_model, mock_tokenizer, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from omlx.patches.mlx_lm_mtp.batch_policy import BatchPolicy
+
+    pacer = InferencePacer(0.5, work_quantum_s=0.001)
+    with patch("omlx.engine_core.get_registry") as registry:
+        registry.return_value.acquire.return_value = True
+        engine = EngineCore(
+            mock_model,
+            mock_tokenizer,
+            config=EngineConfig(
+                inference_pacer=pacer,
+                decode_burst_max_steps=1,
+            ),
+        )
+
+    scheduler = engine.scheduler
+    policy = BatchPolicy([0, 1], 3)
+    policy.cycle_time_ms("mtp", 1.0, 1.02)
+    scheduler.batch_generator = SimpleNamespace(
+        _generation_batch=SimpleNamespace(_omlx_mtp_batch_policy=policy)
+    )
+
+    events = []
+    second_step = threading.Event()
+    original_interrupt = scheduler.interrupt_inference_timing
+
+    def interrupt():
+        events.append(("interrupt", threading.get_ident()))
+        original_interrupt()
+
+    def step():
+        index = len([event for event in events if event[0] == "step"]) + 1
+        events.append(("step", threading.get_ident()))
+        scheduler._step_inference_work_started = True
+        if index == 1:
+            # Cross the work admission deadline so the next acquire waits in
+            # REST. The active scheduler interval remains separately measured.
+            time.sleep(0.01)
+        else:
+            engine._running = False
+            second_step.set()
+        return SchedulerOutput(has_work=True)
+
+    scheduler.has_requests = lambda: True
+    scheduler.step = MagicMock(side_effect=step)
+    scheduler.interrupt_inference_timing = MagicMock(side_effect=interrupt)
+    try:
+        await engine.start()
+        assert await asyncio.to_thread(
+            engine._pacer_admission_waited.wait, 1.0
+        )
+        # A live REST -> full-speed transition wakes acquire with no permit;
+        # the pending interruption must still run before its next scheduler
+        # step rather than being lost with the cancelled wait.
+        pacer.set_share(1.0)
+        assert await asyncio.to_thread(second_step.wait, 1.0)
+        await asyncio.wait_for(engine._task, timeout=1.0)
+        assert [kind for kind, _ in events] == ["step", "interrupt", "step"]
+        assert events[1][1] == events[2][1]
+        assert policy.cycle_time_ms("mtp", 10.0, 10.02) is None
+        assert abs(policy.cycle_time_ms("mtp", 10.025, 10.045) - 25) < 1e-9
+    finally:
+        await engine.stop()
+        engine.close()
+
+
+@pytest.mark.asyncio
+async def test_pending_admission_interruption_survives_engine_stop_and_restart(
+    mock_model, mock_tokenizer
+):
+    pacer = InferencePacer()
+    with patch("omlx.engine_core.get_registry") as registry:
+        registry.return_value.acquire.return_value = True
+        engine = EngineCore(
+            mock_model,
+            mock_tokenizer,
+            config=EngineConfig(
+                inference_pacer=pacer,
+                decode_burst_max_steps=1,
+            ),
+        )
+
+    idle_seen = threading.Event()
+    work_available = False
+    events = []
+    scheduler = engine.scheduler
+
+    def has_requests():
+        idle_seen.set()
+        return work_available
+
+    def step():
+        events.append("step")
+        scheduler._step_inference_work_started = True
+        engine._running = False
+        return SchedulerOutput(has_work=True)
+
+    scheduler.has_requests = has_requests
+    scheduler.step = MagicMock(side_effect=step)
+    scheduler.interrupt_inference_timing = MagicMock(
+        side_effect=lambda: events.append("interrupt")
+    )
+    try:
+        await engine.start()
+        assert await asyncio.to_thread(idle_seen.wait, 1.0)
+        # A wait signal can outlive a canceled loop task; restarting must
+        # consume it on the scheduler owner thread before the next step.
+        engine._pacer_admission_waited.set()
+        await engine.stop()
+        assert engine._pacer_admission_waited.is_set()
+
+        work_available = True
+        await engine.start()
+        await asyncio.wait_for(engine._task, timeout=1.0)
+
+        assert events == ["interrupt", "step"]
+        assert not engine._pacer_admission_waited.is_set()
+    finally:
+        await engine.stop()
         engine.close()
 
 

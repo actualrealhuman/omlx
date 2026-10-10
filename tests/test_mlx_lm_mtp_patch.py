@@ -4772,6 +4772,20 @@ def test_cost_includes_scheduler_interval_but_not_a_mode_transition():
     assert abs(policy.cycle_time_ms("mtp", 2.034, 2.064) - 34) < 1e-9
 
 
+def test_pacer_rest_interrupts_one_batch_cost_sample_only():
+    policy = calibrated()
+    policy.cycle_time_ms("mtp", 1.0, 1.02)
+    assert abs(policy.cycle_time_ms("mtp", 1.025, 1.045) - 25) < 1e-9
+
+    # The scheduler can be denied admission after an MTP call finishes. Drop
+    # the first sample after that REST instead of charging it to MTP latency.
+    policy.interrupt_timing()
+    assert policy.cycle_time_ms("mtp", 10.0, 10.02) is None
+
+    # Ordinary async work between adjacent calls remains part of the sample.
+    assert abs(policy.cycle_time_ms("mtp", 10.025, 10.045) - 25) < 1e-9
+
+
 def test_prefill_wait_does_not_park_a_faster_batch():
     policy = calibrated(batch=2, depth=2)
     now = 0.0
