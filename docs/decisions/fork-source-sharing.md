@@ -1,0 +1,32 @@
+# Share personal additions as source
+
+- Status: Accepted
+- Decision date: 2026-10-10
+
+## Purpose
+
+This fork makes useful additions from a personal oMLX build available for
+others to integrate into their own checkouts, manually or with a coding agent.
+It welcomes focused fixes and contributions with best-effort review.
+
+## Scope
+
+Provide a feature index with identifiable public source, source baselines,
+known dependencies, and validation pointers, plus a reusable integration guide.
+Describe older topic branches and combined-build sources honestly. Publication
+of an index is not evidence that every addition works on every upstream version.
+
+Prebuilt binaries, a release schedule, and general compatibility or support
+commitments are outside this scope. The personal build's upstream integration
+and local packaging policy is a separate concern.
+
+## Consequences
+
+Readers choose their additions and own their resulting build and validation.
+The documentation branch can serve as the fork's entry point while `main`
+remains an upstream mirror and feature branches retain their own histories.
+Keep the guide useful by updating source references when publishing a feature
+or a relevant fix, without creating an automatic publication or build service.
+
+See the [feature index](../FORK_FEATURES.md) and
+[integration guide](../INTEGRATING_FEATURES.md).

@@ -1,5 +1,17 @@
 # Contributing to oMLX
 
+## Contributions to this personal fork
+
+Patches and pull requests for these additions are welcome. Include the source
+feature revision, your target revision, the problem, and the checks you ran;
+keep each change focused. See the [feature index](FORK_FEATURES.md) and
+[integration guide](INTEGRATING_FEATURES.md). Review and support are best effort;
+this fork does not provide binaries or promise releases.
+
+The remaining guidance describes contributions to
+[upstream oMLX](https://github.com/jundot/omlx). Its maintainer policies, CI,
+automation, and discussion links apply to upstream.
+
 Thank you for contributing! Bug fixes, performance improvements, model support, UI improvements, translations, and documentation are welcome.
 
 ## Issues and Feature Requests

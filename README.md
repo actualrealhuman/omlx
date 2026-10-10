@@ -1,3 +1,31 @@
+# Personal oMLX additions
+
+This fork shares features and fixes from my personal build of
+[oMLX](https://github.com/jundot/omlx). Use the source to bring the additions you
+want into your own checkout, yourself or with a coding agent.
+
+- [Feature index](docs/FORK_FEATURES.md): what is available, fixed source
+  revisions, dependencies, and checks to run after integration.
+- [Integration guide](docs/INTEGRATING_FEATURES.md): how to select and adapt a
+  change without importing the whole personal build.
+
+Contributions are welcome. This is a personal code-sharing repository with
+best-effort review, no promised release schedule or compatibility with every
+upstream revision, and no prebuilt binaries from this fork. Preserve the
+existing [license](LICENSE) and attribution when reusing the code.
+
+This documentation branch provides the index and upstream source baseline.
+The additions live on the branches and revisions linked in the index; cloning
+this branch does not enable them all. `main` is kept as an upstream mirror,
+while `personal/main` contains a combined snapshot and may lag local work.
+
+## Upstream oMLX documentation
+
+The documentation below describes upstream oMLX. Its app downloads, Homebrew
+instructions, update service, and contribution links refer to upstream and do
+not install this fork's additions. For these additions, start with the feature
+index and integration guide above.
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/images/icon-rounded-dark.svg" width="140">
