@@ -1,20 +1,14 @@
 // PR 4 - Bartender / Tahoe ControlCenter hidden-icon detection.
 //
-// Ports the three-signal visibility check from app.py:355-410 plus the
-// one-shot recreate + escalation alert. Tahoe-aware recovery includes
-// System Settings plus the StatusKit Auto-Fix flow from the pre-Swift app.
+// Ports the three-signal visibility check from app.py:355-410 plus a
+// one-shot status-item recreate. Recovery stays explicit in Appearance.
 //
 // The repair itself lives in `MenubarIconRecovery` at the bottom of this
-// file so the Appearance screen can drive it on demand. The launch alert is
-// one-shot and has three ways to never reach the user (a running menu bar
-// manager, a dismissed alert, a probe that reads the item as visible), and
-// the main status item carries no autosaveName — so nothing on our side
-// records the removal, and a relaunch can't undo it either. On Tahoe the
-// removal lives in ControlCenter's own prefs as isAllowed=false. See #2368.
+// file so the Appearance screen can drive it on demand. On Tahoe, removal
+// lives in ControlCenter's own prefs as isAllowed=false. See #2368.
 //
-// `MenubarLog` is the third type here: the alert's View Log button and
-// `omlx diagnose menubar` both point at menubar.log, so the probe has to
-// actually write it. server.log is not an option — that file is the raw
+// `MenubarLog` and `omlx diagnose menubar` both use menubar.log, so the probe
+// has to write it. server.log is not an option — that file is the raw
 // stdout/stderr handle the Python child owns.
 
 import AppKit
@@ -24,8 +18,7 @@ final class MenubarVisibilityWatcher {
     private weak var statusItem: NSStatusItem?
     private let recreate: () -> NSStatusItem
     private var didCheckOnce = false
-    private var didRecreate = false
-    private var didAlertOnce = false
+    private var recoveryState = MenubarVisibilityRecoveryState()
 
     init(initial: NSStatusItem, recreate: @escaping () -> NSStatusItem) {
         self.statusItem = initial
@@ -47,10 +40,10 @@ final class MenubarVisibilityWatcher {
         didCheckOnce = true
 
         MenubarLog.write("visibility probe: \(probeDescription())")
-        if !isHidden() { return }
-
-        if !didRecreate {
-            didRecreate = true
+        switch recoveryState.observe(isHidden: isHidden()) {
+        case .visible:
+            return
+        case .recreate:
             statusItem = recreate()
             MenubarLog.write("visibility probe: recreated NSStatusItem, re-probing in 1s")
             // Re-probe after 1 s to give the new item time to register.
@@ -58,13 +51,23 @@ final class MenubarVisibilityWatcher {
                 try? await Task.sleep(for: .seconds(1.0))
                 guard let self else { return }
                 MenubarLog.write("visibility probe: after recreate: \(self.probeDescription())")
-                guard self.isHidden() else { return }
-                self.showHiddenAlert()
+                self.handlePostRecreateProbe()
             }
-            return
+        case .remainsHidden:
+            logManualRestoreHint()
         }
+    }
 
-        showHiddenAlert()
+    private func handlePostRecreateProbe() {
+        if case .remainsHidden = recoveryState.observe(isHidden: isHidden()) {
+            logManualRestoreHint()
+        }
+    }
+
+    private func logManualRestoreHint() {
+        MenubarLog.write(
+            "visibility remains hidden after recreate; manual Restore is available in Settings > Appearance > Menu Bar Icon"
+        )
     }
 
     /// True when ANY of the three strong "is the icon really shown" signals
@@ -105,91 +108,32 @@ final class MenubarVisibilityWatcher {
         """
     }
 
-    private func showHiddenAlert() {
-        guard !didAlertOnce else { return }
+}
 
-        // Bring our process forward so the alert isn't behind another window.
-        NSApp.activate(ignoringOtherApps: true)
+enum MenubarVisibilityRecoveryAction: Equatable {
+    case visible
+    case recreate
+    case remainsHidden
+}
 
-        if MenubarIconRecovery.isTahoeOrNewer, let manager = runningMenuBarManager() {
-            MenubarLog.write("hidden alert suppressed: menu bar manager running (\(manager))")
-            return
-        }
+/// Tracks the one automatic recovery attempt so a hidden icon never triggers
+/// repeated item creation or blocks startup on a prompt.
+struct MenubarVisibilityRecoveryState {
+    private(set) var didRecreate = false
 
-        didAlertOnce = true
-        MenubarLog.write("hidden alert shown")
-
-        let alert = NSAlert()
-        alert.messageText = "oMLX Menubar Icon Hidden"
-
-        if MenubarIconRecovery.isTahoeOrNewer {
-            alert.informativeText = """
-            The oMLX menubar icon isn't showing up.
-
-            On macOS Tahoe this is usually caused by the StatusKit approval \
-            flag being false in system preferences. Auto-Fix will approve \
-            oMLX and restart ControlCenter. It needs Full Disk Access.
-
-            You can also enable oMLX manually in System Settings > Menu Bar, \
-            or run this again later from Settings > Appearance > Menu Bar Icon.
-            """
-            alert.addButton(withTitle: "Auto-Fix")
-            alert.addButton(withTitle: "Open Menu Bar Settings…")
-            alert.addButton(withTitle: "View Log")
-            alert.addButton(withTitle: "Dismiss")
-        } else {
-            alert.informativeText = """
-            The oMLX menubar icon isn't showing up.
-
-            macOS before Tahoe doesn't offer a System Settings toggle for \
-            third-party menubar apps. Try quitting and relaunching oMLX, \
-            and check menubar manager tools like Bartender or Ice if you \
-            use them.
-            """
-            alert.addButton(withTitle: "View Log")
-            alert.addButton(withTitle: "Dismiss")
-        }
-
-        alert.window.level = .floating
-        let response = alert.runModal()
-
-        if MenubarIconRecovery.isTahoeOrNewer {
-            switch response {
-            case .alertFirstButtonReturn:
-                MenubarIconRecovery.runAutofixFlow()
-            case .alertSecondButtonReturn:
-                MenubarIconRecovery.openMenuBarSettings()
-            case .alertThirdButtonReturn:
-                MenubarLog.open()
-            default:
-                break
-            }
-        } else if response == .alertFirstButtonReturn {
-            MenubarLog.open()
-        }
-    }
-
-    /// Bundle id of the first known menu bar manager that's running, if any.
-    /// Named in the log so a suppressed alert isn't a silent branch.
-    private func runningMenuBarManager() -> String? {
-        let bundleIDs = [
-            "com.surteesstudios.Bartender",
-            "com.jordanbaird.Ice",
-            "com.jordanbaird.ice",
-            "com.stonerl.Thaw"
-        ]
-        return bundleIDs.first { bundleID in
-            !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty
-        }
+    mutating func observe(isHidden: Bool) -> MenubarVisibilityRecoveryAction {
+        guard isHidden else { return .visible }
+        guard !didRecreate else { return .remainsHidden }
+        didRecreate = true
+        return .recreate
     }
 }
 
 /// Append-only diagnostic log for the menu bar item, at
 /// `~/Library/Application Support/oMLX/logs/menubar.log`. The pre-Swift app
-/// wrote this file and both the hidden-icon alert and `omlx diagnose
-/// menubar` still send people to it, so the Swift port owes it the same
-/// content. Kept separate from server.log, which is the Python child's own
-/// stdout/stderr handle.
+/// wrote this file and `omlx diagnose menubar` still reads it, so the Swift
+/// port owes it the same content. Kept separate from server.log, which is the
+/// Python child's own stdout/stderr handle.
 @MainActor
 enum MenubarLog {
     /// Settable so tests can redirect the writer at a temp file instead of
@@ -234,15 +178,6 @@ enum MenubarLog {
         try? handle.write(contentsOf: data)
     }
 
-    /// Opens the log for the alert's View Log button. Writes a line first so
-    /// a first-ever click never lands on a missing file.
-    static func open() {
-        if !FileManager.default.fileExists(atPath: url.path) {
-            write("log opened before any probe ran")
-        }
-        NSWorkspace.shared.open(url)
-    }
-
     private static func trimIfNeeded() {
         let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
         guard let size = (attributes?[.size] as? NSNumber)?.intValue, size > maxBytes else {
@@ -261,8 +196,8 @@ enum MenubarLog {
     }
 }
 
-/// StatusKit repair shared by the launch-time hidden-icon alert and the
-/// Appearance screen's "Restore" button. Everything here is best-effort and
+/// StatusKit repair used by the Appearance screen's "Restore" button.
+/// Everything here is best-effort and
 /// user-triggered: on Tahoe the menu bar belongs to ControlCenter, so the
 /// only thing the app can do is flip its own approval flag back on and let
 /// the user finish in System Settings.
@@ -291,20 +226,6 @@ enum MenubarIconRecovery {
         )
 
     // MARK: - Entry points
-
-    /// Auto-Fix button of the launch-time alert.
-    static func runAutofixFlow() {
-        MenubarLog.write("auto-fix requested from hidden-icon alert")
-        let result = fixStatusKitPermission()
-        MenubarLog.write(
-            "auto-fix result: success=\(result.success) fda=\(result.needsFullDiskAccess) — \(oneLine(result.message))"
-        )
-        if result.needsFullDiskAccess {
-            showStatusKitAccessDeniedAlert()
-            return
-        }
-        showAutofixResultAlert(success: result.success, message: result.message)
-    }
 
     /// Appearance > Menu Bar Icon > Restore. Repairs the StatusKit approval
     /// first so the rebuilt status item registers against an already-approved
@@ -778,17 +699,6 @@ enum MenubarIconRecovery {
         default:
             break
         }
-    }
-
-    private static func showAutofixResultAlert(success: Bool, message: String) {
-        NSApp.activate(ignoringOtherApps: true)
-
-        let alert = NSAlert()
-        alert.messageText = success ? "Auto-Fix Succeeded" : "Auto-Fix Failed"
-        alert.informativeText = message
-        alert.addButton(withTitle: "OK")
-        alert.window.level = .floating
-        alert.runModal()
     }
 
     private static func showRestoreResultAlert(message: String, offerSettings: Bool) {

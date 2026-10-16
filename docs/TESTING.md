@@ -155,6 +155,14 @@ Run the `AppConfigTests`, `ServerProcessIntegrationTests`, `ServerScreenVMStorag
 
 The port cases cover offline Apply, recovery from an occupied port, web API saves followed by manual and automatic restarts, native Apply while running, client endpoint synchronization, and persistence across subsequent starts. Each child uses a temporary settings directory and an OS-selected port, and teardown stops the children. Endpoint-only persistence also checks that unrelated settings and corrupt files are preserved.
 
+## Menu bar hidden-icon recovery
+
+Run the `MenubarVisibilityRecoveryTests` target with `xcodebuild test`. The
+tests cover a visible icon, one recreate attempt for a persistently hidden
+icon, and visibility returning after recreation. When still hidden, startup
+records a diagnostic hint to use Settings > Appearance > Menu Bar Icon >
+Restore; that explicit action retains its repair flow and result dialogs.
+
 # Accuracy benchmark worker tests
 
 Run `python -m pytest -q tests/test_eval_worker_pool.py tests/test_eval.py tests/test_accuracy_benchmark.py apps/omlx-web/tests/test_admin_external_accuracy_diagnostics.py tests/test_accuracy_upload.py`. Worker tests cover slot refilling, thinking-mode retries, sequential code scoring without blocking generation, and repeated cancellation during scoring. Real HumanEval, MBPP, and LiveCodeBench subprocess cases verify normal completion, cancellation draining, and temporary-file cleanup with a controlled engine; no model checkpoint is required.
