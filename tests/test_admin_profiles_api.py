@@ -564,7 +564,14 @@ class TestApplySnapshotSemantics:
         c, mgr = client
         mgr.set_settings(
             "model-a",
-            ModelSettings(ttl_seconds=300, model_alias="keep-me", dflash_enabled=True),
+            ModelSettings(
+                ttl_seconds=300,
+                model_alias="keep-me",
+                dflash_enabled=True,
+                inference_share=0.75,
+                inference_priority=80,
+                inference_exclusive=True,
+            ),
         )
         c.post(
             "/admin/api/models/model-a/profiles",
@@ -579,6 +586,9 @@ class TestApplySnapshotSemantics:
         assert settings["ttl_seconds"] == 300
         assert settings["model_alias"] == "keep-me"
         assert settings["dflash_enabled"] is True
+        assert settings["inference_share"] == 0.75
+        assert settings["inference_priority"] == 80
+        assert settings["inference_exclusive"] is True
 
 
 def test_all_model_settings_fields_classified():
@@ -1984,3 +1994,34 @@ class TestSettingsSnapshotRoutes:
             "/admin/api/models/model-a/settings", json={"cache_reasoning_output": None}
         )
         assert "cache_reasoning_output" not in r.json()["settings"]
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        {"inference_share": 0.005},
+        {"inference_allowance": 0.0},
+        {"inference_allowance": 1.0, "inference_share": 0.5},
+    ],
+)
+def test_generation_profile_cannot_reset_model_allowance(client, policy):
+    """Changing a writing/sampling preset preserves model management policy."""
+    c, manager = client
+    manager.set_settings("model-a", ModelSettings(inference_allowance=0.4))
+    response = c.post(
+        "/admin/api/models/model-a/profiles",
+        json={
+            "name": "writing",
+            "display_name": "Writing",
+            "settings": {"temperature": 0.2, **policy},
+        },
+    )
+    assert response.status_code == 200, response.text
+    profile = manager.get_profile("model-a", "writing")
+    assert "inference_share" not in profile["settings"]
+    assert "inference_allowance" not in profile["settings"]
+    applied = c.post("/admin/api/models/model-a/profiles/writing/apply")
+    assert applied.status_code == 200, applied.text
+    saved = manager.get_settings("model-a")
+    assert saved.inference_allowance == 0.4
+    assert saved.temperature == 0.2

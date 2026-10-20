@@ -9,6 +9,7 @@ import copy
 import hashlib
 import json
 import logging
+import math
 import os
 import tempfile
 import threading
@@ -503,6 +504,13 @@ class ModelSettings:
     # Model management flags
     is_pinned: bool = False
     is_default: bool = False  # Only one model can be default
+    # Requested execution policy for the local batched text/VLM scheduler.
+    # None inherits the global maximum; the global value remains a hard cap.
+    inference_share: Optional[float] = None
+    # Relative fraction of the selected class allowance; None inherits 1.0.
+    inference_allowance: Optional[float] = None
+    inference_priority: int = 0
+    inference_exclusive: bool = False
     is_hidden: bool = False  # Hidden from /v1/models (still shown, badged, in admin)
     is_favorite: bool = False  # Listed first in /v1/models and admin lists
 
@@ -533,6 +541,27 @@ class ModelSettings:
     def __post_init__(self) -> None:
         # Profiles retain raw JSON types; engine signatures use repr().
         self.turboquant_kv_bits = normalize_turboquant_kv_bits(self.turboquant_kv_bits)
+        if self.inference_share is not None and (
+            isinstance(self.inference_share, bool)
+            or not isinstance(self.inference_share, (int, float))
+            or not 0.01 <= self.inference_share <= 1.0
+        ):
+            raise ValueError("inference_share must be between 0.01 and 1.0")
+        if self.inference_allowance is not None and (
+            isinstance(self.inference_allowance, bool)
+            or not isinstance(self.inference_allowance, (int, float))
+            or not math.isfinite(self.inference_allowance)
+            or not 0.0 <= self.inference_allowance <= 1.0
+        ):
+            raise ValueError("inference_allowance must be between 0.0 and 1.0")
+        if (
+            isinstance(self.inference_priority, bool)
+            or not isinstance(self.inference_priority, int)
+            or not 0 <= self.inference_priority <= 100
+        ):
+            raise ValueError("inference_priority must be an integer between 0 and 100")
+        if not isinstance(self.inference_exclusive, bool):
+            raise ValueError("inference_exclusive must be a boolean")
         # The ddtree verify mode was removed; stored settings run as adaptive.
         if self.dflash_verify_mode == "ddtree":
             self.dflash_verify_mode = "adaptive"
@@ -653,6 +682,7 @@ class ModelSettingsManager:
         self.templates_file = self.base_path / "global_templates.json"
         self._lock = threading.Lock()
         self._settings: Dict[str, ModelSettings] = {}
+        self._inference_allowance_migration = 0
         self._profiles: Dict[str, Dict[str, Dict[str, Any]]] = {}
         self._templates: Dict[str, Dict[str, Any]] = {}
 
@@ -792,6 +822,9 @@ class ModelSettingsManager:
 
             # Check version
             version = data.get("version", 1)
+            self._inference_allowance_migration = int(
+                data.get("inference_allowance_migration", 0) or 0
+            )
             if version != SETTINGS_VERSION:
                 logger.warning(
                     f"Settings file version {version} differs from current {SETTINGS_VERSION}"
@@ -850,6 +883,7 @@ class ModelSettingsManager:
         """
         data = {
             "version": SETTINGS_VERSION,
+            "inference_allowance_migration": self._inference_allowance_migration,
             "models": {
                 model_id: settings.to_dict()
                 for model_id, settings in self._settings.items()
@@ -857,6 +891,166 @@ class ModelSettingsManager:
         }
         self._write_settings_file(data)
         logger.debug(f"Saved settings for {len(self._settings)} models")
+
+    def migrate_inference_allowances(
+        self,
+        global_share: float,
+        interactive_allowance: float = 1.0,
+        background_allowance: float = 1.0,
+    ) -> dict[str, Any]:
+        """Convert legacy absolute model shares into relative allowances once.
+
+        Original absolute fields remain in place for rollback and old-client
+        compatibility. A digest-named backup is verified before any file is
+        replaced. Failure restores every touched file and raises to the caller.
+        """
+        values = (global_share, interactive_allowance, background_allowance)
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            for value in values
+        ):
+            raise ValueError("inference allowance migration values must be finite")
+        global_share, interactive_allowance, background_allowance = map(float, values)
+        if not 0.0 < global_share <= 1.0 or any(
+            not 0.0 <= value <= 1.0
+            for value in (interactive_allowance, background_allowance)
+        ):
+            raise ValueError("invalid inference allowance migration ceiling")
+
+        with self._lock:
+            if self._inference_allowance_migration >= 1:
+                return {
+                    "migrated": False,
+                    "version": self._inference_allowance_migration,
+                }
+
+            paths = (self.settings_file, self.profiles_file, self.templates_file)
+            originals: dict[Path, bytes] = {}
+            documents: dict[Path, dict[str, Any]] = {}
+            for path in paths:
+                if not path.exists():
+                    originals[path] = b""
+                    documents[path] = {
+                        "version": (
+                            SETTINGS_VERSION
+                            if path == self.settings_file
+                            else (
+                                PROFILES_VERSION
+                                if path == self.profiles_file
+                                else TEMPLATES_VERSION
+                            )
+                        ),
+                        (
+                            "models"
+                            if path == self.settings_file
+                            else (
+                                "profiles"
+                                if path == self.profiles_file
+                                else "templates"
+                            )
+                        ): {},
+                    }
+                    continue
+                content = path.read_bytes()
+                original = json.loads(content)
+                if not isinstance(original, dict):
+                    raise ValueError(f"Invalid settings document: {path.name}")
+                originals[path] = content
+                documents[path] = original
+
+            digest = hashlib.sha256()
+            for path in paths:
+                digest.update(path.name.encode("utf-8") + b"\0")
+                content = originals[path]
+                digest.update(len(content).to_bytes(8, "big"))
+                digest.update(content)
+            backup = self.base_path / f"inference-allowance-backup-{digest.hexdigest()}"
+            backup.mkdir(exist_ok=True)
+            for path in paths:
+                if originals[path]:
+                    target = backup / path.name
+                    if not target.exists():
+                        self._write_profile_repair(target, originals[path])
+                    if target.read_bytes() != originals[path]:
+                        raise OSError(
+                            f"Inference allowance backup mismatch: {target.name}"
+                        )
+
+            def convert(record: dict[str, Any]) -> bool:
+                changed = False
+                if record.get("inference_allowance") is None:
+                    old_share = record.get("inference_share")
+                    if old_share is None:
+                        allowance = 1.0
+                    else:
+                        if (
+                            isinstance(old_share, bool)
+                            or not isinstance(old_share, (int, float))
+                            or not math.isfinite(old_share)
+                            or not 0.01 <= old_share <= 1.0
+                        ):
+                            raise ValueError(
+                                "Invalid legacy inference_share in settings"
+                            )
+                        class_allowance = (
+                            interactive_allowance
+                            if record.get("inference_exclusive", False)
+                            else background_allowance
+                        )
+                        allowance = (
+                            1.0
+                            if class_allowance == 0.0
+                            else min(1.0, old_share / (global_share * class_allowance))
+                        )
+                    record["inference_allowance"] = allowance
+                    changed = True
+                return changed
+
+            settings_doc = documents[self.settings_file]
+            model_records = settings_doc.setdefault("models", {})
+            if not isinstance(model_records, dict):
+                raise ValueError("Invalid model settings records")
+            migrated_models = sum(convert(record) for record in model_records.values())
+            settings_doc["inference_allowance_migration"] = 1
+
+            # Scheduling is model management, independent of generation
+            # profiles/templates. Their original documents are backed up but
+            # remain byte-for-byte unchanged by this migration.
+            migrated_profiles = migrated_templates = 0
+
+            candidate_settings = {
+                model_id: ModelSettings.from_dict(record)
+                for model_id, record in model_records.items()
+            }
+
+            written: list[Path] = []
+            try:
+                for path in (self.settings_file,):
+                    encoded = json.dumps(
+                        documents[path], indent=2, ensure_ascii=False
+                    ).encode("utf-8")
+                    self._write_profile_repair(path, encoded)
+                    written.append(path)
+            except Exception:
+                for path in reversed(written):
+                    if originals[path]:
+                        self._write_profile_repair(path, originals[path])
+                    else:
+                        path.unlink(missing_ok=True)
+                raise
+
+            self._settings = candidate_settings
+            self._inference_allowance_migration = 1
+            return {
+                "migrated": True,
+                "version": 1,
+                "models": migrated_models,
+                "profiles": migrated_profiles,
+                "templates": migrated_templates,
+                "backup": str(backup),
+            }
 
     def _write_settings_file(self, data: dict) -> None:
         """Replace the settings file with ``data`` atomically."""
@@ -975,6 +1169,10 @@ class ModelSettingsManager:
             settings: The settings to apply.
         """
         with self._lock:
+            previous_settings = {
+                mid: ModelSettings.from_dict(saved.to_dict())
+                for mid, saved in self._settings.items()
+            }
             # Handle exclusive default constraint
             if settings.is_default:
                 for mid, s in self._settings.items():
@@ -989,7 +1187,13 @@ class ModelSettingsManager:
             self._settings[model_id] = ModelSettings.from_dict(settings.to_dict())
             logger.info(f"Updated settings for model '{model_id}'")
 
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                # Keep the in-memory view aligned with disk if the atomic
+                # settings write fails.
+                self._settings = previous_settings
+                raise
 
     def delete_settings(self, model_id: str) -> bool:
         """Remove all persisted state for a model (settings + profiles).

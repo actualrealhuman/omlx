@@ -1869,6 +1869,9 @@ class VLMBatchedEngine(BaseEngine):
         enable_thinking: bool | None = None,
         model_settings: Any | None = None,
         prefill_eviction_callback: Any | None = None,
+        inference_pacer: Any | None = None,
+        inference_coordinator: Any | None = None,
+        inference_model_id: str | None = None,
     ):
         self._model_name = model_name
         self._trust_remote_code = trust_remote_code
@@ -1877,6 +1880,9 @@ class VLMBatchedEngine(BaseEngine):
         self._enable_thinking = enable_thinking
         self._model_settings = model_settings
         self._prefill_eviction_callback = prefill_eviction_callback
+        self._inference_pacer = inference_pacer
+        self._inference_coordinator = inference_coordinator
+        self._inference_model_id = inference_model_id or model_name
 
         self._vlm_model = None
         self._processor = None
@@ -1900,6 +1906,10 @@ class VLMBatchedEngine(BaseEngine):
         self._diffusion_lock = asyncio.Lock()
         self._diffusion_active_requests = 0
         self._diffusion_cancel_events: set[threading.Event] = set()
+
+    async def _run_model_preparation(self, operation, *args):
+        """Keep vision work under the same control as batched generation."""
+        return await self._engine.engine.run_model_preparation(operation, *args)
 
     async def _preflight_or_raise_with_eviction(
         self,
@@ -2584,6 +2594,13 @@ class VLMBatchedEngine(BaseEngine):
             scheduler_config=scheduler_config,
             stream_interval=self._stream_interval,
             prefill_eviction_callback=self._prefill_eviction_callback,
+            inference_pacer=self._inference_pacer,
+            inference_coordinator=self._inference_coordinator,
+            inference_model_id=self._inference_model_id,
+            inference_priority=getattr(self._model_settings, "inference_priority", 0),
+            inference_exclusive=getattr(
+                self._model_settings, "inference_exclusive", False
+            ),
         )
 
         # Create engine with adapter as the "model"
@@ -5129,8 +5146,7 @@ class VLMBatchedEngine(BaseEngine):
             image_hash,
             image_cache_key_start,
             image_cache_key_ranges,
-        ) = await loop.run_in_executor(
-            self._engine._mlx_executor,
+        ) = await self._run_model_preparation(
             self._process_chat_messages,
             messages,
             tools,
@@ -5378,8 +5394,7 @@ class VLMBatchedEngine(BaseEngine):
             image_hash,
             image_cache_key_start,
             image_cache_key_ranges,
-        ) = await loop.run_in_executor(
-            self._engine._mlx_executor,
+        ) = await self._run_model_preparation(
             self._process_chat_messages,
             messages,
             tools,
@@ -6049,8 +6064,7 @@ class VLMBatchedEngine(BaseEngine):
             ct_kwargs["add_generation_prompt"] = add_generation_prompt
         kwargs = {"chat_template_kwargs": ct_kwargs or None, "is_partial": is_partial}
         loop = asyncio.get_running_loop()
-        token_ids, *_ = await loop.run_in_executor(
-            self._engine._mlx_executor,
+        token_ids, *_ = await self._run_model_preparation(
             self._process_chat_messages,
             messages,
             tools,

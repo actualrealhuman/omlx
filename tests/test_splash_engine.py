@@ -1169,6 +1169,7 @@ class TestNativeResponseFormat:
             engine.start = AsyncMock()
             engine.count_chat_tokens.return_value = 10
             pool = MagicMock()
+            pool.get_requested_inference_share.return_value = 1.0
             pool.preload_pinned_models = AsyncMock()
             pool.check_ttl_expirations = AsyncMock()
             pool.shutdown = AsyncMock()

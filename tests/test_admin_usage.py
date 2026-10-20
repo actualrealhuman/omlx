@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 from fastapi import FastAPI
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from omlx.admin.auth import require_admin
@@ -198,6 +199,7 @@ def test_global_settings_toggle_applies_at_runtime(client, tmp_path, monkeypatch
     )
     assert result["success"] is True
     assert gs.usage.usage_history is True
+
     metrics.record_request_complete(100, 20, 60, 0.5, 1.0, "canonical-model", 2.0)
     metrics.usage_history.flush()
     data = client.get("/admin/api/usage").json()
@@ -211,6 +213,165 @@ def test_global_settings_toggle_applies_at_runtime(client, tmp_path, monkeypatch
     )
     assert "usage_history" not in untouched["runtime_applied"]
     assert gs.usage.usage_history is True
+
+
+def test_inference_share_live_update_accepts_exact_fraction_and_persists(
+    client, tmp_path, monkeypatch
+):
+    from omlx.admin import routes as admin_routes
+    from omlx.server import _server_state
+    from omlx.settings import GlobalSettings
+
+    client, _ = client
+    base_path = tmp_path / "settings"
+    gs = GlobalSettings(base_path=base_path)
+    monkeypatch.setattr(admin_routes, "_get_global_settings", lambda: gs)
+
+    class Pool:
+        def __init__(self):
+            self.shares = []
+
+        def configure_inference_share(self, share):
+            self.shares.append(share)
+
+    pool = Pool()
+    monkeypatch.setattr(_server_state, "engine_pool", pool)
+    result = asyncio.run(
+        admin_routes.update_global_settings(
+            request=admin_routes.GlobalSettingsRequest(inference_share=0.8325),
+            is_admin=True,
+        )
+    )
+
+    assert result["success"] is True
+    assert "inference_share" in result["runtime_applied"]
+    assert gs.server.inference_share == 0.8325
+    assert GlobalSettings.load(base_path=base_path).server.inference_share == 0.8325
+    assert pool.shares == [0.8325]
+
+
+@pytest.mark.parametrize(
+    "value", [None, True, "0.2", float("nan"), float("inf"), -float("inf")]
+)
+def test_battery_request_rejects_invalid_numeric_options(value):
+    from omlx.admin.routes import GlobalSettingsRequest
+
+    with pytest.raises(ValueError):
+        GlobalSettingsRequest(battery_protection={"minimum_share": value})
+
+
+def test_battery_config_and_maximum_reach_pool_without_service(
+    client, tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from omlx.admin import routes as admin_routes
+    from omlx.server import _server_state
+    from omlx.settings import GlobalSettings
+
+    settings = GlobalSettings(base_path=tmp_path / "settings")
+    apply_share = Mock()
+    monkeypatch.setattr(admin_routes, "_get_global_settings", lambda: settings)
+    monkeypatch.setattr(_server_state, "battery_protection", None)
+    monkeypatch.setattr(
+        _server_state,
+        "engine_pool",
+        SimpleNamespace(configure_inference_share=apply_share),
+    )
+    asyncio.run(
+        admin_routes.update_global_settings(
+            admin_routes.GlobalSettingsRequest(
+                battery_protection={"minimum_share": 0.2}, inference_share=0.65
+            ),
+            is_admin=True,
+        )
+    )
+    apply_share.assert_called_once_with(0.65)
+    saved = GlobalSettings.load(base_path=settings.base_path)
+    assert saved.server.inference_share == 0.65
+    assert saved.server.battery_protection["minimum_share"] == 0.2
+
+
+def test_battery_settings_validate_atomically_and_apply_once(
+    client, tmp_path, monkeypatch
+):
+    from omlx.admin import routes as admin_routes
+    from omlx.server import _server_state
+    from omlx.settings import GlobalSettings
+
+    client, _ = client
+    gs = GlobalSettings(base_path=tmp_path / "settings")
+    gs.server.battery_protection = {
+        **gs.server.battery_protection,
+        "minimum_share": 0.2,
+    }
+    monkeypatch.setattr(admin_routes, "_get_global_settings", lambda: gs)
+    monkeypatch.setattr(_server_state, "engine_pool", None)
+
+    class Manager:
+        def __init__(self):
+            self.configurations = []
+
+        def configure(self, settings, share):
+            self.configurations.append((settings, share))
+
+    manager = Manager()
+    monkeypatch.setattr(_server_state, "battery_protection", manager)
+    with pytest.raises(ValueError):
+        admin_routes.GlobalSettingsRequest(battery_protection={"enabled": True})
+
+    with pytest.raises(ValueError):
+        admin_routes.GlobalSettingsRequest(battery_protection={"minimum_share": True})
+
+    with pytest.raises(HTTPException) as raised:
+        asyncio.run(
+            admin_routes.update_global_settings(
+                request=admin_routes.GlobalSettingsRequest(
+                    host="example.com",
+                    battery_protection={"suspend_percent": 75},
+                ),
+                is_admin=True,
+            )
+        )
+    assert raised.value.status_code == 400
+    assert gs.server.host == "127.0.0.1"
+    assert manager.configurations == []
+
+    no_change = asyncio.run(
+        admin_routes.update_global_settings(
+            request=admin_routes.GlobalSettingsRequest(battery_protection={}),
+            is_admin=True,
+        )
+    )
+    assert "battery_protection_enabled" not in no_change["runtime_applied"]
+    assert manager.configurations == []
+
+    result = asyncio.run(
+        admin_routes.update_global_settings(
+            request=admin_routes.GlobalSettingsRequest(
+                battery_protection_enabled=True,
+                battery_protection={"throttle_start_percent": 80},
+                inference_share=0.8,
+            ),
+            is_admin=True,
+        )
+    )
+    assert result["success"] is True
+    assert "battery_protection" in result["runtime_applied"]
+    assert "battery_protection_enabled" in result["runtime_applied"]
+    assert gs.server.battery_protection_enabled is True
+    assert gs.server.battery_protection["throttle_start_percent"] == 80
+    assert gs.server.battery_protection["minimum_share"] == 0.2
+    assert len(manager.configurations) == 1
+    configured, maximum = manager.configurations[0]
+    assert configured.enabled is True
+    assert configured.throttle_start_percent == 80
+    assert configured.minimum_share == 0.2
+    assert maximum == 0.8
+    saved = GlobalSettings.load(base_path=gs.base_path)
+    assert saved.server.battery_protection_enabled is True
+    assert saved.server.battery_protection == gs.server.battery_protection
 
 
 @pytest.mark.parametrize("model", ["", "canonical-model", "missing"])

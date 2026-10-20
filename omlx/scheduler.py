@@ -1944,6 +1944,9 @@ class SchedulerOutput:
     prefill_eviction_request: PrefillEvictionRequest | None = None
     # Whether any work was done
     has_work: bool = False
+    # True when this step entered a covered prompt/decode model operation.
+    # Unlike has_work, rejection and cache-maintenance paths do not set it.
+    inference_work: bool = False
 
 
 class _ResumedStopSequences:
@@ -4506,6 +4509,7 @@ class Scheduler:
                     model_kwargs,
                     first_chunk=processed_tokens == 0,
                 )
+                self._mark_inference_activity()
                 prefill_out = prefill_model(
                     input_arr[:, :n_to_process],
                     cache=prompt_cache,
@@ -4593,6 +4597,60 @@ class Scheduler:
                 total_tokens=total_length,
                 loop_label="external",
             )
+
+            # The chunk's memory guard and stream context have exited. A parked
+            # worker preserves its stack/KV state; cancellation reacquires a
+            # maintenance slot before the ordinary abort/store path below.
+            checkpoint = getattr(self, "_execution_checkpoint", None)
+            if checkpoint is not None:
+                checkpoint(request.request_id)
+            # Preserve multimodal prefill state at a safe chunk boundary.
+            # The owner executor can still drain other requests' cancellation.
+            gate = getattr(self, "_generation_gate", None)
+            pacer = getattr(self, "_generation_pacer", None)
+            stop = getattr(self, "_generation_stop_event", None)
+            if (
+                gate is not None
+                and gate.restricted_snapshot
+                and pacer is not None
+                and getattr(self, "_model_execution_coordinator", None) is None
+            ):
+                # This VLM prefill stays inside one scheduler call. Give its
+                # internal chunks a bounded rest as well as pacing the outer
+                # call, so long prompts do not bypass the battery restriction.
+                rest = min(1.0, _trace_model_ms / 1000 * (1 / pacer.share - 1))
+                deadline = time.monotonic() + rest
+                while time.monotonic() < deadline:
+                    if request.request_id in self._pending_abort_ids:
+                        break
+                    delay = min(0.1, max(0.0, deadline - time.monotonic()))
+                    if stop is not None:
+                        if stop.wait(delay):
+                            break
+                    else:
+                        time.sleep(delay)
+            if gate is not None and gate.paused_snapshot:
+
+                def cancelled():
+                    stop = getattr(self, "_generation_stop_event", None)
+                    if (
+                        stop is not None and stop.is_set()
+                    ) or request.request_id in self._pending_abort_ids:
+                        return True
+                    if checkpoint is not None:
+                        checkpoint(request.request_id)
+                    if request.request_id in self._pending_abort_ids:
+                        return True
+                    self.maintenance_step()
+                    return False
+
+                if not gate.wait_sync(cancelled):
+                    # Let the ordinary client-abort path below preserve its
+                    # cache/store semantics whenever a live UID exists.
+                    if uid is None or request.request_id not in self._pending_abort_ids:
+                        raise _PrefillAbortedError(
+                            [uid] if uid is not None else [], processed_tokens
+                        )
 
             # Check for pending aborts between prefill chunks.
             abort_uids = self._check_pending_aborts_for_uids(
@@ -6700,6 +6758,9 @@ class Scheduler:
         A row that stops at its generation-prompt tail also runs the rest.
         Returns, per plan, whether that request's prefill is complete.
         """
+        checkpoint = getattr(self, "_execution_checkpoint", None)
+        if checkpoint is not None:
+            checkpoint()
         interrupt_batch_timing(getattr(self, "batch_generator", None))
         head = plans[0]
         processed_before = [plan.state.tokens_processed for plan in plans]
@@ -6887,6 +6948,7 @@ class Scheduler:
             chunk_kwargs,
             first_chunk=state.tokens_processed == 0,
         )
+        self._mark_inference_activity()
         prefill_out = prefill_model(chunk, cache=state.cache, **chunk_kwargs)
         if capture_from is not None:
             self._dflash_seed_prefill(
@@ -6909,6 +6971,7 @@ class Scheduler:
                     rope_delta=getattr(state.request, "rope_deltas", 0.0) or 0.0,
                 )
             )
+        self._mark_inference_activity()
         run_packed_prefill(self.model, rows)
         mx.eval([c.state for plan in plans for c in plan.state.cache])
 
@@ -11544,6 +11607,31 @@ class Scheduler:
             request_id = self._pending_abort_ids.pop()
             self._do_abort_request(request_id)
 
+    def _mark_inference_activity(self) -> None:
+        """Mark entry into covered prompt/decode work for the current step."""
+        self._step_inference_work_started = True
+
+    def interrupt_inference_timing(self) -> None:
+        """Exclude a pacer admission wait from adaptive MTP cost samples.
+
+        Called by EngineCore on this scheduler's owner executor immediately
+        before the next scheduler step. The wait occurred outside the model
+        call, so it is not representative of ordinary or speculative decode
+        cost.
+        """
+        interrupt_batch_timing(self.batch_generator)
+
+    def maintenance_step(self) -> None:
+        """Drain owner-thread cleanup without admitting or decoding requests.
+
+        This is safe to call while pacing rests: it performs pending aborts,
+        idle reclaim and completed async removals only.
+        """
+        self._process_pending_aborts()
+        self._process_pending_reclaim()
+        self._drain_pending_async_removes()
+        self._publish_admin_snapshot()
+
     def _cleanup_prefill_abort_request(
         self, request: "Request", temp_uid: int | None = None
     ) -> None:
@@ -13010,6 +13098,7 @@ class Scheduler:
                         prompt_token_ids[: request.specprefill_system_end]
                     )
 
+                    self._mark_inference_activity()
                     target_result = run_specprefill_target_prefill(
                         target_model=self.model,
                         request=request,
@@ -15073,6 +15162,7 @@ class Scheduler:
             SchedulerOutput with results of this step
         """
         output = SchedulerOutput()
+        self._step_inference_work_started = False
 
         # Publish decode activity for cross-engine prefill fairness (a
         # count of 0 removes the entry, so idle engines never throttle a
@@ -15158,6 +15248,7 @@ class Scheduler:
                 if self._moe_offload_slots_released:
                     self._moe_offload_slots_released = False
                     self.moe_offload_restore()
+                self._mark_inference_activity()
                 _t_decode_start = time.perf_counter()
                 if self.batch_generator is not None:
                     responses = list(self.batch_generator.next_generated())
@@ -15355,14 +15446,15 @@ class Scheduler:
 
         self._publish_admin_snapshot()
 
+        output.inference_work = self._step_inference_work_started
         return output
 
     def _publish_admin_snapshot(self) -> None:
         """Atomically publish a fresh admin-visible snapshot.
 
-        Called from step() on the engine thread, where running/waiting are
-        not concurrently mutated. The admin endpoint reads the reference via
-        snapshot_for_admin() and never iterates the live structures.
+        Called from step() or maintenance_step() on the engine thread, where
+        running/waiting are not concurrently mutated. The admin endpoint reads
+        the reference via snapshot_for_admin() and never iterates the live structures.
         """
         self._admin_snapshot = {
             "running_by_id": dict(self.running),

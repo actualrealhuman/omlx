@@ -321,3 +321,72 @@ def test_download_queues_are_wired_for_restart_resume(wired_downloaders):
 
     hf.restore_tasks.assert_awaited_once()
     ms.restore_tasks.assert_awaited_once()
+
+
+def test_allowance_migration_failure_stops_before_engine_creation(
+    monkeypatch, tmp_path
+):
+    """A failed policy upgrade may not turn a saved restriction into inheritance."""
+    from omlx import server
+    from omlx.model_settings import ModelSettingsManager
+    from omlx.settings import GlobalSettings
+
+    settings = GlobalSettings(base_path=tmp_path / "base")
+    settings.server.host = "127.0.0.1"
+    monkeypatch.setattr(server, "_server_state", server.ServerState())
+    monkeypatch.setattr(server.app, "middleware_stack", None)
+    seen = []
+
+    def refuse_upgrade(self, global_share, interactive_allowance, background_allowance):
+        seen.append((global_share, interactive_allowance, background_allowance))
+        raise OSError("Cannot preserve the migration backup")
+
+    monkeypatch.setattr(
+        ModelSettingsManager, "migrate_inference_allowances", refuse_upgrade
+    )
+    with patch.object(server, "EnginePool") as create_pool:
+        with pytest.raises(OSError, match="migration backup"):
+            server.init_server(str(tmp_path / "models"), global_settings=settings)
+    assert seen == [(1.0, 1.0, 1.0)]
+    create_pool.assert_not_called()
+
+
+def test_allowance_startup_uses_persisted_class_values(monkeypatch, tmp_path):
+    """The real startup path migrates first and configures both class ceilings."""
+    from omlx import server
+    from omlx.engine_pool import EnginePool
+    from omlx.model_settings import ModelSettingsManager
+    from omlx.settings import GlobalSettings
+
+    monkeypatch.setenv("OMLX_BASE_PATH", str(tmp_path / "base"))
+    monkeypatch.setattr(server, "_server_state", server.ServerState())
+    monkeypatch.setattr(server.app, "middleware_stack", None)
+    settings = GlobalSettings(base_path=tmp_path / "base")
+    settings.server.host = "127.0.0.1"
+    settings.server.inference_share = 0.8
+    settings.server.inference_interactive_allowance = 0.75
+    settings.server.inference_background_allowance = 0.4
+    models = tmp_path / "models"
+    models.mkdir()
+    events = []
+    migrate = ModelSettingsManager.migrate_inference_allowances
+    configure = EnginePool.configure_inference_allowances
+
+    def record_migration(self, *args, **kwargs):
+        events.append(("migrate", args))
+        return migrate(self, *args, **kwargs)
+
+    def record_configuration(self, *args, **kwargs):
+        events.append(("configure", kwargs))
+        return configure(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        ModelSettingsManager, "migrate_inference_allowances", record_migration
+    )
+    monkeypatch.setattr(
+        EnginePool, "configure_inference_allowances", record_configuration
+    )
+    with patch("mlx.core.set_cache_limit"):
+        server.init_server(str(models), global_settings=settings)
+    assert events[0] == ("migrate", (0.8, 0.75, 0.4))
+    assert events[1] == ("configure", {"interactive": 0.75, "background": 0.4})

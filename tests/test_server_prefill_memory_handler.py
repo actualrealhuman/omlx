@@ -394,6 +394,7 @@ class TestResponsesEndpointReaches400:
             from unittest.mock import AsyncMock
 
             fake_pool = MagicMock()
+            fake_pool.get_requested_inference_share.return_value = 1.0
             fake_pool.get_entry = MagicMock(return_value=None)
             fake_pool.preload_pinned_models = AsyncMock()
             fake_pool.check_ttl_expirations = AsyncMock()

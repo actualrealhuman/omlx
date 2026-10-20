@@ -51,6 +51,148 @@ class TestModelSettings:
         restored = ModelSettings.from_dict(d)
         assert restored.is_favorite is True
 
+    def test_inference_policy_roundtrip_and_validation(self):
+        settings = ModelSettings(
+            inference_share=0.75,
+            inference_priority=8,
+            inference_exclusive=True,
+        )
+        restored = ModelSettings.from_dict(settings.to_dict())
+        assert restored.inference_share == 0.75
+        assert restored.inference_priority == 8
+        assert restored.inference_exclusive is True
+        assert ModelSettings().inference_share is None
+        assert ModelSettings().inference_priority == 0
+        assert ModelSettings().inference_exclusive is False
+        with pytest.raises(ValueError, match="inference_share"):
+            ModelSettings(inference_share=0.009)
+        with pytest.raises(ValueError, match="inference_priority"):
+            ModelSettings(inference_priority=101)
+        with pytest.raises(ValueError, match="inference_exclusive"):
+            ModelSettings(inference_exclusive=1)
+        relative = ModelSettings(inference_allowance=0.0)
+        assert ModelSettings.from_dict(relative.to_dict()).inference_allowance == 0.0
+        assert ModelSettings().inference_allowance is None
+        with pytest.raises(ValueError, match="inference_allowance"):
+            ModelSettings(inference_allowance=1.01)
+        with pytest.raises(ValueError, match="inference_allowance"):
+            ModelSettings(inference_allowance=True)
+
+    def test_inference_allowance_migration_is_backed_up_and_idempotent(self, tmp_path):
+        manager = ModelSettingsManager(tmp_path)
+        manager.settings_file.write_text(
+            json.dumps(
+                {
+                    "version": SETTINGS_VERSION,
+                    "models": {
+                        "background": {"inference_share": 0.4},
+                        "interactive": {
+                            "inference_share": 0.8,
+                            "inference_exclusive": True,
+                        },
+                        "inherited": {},
+                        "fractional": {"inference_share": 0.12},
+                        "nullable-legacy": {
+                            "inference_share": 0.1,
+                            "inference_allowance": None,
+                        },
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        manager.profiles_file.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "profiles": {
+                        "background": {
+                            "p": {"name": "p", "settings": {"inference_share": 0.2}}
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        manager.templates_file.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "templates": {
+                        "t": {"name": "t", "settings": {"inference_share": 0.1}}
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        originals = {
+            path.name: path.read_bytes()
+            for path in (
+                manager.settings_file,
+                manager.profiles_file,
+                manager.templates_file,
+            )
+        }
+
+        result = manager.migrate_inference_allowances(
+            0.8, interactive_allowance=0.5, background_allowance=0.25
+        )
+        assert result["migrated"] is True
+        assert result["models"] == 5
+        saved = json.loads(manager.settings_file.read_text(encoding="utf-8"))
+        assert saved["inference_allowance_migration"] == 1
+        assert saved["models"]["background"]["inference_allowance"] == 1.0
+        assert saved["models"]["interactive"]["inference_allowance"] == 1.0
+        assert saved["models"]["background"]["inference_share"] == 0.4
+        assert saved["models"]["inherited"]["inference_allowance"] == 1.0
+        assert saved["models"]["fractional"]["inference_allowance"] == 0.6
+        assert saved["models"]["nullable-legacy"]["inference_allowance"] == 0.5
+        assert (
+            manager.profiles_file.read_bytes() == originals[manager.profiles_file.name]
+        )
+        assert (
+            manager.templates_file.read_bytes()
+            == originals[manager.templates_file.name]
+        )
+        assert result["profiles"] == result["templates"] == 0
+        backup = tmp_path / result["backup"]
+        for filename, content in originals.items():
+            assert (backup / filename).read_bytes() == content
+        manager.set_settings("later", ModelSettings(inference_allowance=0.25))
+        assert (
+            json.loads(manager.settings_file.read_text(encoding="utf-8"))[
+                "inference_allowance_migration"
+            ]
+            == 1
+        )
+        assert manager.migrate_inference_allowances(0.2) == {
+            "migrated": False,
+            "version": 1,
+        }
+
+    def test_inference_allowance_migration_validation_failure_preserves_source(
+        self, tmp_path
+    ):
+        manager = ModelSettingsManager(tmp_path)
+        original = json.dumps(
+            {
+                "version": SETTINGS_VERSION,
+                "models": {
+                    "invalid": {
+                        "inference_share": 0.2,
+                        "inference_priority": 101,
+                    }
+                },
+            }
+        ).encode("utf-8")
+        manager.settings_file.write_bytes(original)
+
+        with pytest.raises(ValueError, match="inference_priority"):
+            manager.migrate_inference_allowances(0.8)
+
+        assert manager.settings_file.read_bytes() == original
+        assert "inference_allowance_migration" not in json.loads(original)
+
     def test_moe_expert_offload_defaults(self):
         """Expert offload is opt-in, at 25% residency."""
         settings = ModelSettings()

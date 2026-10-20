@@ -21,6 +21,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from omlx.generation_gate import GenerationGate
+
 from omlx.engine.base import _run_scheduler_preflight_with_cleanup_retry
 from omlx.engine.batched import BatchedEngine
 from omlx.engine.vlm import VLMBatchedEngine
@@ -841,6 +843,7 @@ async def test_engine_core_add_request_cleans_up_on_scheduler_raise(
     from omlx.engine_core import EngineCore
 
     core = EngineCore.__new__(EngineCore)
+    core._generation_gate = GenerationGate()
     core._output_collectors = {}
     core._stream_states = {}
     core._finished_events = {}

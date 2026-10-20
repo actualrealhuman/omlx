@@ -5,6 +5,8 @@ import logging
 
 import pytest
 
+from omlx.generation_gate import GenerationGate
+
 try:
     import mlx.core as mx
 
@@ -728,6 +730,7 @@ class TestEngineCorePropagation:
         from omlx.engine_core import EngineCore
 
         core = object.__new__(EngineCore)
+        core._generation_gate = GenerationGate()
         core._output_collectors = {}
         core._active_requests = {}
         core._stream_states = {}

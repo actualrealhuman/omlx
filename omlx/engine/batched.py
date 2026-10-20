@@ -76,6 +76,9 @@ class BatchedEngine(BaseEngine):
         enable_thinking: bool | None = None,
         model_settings: Any | None = None,
         prefill_eviction_callback: Any | None = None,
+        inference_pacer: Any | None = None,
+        inference_coordinator: Any | None = None,
+        inference_model_id: str | None = None,
     ):
         """
         Initialize the batched engine.
@@ -95,6 +98,9 @@ class BatchedEngine(BaseEngine):
         self._enable_thinking = enable_thinking
         self._model_settings = model_settings
         self._prefill_eviction_callback = prefill_eviction_callback
+        self._inference_pacer = inference_pacer
+        self._inference_coordinator = inference_coordinator
+        self._inference_model_id = inference_model_id or model_name
 
         self._model = None
         self._tokenizer = None
@@ -718,6 +724,13 @@ class BatchedEngine(BaseEngine):
             scheduler_config=scheduler_config,
             stream_interval=self._stream_interval,
             prefill_eviction_callback=self._prefill_eviction_callback,
+            inference_pacer=self._inference_pacer,
+            inference_coordinator=self._inference_coordinator,
+            inference_model_id=self._inference_model_id,
+            inference_priority=getattr(self._model_settings, "inference_priority", 0),
+            inference_exclusive=getattr(
+                self._model_settings, "inference_exclusive", False
+            ),
         )
 
         # Create async engine

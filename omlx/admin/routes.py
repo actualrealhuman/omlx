@@ -9,9 +9,11 @@ This module provides HTTP routes for the admin panel including:
 """
 
 import asyncio
+import copy
 import inspect
 import json
 import logging
+import math
 import os
 import re
 import shlex
@@ -34,12 +36,15 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictBool,
+    StrictInt,
     ValidationInfo,
     field_validator,
     model_validator,
 )
 
 from .._version import __version__ as _omlx_version
+from ..battery_protection import BatteryProtectionSettings
 from ..api.markitdown import MARKITDOWN_MODEL_ID, markitdown_model_visible
 from ..api.openai_models import _coerce_tool_call_arguments
 from ..api.utils import _try_parse_json
@@ -434,10 +439,43 @@ class ModelSettingsRequest(BaseModel):
     is_default: bool | None = None
     is_hidden: bool | None = None
     is_favorite: bool | None = None
+    inference_share: float | None = Field(
+        default=None, ge=0.0, le=1.0, allow_inf_nan=False
+    )
+    inference_allowance: float | None = Field(
+        default=None, ge=0.0, le=1.0, allow_inf_nan=False
+    )
+    inference_priority: StrictInt | None = Field(default=None, ge=0, le=100)
+    inference_exclusive: StrictBool | None = None
     # Security: per-model opt-in for trust_remote_code (issue #926)
     trust_remote_code: bool | None = None
     embedding_audio_enabled: bool | None = None
     embedding_audio_max_seconds: float | None = Field(default=None, gt=0)
+
+    @field_validator("inference_share", mode="before")
+    @classmethod
+    def _reject_boolean_model_inference_share(cls, value):
+        if isinstance(value, bool):
+            raise ValueError("inference_share must be a number")
+        return value
+
+    @field_validator("inference_allowance", mode="before")
+    @classmethod
+    def _reject_boolean_model_inference_allowance(cls, value):
+        if isinstance(value, bool):
+            raise ValueError("inference_allowance must be a number")
+        return value
+
+    @model_validator(mode="after")
+    def _disallow_ambiguous_share_and_allowance(self):
+        if (
+            "inference_share" in self.model_fields_set
+            and "inference_allowance" in self.model_fields_set
+        ):
+            raise ValueError(
+                "send inference_allowance or legacy inference_share, not both"
+            )
+        return self
 
     @field_validator("turboquant_kv_bits")
     @classmethod
@@ -483,6 +521,103 @@ class ModelSettingsRequest(BaseModel):
         if info.field_name != "dflash_draft_model" and _draft_path_is_unusable(value):
             raise ValueError(f"Draft model has no config.json: {value}")
         return value
+
+
+class ModelSchedulingPatch(BaseModel):
+    """Partial update for a model's persisted execution policy."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    inference_share: float | None = Field(
+        default=None, ge=0.0, le=1.0, allow_inf_nan=False
+    )
+    inference_allowance: float | None = Field(
+        default=None, ge=0.0, le=1.0, allow_inf_nan=False
+    )
+    inference_priority: StrictInt | None = Field(default=None, ge=0, le=100)
+    inference_exclusive: StrictBool | None = None
+
+    @field_validator("inference_share", mode="before")
+    @classmethod
+    def _reject_boolean_inference_share(cls, value):
+        if isinstance(value, bool):
+            raise ValueError("inference_share must be a number")
+        if isinstance(value, (int, float)) and not math.isfinite(value):
+            # Keep validation details JSON-safe: FastAPI echoes the offending
+            # value in its 422 body, and JSON cannot encode NaN or infinity.
+            return str(value)
+        return value
+
+    @field_validator("inference_allowance", mode="before")
+    @classmethod
+    def _reject_boolean_inference_allowance(cls, value):
+        if isinstance(value, bool):
+            raise ValueError("inference_allowance must be a number")
+        if isinstance(value, (int, float)) and not math.isfinite(value):
+            return str(value)
+        return value
+
+    @model_validator(mode="after")
+    def _disallow_ambiguous_share_and_allowance(self):
+        if (
+            "inference_share" in self.model_fields_set
+            and "inference_allowance" in self.model_fields_set
+        ):
+            raise ValueError(
+                "send inference_allowance or legacy inference_share, not both"
+            )
+        return self
+
+    @field_validator("inference_priority", "inference_exclusive", mode="before")
+    @classmethod
+    def _reject_null_nonnullable_policy(cls, value, info: ValidationInfo):
+        if value is None:
+            raise ValueError(f"{info.field_name} cannot be null")
+        return value
+
+
+def _class_allowance_for(exclusive: bool) -> float:
+    global_settings = _get_global_settings() if _get_global_settings else None
+    server = getattr(global_settings, "server", None)
+    field = (
+        "inference_interactive_allowance"
+        if exclusive
+        else "inference_background_allowance"
+    )
+    return float(getattr(server, field, 1.0))
+
+
+def _legacy_share_to_allowance(share: float | None, exclusive: bool) -> float:
+    """Translate an older absolute ceiling into the current relative model value."""
+    if share is None:
+        return 1.0
+    global_settings = _get_global_settings() if _get_global_settings else None
+    server = getattr(global_settings, "server", None)
+    global_share = float(getattr(server, "inference_share", 1.0))
+    class_allowance = _class_allowance_for(exclusive)
+    denominator = global_share * class_allowance
+    return 1.0 if denominator <= 0.0 else min(1.0, float(share) / denominator)
+
+
+def _configured_model_share(settings) -> float:
+    """Return the absolute configured ceiling, including unmigrated legacy rows."""
+    global_settings = _get_global_settings() if _get_global_settings else None
+    server = getattr(global_settings, "server", None)
+    global_share = float(getattr(server, "inference_share", 1.0))
+    class_share = _class_allowance_for(settings.inference_exclusive)
+    if settings.inference_allowance is None and settings.inference_share is not None:
+        return min(global_share * class_share, float(settings.inference_share))
+    allowance = (
+        settings.inference_allowance
+        if settings.inference_allowance is not None
+        else 1.0
+    )
+    return global_share * class_share * allowance
+
+
+def _normalize_scheduling_profile_settings(settings: dict[str, Any] | None):
+    # Generation presets cannot change per-model admission/priority policy.
+    return None if settings is None else filter_profile_fields(settings)
 
 
 def _normalize_profile_settings(
@@ -581,6 +716,7 @@ class UpdateTemplateRequest(BaseModel):
 DASHBOARD_COLUMNS = 24
 DASHBOARD_BLOCK_MIN_W = 6
 DASHBOARD_BLOCK_IDS = (
+    "inference_throttle",
     "serving_stats",
     "usage_history",
     "active_models",
@@ -664,10 +800,52 @@ class GlobalSettingsRequest(BaseModel):
     sse_keepalive_mode: str | None = None
     auto_start_on_launch: bool | None = None
     burst_decode_mode: str | None = None  # "off" / "light" / "balanced" / "aggressive"
+    inference_share: float | None = Field(
+        default=None, ge=0.01, le=1.0, allow_inf_nan=False
+    )
+    inference_interactive_allowance: float | None = Field(
+        default=None, ge=0.0, le=1.0, allow_inf_nan=False
+    )
+    inference_background_allowance: float | None = Field(
+        default=None, ge=0.0, le=1.0, allow_inf_nan=False
+    )
+    inference_scheduling_enabled: StrictBool | None = None
+    inference_controls_enabled: StrictBool | None = None
+    inference_scheduling_quantum_seconds: float | None = Field(
+        default=None, ge=0.1, le=60.0, allow_inf_nan=False
+    )
+    battery_protection_enabled: StrictBool | None = None
+    battery_protection: dict[str, Any] | None = None
     preserve_mid_system_cache: bool | None = None
     gpu_keep_warm_interval: float | None = None
     distributed_inference_enabled: bool | None = None
     max_audio_upload_size: str | None = None
+
+    @field_validator("battery_protection", mode="before")
+    @classmethod
+    def _validate_battery_protection_shape(cls, value):
+        if value is None:
+            raise ValueError("battery_protection must be an object")
+        if not isinstance(value, dict):
+            raise ValueError("battery_protection must be an object")
+        known = set(BatteryProtectionSettings().numeric_options())
+        unknown = set(value) - known
+        if unknown:
+            raise ValueError(
+                f"unknown battery protection option(s): {', '.join(sorted(unknown))}"
+            )
+        for name, option in value.items():
+            try:
+                finite = math.isfinite(option)
+            except (OverflowError, TypeError):
+                finite = False
+            if (
+                isinstance(option, bool)
+                or not isinstance(option, (int, float))
+                or not finite
+            ):
+                raise ValueError(f"{name} must be a finite number")
+        return value
 
     # Model settings
     model_dirs: list[str] | None = None
@@ -784,6 +962,31 @@ class GlobalSettingsRequest(BaseModel):
     api_key: str | None = None
     skip_api_key_verification: bool | None = None
     allow_unauthenticated_inference: bool | None = None
+
+    @field_validator("inference_share", mode="before")
+    @classmethod
+    def _reject_boolean_inference_share(cls, value):
+        if isinstance(value, bool):
+            raise ValueError("inference_share must be a number")
+        return value
+
+    @field_validator(
+        "inference_interactive_allowance",
+        "inference_background_allowance",
+        mode="before",
+    )
+    @classmethod
+    def _reject_boolean_class_allowance(cls, value, info: ValidationInfo):
+        if isinstance(value, bool):
+            raise ValueError(f"{info.field_name} must be a number")
+        return value
+
+    @field_validator("inference_scheduling_quantum_seconds", mode="before")
+    @classmethod
+    def _reject_boolean_scheduling_quantum(cls, value):
+        if isinstance(value, bool):
+            raise ValueError("inference_scheduling_quantum_seconds must be a number")
+        return value
 
     @field_validator("idle_timeout_seconds", mode="before")
     @classmethod
@@ -2508,7 +2711,9 @@ async def list_models(is_admin: bool = Depends(require_admin)):
 
         # Add settings if available
         if settings:
-            model_data["settings"] = asdict(settings)
+            settings_data = asdict(settings)
+            settings_data["inference_share"] = _configured_model_share(settings)
+            model_data["settings"] = settings_data
         if settings_manager:
             model_data["exposed_profiles"] = [
                 profile
@@ -2554,6 +2759,31 @@ async def list_models(is_admin: bool = Depends(require_admin)):
         )
 
     return {"models": models}
+
+
+@router.get("/api/inference-scheduling")
+async def get_inference_scheduling(is_admin: bool = Depends(require_admin)):
+    """Return live scheduling state for loaded, locally supported models."""
+    engine_pool = _get_engine_pool()
+    if engine_pool is None:
+        raise HTTPException(status_code=503, detail="Server not initialized")
+    get_status = getattr(engine_pool, "get_inference_scheduling_status", None)
+    if not callable(get_status):
+        raise HTTPException(status_code=503, detail="Inference scheduling unavailable")
+    status = get_status()
+    if isinstance(status, dict):
+        status = dict(status)
+        rows = []
+        for row in status.get("models", []):
+            row = dict(row)
+            entry = engine_pool.get_entry(row.get("model_id", ""))
+            row.setdefault(
+                "display_name",
+                getattr(entry, "display_name", None) or row.get("model_id", ""),
+            )
+            rows.append(row)
+        status["models"] = rows
+    return status
 
 
 @router.post("/api/models/{model_id}/unload")
@@ -2690,6 +2920,69 @@ async def reload_models(is_admin: bool = Depends(require_admin)):
     if success:
         return {"status": "ok", "message": message}
     raise HTTPException(status_code=500, detail=message)
+
+
+@router.patch("/api/models/{model_id}/scheduling")
+async def update_model_scheduling(
+    model_id: str,
+    request: ModelSchedulingPatch,
+    is_admin: bool = Depends(require_admin),
+):
+    """Persist a partial model policy and hot-apply it to the engine pool."""
+    engine_pool = _get_engine_pool()
+    settings_manager = _get_settings_manager()
+    if engine_pool is None or settings_manager is None:
+        raise HTTPException(status_code=503, detail="Server not initialized")
+    if engine_pool.get_entry(model_id) is None:
+        raise HTTPException(status_code=404, detail=f"Model not found: {model_id}")
+
+    # Settings managers and test doubles may return a live cached object.
+    # Keep route mutations isolated until persistence succeeds.
+    settings = copy.deepcopy(settings_manager.get_settings(model_id))
+    if "inference_exclusive" in request.model_fields_set:
+        settings.inference_exclusive = request.inference_exclusive
+    if "inference_priority" in request.model_fields_set:
+        settings.inference_priority = request.inference_priority
+    if "inference_allowance" in request.model_fields_set:
+        settings.inference_allowance = (
+            1.0 if request.inference_allowance is None else request.inference_allowance
+        )
+        settings.inference_share = None
+    elif "inference_share" in request.model_fields_set:
+        settings.inference_allowance = _legacy_share_to_allowance(
+            request.inference_share, settings.inference_exclusive
+        )
+    try:
+        settings_manager.set_settings(model_id, settings)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(
+            status_code=500, detail="Could not save model settings"
+        ) from exc
+
+    legacy_projection = _configured_model_share(settings)
+
+    configure = getattr(engine_pool, "configure_model_scheduling", None)
+    if callable(configure):
+        configure(
+            model_id,
+            share=settings.inference_share,
+            allowance=settings.inference_allowance,
+            priority=settings.inference_priority,
+            exclusive=settings.inference_exclusive,
+        )
+    status_getter = getattr(engine_pool, "get_inference_scheduling_status", None)
+    runtime = status_getter() if callable(status_getter) else None
+    return {
+        "status": "ok",
+        "model_id": model_id,
+        "settings": {
+            "inference_share": legacy_projection,
+            "inference_allowance": settings.inference_allowance,
+            "inference_priority": settings.inference_priority,
+            "inference_exclusive": settings.inference_exclusive,
+        },
+        "runtime": runtime,
+    }
 
 
 @router.put("/api/models/{model_id}/settings")
@@ -3315,6 +3608,19 @@ async def update_model_settings(
         current_settings.is_hidden = request.is_hidden
     if request.is_favorite is not None:
         current_settings.is_favorite = request.is_favorite
+    if "inference_allowance" in sent:
+        current_settings.inference_allowance = (
+            1.0 if request.inference_allowance is None else request.inference_allowance
+        )
+        current_settings.inference_share = None
+    if request.inference_priority is not None:
+        current_settings.inference_priority = request.inference_priority
+    if request.inference_exclusive is not None:
+        current_settings.inference_exclusive = request.inference_exclusive
+    if "inference_share" in sent:
+        current_settings.inference_allowance = _legacy_share_to_allowance(
+            request.inference_share, current_settings.inference_exclusive
+        )
     if "trust_remote_code" in sent:
         current_settings.trust_remote_code = bool(request.trust_remote_code)
     if "embedding_audio_enabled" in sent:
@@ -3375,6 +3681,15 @@ async def update_model_settings(
 
     # Persist settings
     settings_manager.set_settings(model_id, current_settings)
+    configure_scheduling = getattr(engine_pool, "configure_model_scheduling", None)
+    if callable(configure_scheduling):
+        configure_scheduling(
+            model_id,
+            share=current_settings.inference_share,
+            allowance=current_settings.inference_allowance,
+            priority=current_settings.inference_priority,
+            exclusive=current_settings.inference_exclusive,
+        )
 
     # A failed load is cached to prevent clients from retrying the same broken
     # configuration on every request. Clear that cache only when the effective
@@ -3441,7 +3756,12 @@ async def update_model_settings(
     return {
         "success": True,
         "model_id": model_id,
-        "settings": current_settings.to_dict(),
+        "settings": {
+            **current_settings.to_dict(),
+            # Keep old native clients on their absolute-share contract while
+            # persisting the policy as a relative allowance.
+            "inference_share": _configured_model_share(current_settings),
+        },
         "model_type": entry.model_type,
         "engine_type": entry.engine_type,
         "requires_reload": requires_reload,
@@ -3635,7 +3955,8 @@ async def create_model_profile(
 
     mgr = _require_settings_manager()
     entry = _require_model(model_id)
-    _validate_model_settings(entry, request.settings or {})
+    profile_settings = _normalize_scheduling_profile_settings(request.settings or {})
+    _validate_model_settings(entry, profile_settings)
     engine_pool = _get_engine_pool()
     try:
         profile = mgr.save_profile(
@@ -3643,7 +3964,7 @@ async def create_model_profile(
             name=request.name,
             display_name=request.display_name,
             description=request.description,
-            settings=request.settings or {},
+            settings=profile_settings,
             source_template=request.source_template,
             expose_as_model=request.expose_as_model,
             api_name=request.api_name,
@@ -3662,7 +3983,7 @@ async def create_model_profile(
                 name=request.name,
                 display_name=request.display_name,
                 description=request.description,
-                settings=filter_universal_fields(request.settings or {}),
+                settings=filter_universal_fields(profile_settings),
             )
         except InvalidProfileNameError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -3680,7 +4001,12 @@ async def update_model_profile(
 
     mgr = _require_settings_manager()
     entry = _require_model(model_id)
-    _validate_model_settings(entry, request.settings or {})
+    profile_settings = (
+        _normalize_scheduling_profile_settings(request.settings)
+        if request.settings is not None
+        else None
+    )
+    _validate_model_settings(entry, profile_settings or {})
     engine_pool = _get_engine_pool()
     try:
         updated = mgr.update_profile(
@@ -3689,7 +4015,7 @@ async def update_model_profile(
             new_name=request.new_name,
             display_name=request.display_name,
             description=request.description,
-            settings=request.settings,
+            settings=profile_settings,
             source_template=request.source_template,
             expose_as_model=request.expose_as_model,
             api_name=request.api_name,
@@ -3704,13 +4030,13 @@ async def update_model_profile(
     if updated is None:
         raise HTTPException(status_code=404, detail=f"Profile not found: {name}")
 
-    if request.also_save_as_template and request.settings is not None:
+    if request.also_save_as_template and profile_settings is not None:
         try:
             mgr.upsert_template(
                 name=updated["name"],
                 display_name=updated["display_name"],
                 description=updated.get("description"),
-                settings=filter_universal_fields(request.settings),
+                settings=filter_universal_fields(profile_settings),
             )
         except InvalidProfileNameError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -3753,6 +4079,15 @@ async def apply_model_profile(
     if is_diffusion_model:
         _sanitize_diffusion_model_settings(applied)
         mgr.set_settings(model_id, applied)
+    configure = getattr(_get_engine_pool(), "configure_model_scheduling", None)
+    if callable(configure):
+        configure(
+            model_id,
+            share=applied.inference_share,
+            allowance=applied.inference_allowance,
+            priority=applied.inference_priority,
+            exclusive=applied.inference_exclusive,
+        )
     return {"model_id": model_id, "settings": applied.to_dict()}
 
 
@@ -3776,6 +4111,15 @@ async def apply_model_template(
         raise HTTPException(status_code=400, detail=str(error)) from error
     if applied is None:
         raise HTTPException(status_code=404, detail=f"Template not found: {name}")
+    configure = getattr(_get_engine_pool(), "configure_model_scheduling", None)
+    if callable(configure):
+        configure(
+            model_id,
+            share=applied.inference_share,
+            allowance=applied.inference_allowance,
+            priority=applied.inference_priority,
+            exclusive=applied.inference_exclusive,
+        )
     return {"model_id": model_id, "settings": applied.to_dict()}
 
 
@@ -4524,6 +4868,24 @@ def _splash_status(global_settings) -> dict:
     }
 
 
+def _inference_controls_runtime_status(server_state=None) -> dict | None:
+    """Return saved and effective inference-control state for the dashboard."""
+    if server_state is None:
+        return None
+    pool = getattr(server_state, "engine_pool", None)
+    getter = getattr(pool, "get_inference_controls_status", None)
+    if callable(getter):
+        try:
+            status = getter()
+            if isinstance(status, dict):
+                return status
+        except Exception:
+            logger.debug(
+                "Could not read inference-control runtime status", exc_info=True
+            )
+    return None
+
+
 def _global_settings_response(global_settings):
     from ..settings import get_auto_ssd_cache_size
 
@@ -4547,6 +4909,28 @@ def _global_settings_response(global_settings):
             "sse_keepalive_mode": global_settings.server.sse_keepalive_mode,
             "auto_start_on_launch": global_settings.server.auto_start_on_launch,
             "burst_decode_mode": global_settings.server.burst_decode_mode,
+            "inference_share": getattr(global_settings.server, "inference_share", 1.0),
+            "inference_interactive_allowance": getattr(
+                global_settings.server, "inference_interactive_allowance", 1.0
+            ),
+            "inference_background_allowance": getattr(
+                global_settings.server, "inference_background_allowance", 1.0
+            ),
+            "inference_scheduling_enabled": getattr(
+                global_settings.server, "inference_scheduling_enabled", False
+            ),
+            "inference_controls_enabled": getattr(
+                global_settings.server, "inference_controls_enabled", True
+            ),
+            "inference_scheduling_quantum_seconds": getattr(
+                global_settings.server, "inference_scheduling_quantum_seconds", 5.0
+            ),
+            "battery_protection_enabled": getattr(
+                global_settings.server, "battery_protection_enabled", False
+            ),
+            "battery_protection": dict(
+                getattr(global_settings.server, "battery_protection", {})
+            ),
             "preserve_mid_system_cache": getattr(
                 global_settings.server,
                 "preserve_mid_system_cache",
@@ -4569,6 +4953,9 @@ def _global_settings_response(global_settings):
                     "distributed_inference_enabled",
                     False,
                 )
+            ),
+            "inference_controls_runtime": _inference_controls_runtime_status(
+                server_state
             ),
             "max_audio_upload_size": global_settings.server.max_audio_upload_size,
         },
@@ -4744,6 +5131,48 @@ async def update_global_settings(
     if global_settings is None:
         raise HTTPException(status_code=503, detail="Server not initialized")
 
+    # Keep policy drafts out of runtime until persistence succeeds. Other
+    # global settings retain their existing application/restart behavior.
+    inference_policy_fields = (
+        "inference_share",
+        "inference_interactive_allowance",
+        "inference_background_allowance",
+        "inference_scheduling_enabled",
+        "inference_scheduling_quantum_seconds",
+        "inference_controls_enabled",
+        "battery_protection_enabled",
+        "battery_protection",
+    )
+    inference_policy_defaults = (1.0, 1.0, 1.0, False, 5.0, True, False, {})
+    previous_inference_policy = {
+        name: copy.deepcopy(getattr(global_settings.server, name, default))
+        for name, default in zip(inference_policy_fields, inference_policy_defaults)
+    }
+
+    def restore_inference_policy():
+        for name, value in previous_inference_policy.items():
+            setattr(global_settings.server, name, value)
+
+    # Validate the complete effective battery policy before any request field
+    # can mutate saved settings, runtime controls, or related services.
+    battery_config_requested = request.battery_protection_enabled is not None or bool(
+        request.battery_protection
+    )
+    if battery_config_requested:
+        candidate_battery_enabled = (
+            request.battery_protection_enabled
+            if request.battery_protection_enabled is not None
+            else global_settings.server.battery_protection_enabled
+        )
+        candidate_battery_options = dict(global_settings.server.battery_protection)
+        if request.battery_protection:
+            candidate_battery_options.update(request.battery_protection)
+        try:
+            candidate_battery_settings = BatteryProtectionSettings.from_options(
+                candidate_battery_enabled, candidate_battery_options
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     from ..utils.network import (
         is_loopback_bind,
         is_valid_bind_host,
@@ -4860,6 +5289,57 @@ async def update_global_settings(
                     cfg.decode_burst_budget_single_s = single_s
         runtime_applied.append("burst_decode_mode")
         logger.info(f"Burst Decode mode set to '{mode}'")
+    if request.battery_protection_enabled is not None:
+        global_settings.server.battery_protection_enabled = (
+            request.battery_protection_enabled
+        )
+    if request.battery_protection:
+        global_settings.server.battery_protection = (
+            candidate_battery_settings.numeric_options()
+        )
+        runtime_applied.append("battery_protection")
+    if request.battery_protection_enabled is not None:
+        runtime_applied.append("battery_protection_enabled")
+    if request.inference_share is not None:
+        share = float(request.inference_share)
+        if not math.isfinite(share) or not 0.01 <= share <= 1.0:
+            raise HTTPException(
+                status_code=400,
+                detail="inference_share must be a finite number between 0.01 and 1.0",
+            )
+        global_settings.server.inference_share = share
+        runtime_applied.append("inference_share")
+    allowance_updated = False
+    if request.inference_interactive_allowance is not None:
+        global_settings.server.inference_interactive_allowance = float(
+            request.inference_interactive_allowance
+        )
+        allowance_updated = True
+    if request.inference_background_allowance is not None:
+        global_settings.server.inference_background_allowance = float(
+            request.inference_background_allowance
+        )
+        allowance_updated = True
+    if allowance_updated:
+        runtime_applied.append("inference_allowances")
+    if request.inference_scheduling_enabled is not None:
+        global_settings.server.inference_scheduling_enabled = (
+            request.inference_scheduling_enabled
+        )
+    if request.inference_scheduling_quantum_seconds is not None:
+        global_settings.server.inference_scheduling_quantum_seconds = float(
+            request.inference_scheduling_quantum_seconds
+        )
+    if (
+        request.inference_scheduling_enabled is not None
+        or request.inference_scheduling_quantum_seconds is not None
+    ):
+        runtime_applied.append("inference_scheduling")
+    if request.inference_controls_enabled is not None:
+        global_settings.server.inference_controls_enabled = (
+            request.inference_controls_enabled
+        )
+        runtime_applied.append("inference_controls_enabled")
     if request.auto_start_on_launch is not None:
         global_settings.server.auto_start_on_launch = request.auto_start_on_launch
         runtime_applied.append("auto_start_on_launch")
@@ -5811,6 +6291,7 @@ async def update_global_settings(
             global_settings.scheduler.max_concurrent_requests = (
                 previous_max_concurrent_requests
             )
+        restore_inference_policy()
         raise HTTPException(status_code=400, detail=errors)
 
     # Persist to file
@@ -5825,7 +6306,62 @@ async def update_global_settings(
             global_settings.scheduler.max_concurrent_requests = (
                 previous_max_concurrent_requests
             )
+        restore_inference_policy()
         raise HTTPException(status_code=500, detail=f"Failed to save settings: {e}")
+
+    if (
+        battery_config_requested
+        or request.inference_share is not None
+        or allowance_updated
+        or request.inference_controls_enabled is not None
+    ):
+        from ..server import _server_state
+
+        pool = _server_state.engine_pool
+        manager = getattr(_server_state, "battery_protection", None)
+        if request.inference_controls_enabled is not None and pool is not None:
+            pool.configure_inference_controls(
+                global_settings.server.inference_controls_enabled
+            )
+        active_share = (
+            global_settings.server.inference_share
+            if getattr(global_settings.server, "inference_controls_enabled", True)
+            else 1.0
+        )
+        if battery_config_requested and manager is not None:
+            manager.configure(candidate_battery_settings, active_share)
+        elif manager is not None and (
+            request.inference_share is not None
+            or request.inference_controls_enabled is not None
+        ):
+            manager.set_requested_share(active_share)
+        if request.inference_share is not None and pool is not None:
+            # Update the pool's requested G even when a battery-policy edit was
+            # part of the same save; future model caps are composed from it.
+            pool.configure_inference_share(global_settings.server.inference_share)
+        if allowance_updated:
+            configure_allowances = getattr(pool, "configure_inference_allowances", None)
+            if callable(configure_allowances):
+                configure_allowances(
+                    interactive=global_settings.server.inference_interactive_allowance,
+                    background=global_settings.server.inference_background_allowance,
+                )
+
+    if (
+        request.inference_scheduling_enabled is not None
+        or request.inference_scheduling_quantum_seconds is not None
+    ):
+        from ..server import _server_state
+
+        scheduler_pool = _server_state.engine_pool
+        configure_scheduling = getattr(
+            scheduler_pool, "configure_inference_scheduling", None
+        )
+        if callable(configure_scheduling):
+            configure_scheduling(
+                enabled=global_settings.server.inference_scheduling_enabled,
+                quantum_seconds=global_settings.server.inference_scheduling_quantum_seconds,
+            )
 
     if pending_max_concurrent_requests is not None:
         from ..server import _server_state
@@ -6607,6 +7143,9 @@ async def get_server_stats(
         global_settings,
         model_filter=model,
     )
+    from ..server import _server_state
+
+    battery = _server_state.battery_protection
 
     return {
         **snapshot,
@@ -6617,6 +7156,7 @@ async def get_server_stats(
         "engines": _get_engine_info(),
         "active_models": active_models_data,
         "runtime_cache": runtime_cache_data,
+        "battery_protection": battery.status() if battery is not None else None,
     }
 
 

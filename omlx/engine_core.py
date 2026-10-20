@@ -21,7 +21,7 @@ import threading
 import time
 import uuid
 import weakref
-from contextlib import suppress
+from contextlib import ExitStack, nullcontext, suppress
 from dataclasses import dataclass, field
 from typing import (
     Any,
@@ -43,6 +43,12 @@ from .exceptions import (
     PrefillMemoryExceededError,
     RequestAbortedError,
     describe_ceiling_binding,
+)
+from .generation_gate import get_generation_gate
+from .inference_pacing import PACING_DISABLED, InferencePacer, PacingPermit
+from .inference_scheduling import (
+    ModelExecutionCancelledError,
+    ModelExecutionCoordinator,
 )
 from .model_registry import get_registry
 from .output_collector import RequestOutputCollector, RequestStreamState
@@ -320,6 +326,12 @@ class EngineConfig:
     step_interval: float = 0.05  # Idle wait timeout; requests wake the loop
     stream_interval: int = 1  # Tokens to batch before streaming (1=every token)
     prefill_eviction_callback: Optional[Callable[[Any], Awaitable[bool]]] = None
+    # Shared across local batched engines. None preserves the original path.
+    inference_pacer: InferencePacer | None = None
+    inference_coordinator: ModelExecutionCoordinator | None = None
+    inference_model_id: str | None = None
+    inference_priority: int = 0
+    inference_exclusive: bool = False
     # Decode burst: run several scheduler.step() calls per run_in_executor
     # hand-off instead of one. Each decode token otherwise bounces back to the
     # event loop, ping-ponging the GIL with the asyncio loop + uvicorn on the
@@ -385,6 +397,7 @@ class EngineCore:
         self.model = model
         self.tokenizer = tokenizer
         self.config = config or EngineConfig()
+        self._generation_gate = get_generation_gate()
         self._engine_id = engine_id or str(uuid.uuid4())
         self._owns_model = False
         self._closed = False
@@ -418,6 +431,29 @@ class EngineCore:
             config=scheduler_config,
             stream=self._mlx_stream,
         )
+        self.scheduler._generation_gate = self._generation_gate
+        self.scheduler._generation_pacer = self.config.inference_pacer
+        self._generation_stop_event = threading.Event()
+        self.scheduler._generation_stop_event = self._generation_stop_event
+        self._execution_work = None
+        self._execution_thread_id = None
+        self._execution_registration = None
+        coordinator = self.config.inference_coordinator
+        if coordinator is not None:
+            self._execution_registration = coordinator.register_model(
+                self.config.inference_model_id or self._engine_id,
+                priority=self.config.inference_priority,
+                exclusive=self.config.inference_exclusive,
+                drain=self._drain_model_execution,
+            )
+            configured_pacer = self.config.inference_pacer
+            if configured_pacer is not None:
+                coordinator.set_model_admission(
+                    self.config.inference_model_id or self._engine_id,
+                    configured_pacer.share > 0.0,
+                )
+        self.scheduler._execution_checkpoint = self._execution_checkpoint
+        self.scheduler._model_execution_coordinator = coordinator
 
         # Output collectors for low-latency streaming (vLLM pattern)
         self._output_collectors: Dict[str, RequestOutputCollector] = {}
@@ -438,6 +474,12 @@ class EngineCore:
         self._wake_event: Optional[asyncio.Event] = None
         self._start_time: Optional[float] = None
         self._steps_executed = 0
+        # Executor callables keep this token so a stop/restart cannot revive
+        # work that was queued by an earlier engine lifecycle.
+        self._lifecycle_generation = 0
+        # Set by the asyncio loop only when the pacer actually closes
+        # admission; consumed by the next scheduler burst on its owner thread.
+        self._pacer_admission_waited = threading.Event()
 
         # Drop transient aliases after ownership moves to the engine/scheduler
         # graph, so close()/deep_reset() can make that graph unreachable.
@@ -461,6 +503,12 @@ class EngineCore:
 
         self._loop = asyncio.get_running_loop()
         self._wake_event = asyncio.Event()
+        self._generation_stop_event = threading.Event()
+        self.scheduler._generation_stop_event = self._generation_stop_event
+        self._lifecycle_generation += 1
+        pacer = self.config.inference_pacer
+        if pacer is not None:
+            pacer.start_engine(self._engine_id)
         self._running = True
         self._start_time = time.time()
         self._task = asyncio.create_task(self._engine_loop())
@@ -468,7 +516,17 @@ class EngineCore:
 
     async def stop(self) -> None:
         """Stop the engine loop."""
+        self._generation_stop_event.set()
+        if self.config.inference_coordinator is not None:
+            self.config.inference_coordinator.set_runnable(
+                self.config.inference_model_id or self._engine_id, False
+            )
+        self._lifecycle_generation += 1
         self._running = False
+        pacer = self.config.inference_pacer
+        if pacer is not None:
+            pacer.cancel_engine(self._engine_id)
+            pacer.set_engine_busy(self._engine_id, False)
         if self._wake_event is not None:
             self._wake_event.set()
         if self._task:
@@ -499,7 +557,239 @@ class EngineCore:
         else:
             loop.call_soon_threadsafe(event.set)
 
-    def _step_burst(self) -> list:
+    def _drain_model_execution(self) -> None:
+        """Fence this worker's submitted device work; errors fail handover closed."""
+
+        def drain():
+            from .decode_activity import get_decode_activity
+
+            key = getattr(self.scheduler, "_decode_activity_key", None)
+            if key is not None:
+                get_decode_activity().remove(key)
+            mx.synchronize(self._mlx_stream)
+            # No tolerant teardown helper: a missing stream is not a drain receipt.
+            mx.synchronize()
+
+        if threading.get_ident() == self._execution_thread_id:
+            drain()
+        else:
+            self._mlx_executor.submit(drain).result(timeout=60.0)
+
+    def _execution_context(self, kind="inference", cancelled=None):
+        registration = getattr(self, "_execution_registration", None)
+        if registration is None:
+            return nullcontext(None)
+        submission = getattr(self, "_queued_execution_submission", None)
+        if submission is not None:
+            self._queued_execution_submission = None
+            return submission.work(
+                stop_event=(
+                    None if kind == "maintenance" else self._generation_stop_event
+                ),
+                cancelled=cancelled,
+                kind=kind,
+            )
+        return registration.work(
+            stop_event=None if kind == "maintenance" else self._generation_stop_event,
+            cancelled=cancelled,
+            kind=kind,
+        )
+
+    def _finish_execution_pacing(self) -> None:
+        permit = getattr(self, "_execution_pacing_permit", None)
+        if permit is None:
+            return
+        self._execution_pacing_permit = None
+        started = getattr(self, "_execution_pacing_started", None)
+        intervals = []
+        if started is not None and getattr(
+            self.scheduler, "_step_inference_work_started", False
+        ):
+            intervals.append((started, time.monotonic()))
+        self.config.inference_pacer.complete(permit, intervals)
+
+    def _acquire_execution_pacing(self, work, cancelled) -> None:
+        if (
+            not getattr(self, "_execution_controls_pacing", False)
+            or work.kind == "maintenance"
+        ):
+            return
+        pacer = self.config.inference_pacer
+        if pacer is None or pacer.full_speed_snapshot:
+            return
+
+        def waited():
+            # No global permit has been granted while its admission callback
+            # runs. Model-local-first acquisition cannot hold a global drain.
+            self.scheduler.interrupt_inference_timing()
+
+        while True:
+            work.raise_if_cancelled()
+            while self._generation_gate.paused_snapshot:
+                work.checkpoint(cancelled=cancelled)
+                self._generation_stop_event.wait(0.01)
+            permit = asyncio.run(
+                pacer.acquire(
+                    self._engine_id,
+                    on_admission_wait=waited,
+                    cancelled=lambda: work.checkpoint(cancelled=cancelled),
+                )
+            )
+            if permit is PACING_DISABLED:
+                return
+            if permit is None:
+                raise ModelExecutionCancelledError("engine pacing stopped")
+            if self._generation_gate.paused_snapshot:
+                pacer.complete(permit, [])
+                continue
+            if pacer.begin_step(permit):
+                self._execution_pacing_permit = permit
+                self._execution_pacing_started = time.monotonic()
+                return
+            pacer.complete(permit, [])
+
+    def _execution_checkpoint(self, request_id=None) -> None:
+        work = getattr(self, "_execution_work", None)
+        if work is None:
+            return
+        stack = getattr(self, "_execution_stack", None)
+        pending = lambda: bool(self.scheduler._pending_abort_ids)
+        self._finish_execution_pacing()
+        while True:
+            try:
+                if work.kind == "maintenance" and stack is not None:
+                    stack.close()
+                    work = stack.enter_context(
+                        self._execution_context(cancelled=pending)
+                    )
+                    work.cancelled = None
+                    self._execution_work = work
+                    self._execution_contexts.append(work)
+                waited = work.checkpoint(cancelled=pending)
+                if waited:
+                    self.scheduler.interrupt_inference_timing()
+                self._acquire_execution_pacing(work, pending)
+                return
+            except ModelExecutionCancelledError:
+                if (
+                    stack is None
+                    or not pending()
+                    or self._generation_stop_event.is_set()
+                ):
+                    raise
+                # Do not run abort/store operations under another model's
+                # ownership. Retire this inference scope and reacquire cleanup.
+                stack.close()
+                work = stack.enter_context(self._execution_context("maintenance"))
+                self._execution_work = work
+                self._execution_contexts.append(work)
+                self.scheduler.interrupt_inference_timing()
+                if (
+                    request_id is not None
+                    and request_id in self.scheduler._pending_abort_ids
+                ):
+                    return  # the external-prefill abort/store path owns its cache
+                self.scheduler.maintenance_step()
+                if request_id is None:
+                    return  # leave this burst; the next burst requests inference
+                # A different request was cancelled during this prefill. Keep
+                # its stack/KV state, release cleanup, and await inference again.
+
+    def _run_device_cleanup(self, operation, *args):
+        self._execution_thread_id = threading.get_ident()
+        with self._execution_context("maintenance"):
+            return operation(*args)
+
+    def _run_maintenance(self):
+        return self._run_device_cleanup(self.scheduler.maintenance_step)
+
+    def _step_burst(
+        self,
+        permit=None,
+        activity_intervals=None,
+        lifecycle_generation=None,
+        interrupt_mtp_timing=False,
+    ):
+        if (
+            lifecycle_generation is not None
+            and lifecycle_generation != self._lifecycle_generation
+        ):
+            return []
+        self._execution_thread_id = threading.get_ident()
+        with ExitStack() as stack:
+            try:
+                work = stack.enter_context(
+                    self._execution_context(
+                        cancelled=lambda: bool(self.scheduler._pending_abort_ids)
+                    )
+                )
+            except ModelExecutionCancelledError:
+                if self._generation_stop_event.is_set():
+                    return []
+                self._run_maintenance()
+                return []
+            if work is not None:
+                work.cancelled = None
+            self._execution_controls_pacing = work is not None and (
+                not work._passthrough
+                or (
+                    permit is None
+                    and self.config.inference_pacer is not None
+                    and not self.config.inference_pacer.full_speed_snapshot
+                )
+            )
+            if self._execution_controls_pacing and permit is not None:
+                # An opt-in change may race legacy async admission. Retire that
+                # admission before ownership can yield; actual work uses fresh
+                # owner-local admissions below.
+                self.config.inference_pacer.complete(permit, [])
+                permit = None
+                activity_intervals = None
+            self._execution_stack = stack
+            self._execution_contexts = [work] if work is not None else []
+            self._execution_work = work
+            try:
+                if work is not None and work.waited_seconds:
+                    interrupt_mtp_timing = True
+                result = self._step_burst_uncoordinated(
+                    permit,
+                    activity_intervals,
+                    lifecycle_generation,
+                    interrupt_mtp_timing,
+                )
+            finally:
+                self._finish_execution_pacing()
+                self._execution_controls_pacing = False
+                self._execution_work = None
+                self._execution_stack = None
+                if work is not None and activity_intervals is not None:
+                    # A step can park mid-prefill. Charge only the pieces outside
+                    # coordinator waits to both global and per-model controllers.
+                    waits = [
+                        interval
+                        for context in self._execution_contexts
+                        for interval in context.wait_intervals
+                    ]
+                    for start, end in waits:
+                        remaining = []
+                        for left, right in activity_intervals:
+                            if end <= left or start >= right:
+                                remaining.append((left, right))
+                            else:
+                                if left < start:
+                                    remaining.append((left, start))
+                                if end < right:
+                                    remaining.append((end, right))
+                        activity_intervals[:] = remaining
+            return result
+
+    def _step_burst_uncoordinated(
+        self,
+        permit: PacingPermit | None = None,
+        activity_intervals: list[tuple[float, float]] | None = None,
+        lifecycle_generation: int | None = None,
+        interrupt_mtp_timing: bool = False,
+    ) -> list:
         """Run scheduler.step() several times in one executor hand-off.
 
         Each decode token otherwise bounces back to the event loop, which
@@ -517,8 +807,55 @@ class EngineCore:
 
         Runs on the MLX executor thread. Returns the SchedulerOutputs in order.
         """
+        pacer = self.config.inference_pacer
+
+        def step_once():
+            self._execution_checkpoint()
+            work = getattr(self, "_execution_work", None)
+            if work is not None and work.kind == "maintenance":
+                return None
+            if self._generation_gate.paused_snapshot:
+                return None
+            nonlocal activity_intervals, interrupt_mtp_timing
+            if (
+                lifecycle_generation is not None
+                and lifecycle_generation != self._lifecycle_generation
+            ):
+                return None
+            if pacer is not None and pacer.full_speed_snapshot:
+                # A live switch to full speed ends old-generation accounting
+                # immediately. Lifecycle cancellation remains checked above.
+                activity_intervals = None
+            elif (
+                permit is not None
+                and pacer is not None
+                and not pacer.begin_step(permit)
+            ):
+                return None
+            if interrupt_mtp_timing:
+                interrupt_timing = getattr(
+                    self.scheduler, "interrupt_inference_timing", None
+                )
+                if interrupt_timing is not None:
+                    interrupt_timing()
+                self._pacer_admission_waited.clear()
+                interrupt_mtp_timing = False
+            started = time.monotonic() if activity_intervals is not None else 0.0
+            try:
+                output = self.scheduler.step()
+                return output
+            finally:
+                self._finish_execution_pacing()
+                if activity_intervals is not None and bool(
+                    getattr(self.scheduler, "_step_inference_work_started", False)
+                ):
+                    activity_intervals.append((started, time.monotonic()))
+
+        first = step_once()
+        if first is None:
+            return []
         max_steps = self.config.decode_burst_max_steps
-        outputs = [self.scheduler.step()]
+        outputs = [first]
         if max_steps <= 1:
             return outputs
         # Adaptive budget: single active request -> aggressive (nothing else to
@@ -551,8 +888,67 @@ class EngineCore:
                 or time.monotonic() >= deadline
             ):
                 break
-            outputs.append(self.scheduler.step())
+            next_output = step_once()
+            if next_output is None:
+                break
+            outputs.append(next_output)
         return outputs
+
+    def _enqueue_execution(self, operation, args, submission):
+        def worker():
+            self._execution_thread_id = threading.get_ident()
+            self._queued_execution_submission = submission
+            try:
+                return operation(*args)
+            finally:
+                self._queued_execution_submission = None
+                if submission is not None:
+                    submission.release()
+
+        try:
+            future = self._mlx_executor.submit(worker)
+        except BaseException:
+            if submission is not None:
+                submission.release()
+            raise
+        # If the queued future is cancelled before the callable begins, there
+        # is no worker finally to retire its reservation.
+        if submission is not None:
+            future.add_done_callback(
+                lambda done: submission.release() if done.cancelled() else None
+            )
+        return future
+
+    async def _submit_model_worker(self, operation, *args):
+        registration = getattr(self, "_execution_registration", None)
+        submission = None
+        if registration is not None:
+            while submission is None:
+                submission = registration.reserve_submission()
+                if submission is None:
+                    await asyncio.sleep(0.001)
+        return self._enqueue_execution(operation, args, submission)
+
+    def _submit_model_worker_sync(self, operation, *args):
+        registration = getattr(self, "_execution_registration", None)
+        submission = None
+        if registration is not None:
+            while submission is None:
+                submission = registration.reserve_submission()
+                if submission is None:
+                    time.sleep(0.001)
+        return self._enqueue_execution(operation, args, submission)
+
+    async def _await_model_worker(self, loop, operation, *args):
+        concurrent_future = await self._submit_model_worker(operation, *args)
+        future = asyncio.wrap_future(concurrent_future, loop=loop)
+        future.add_done_callback(
+            lambda done: None if done.cancelled() else done.exception()
+        )
+        return await asyncio.shield(future)
+
+    async def _submit_execution_burst(self, loop, *args):
+        return await self._await_model_worker(loop, self._step_burst, *args)
 
     async def _engine_loop(self) -> None:
         """Main engine loop - runs scheduler steps on the MLX executor.
@@ -567,6 +963,12 @@ class EngineCore:
         step_interval = self.config.step_interval
         stream_interval = self.config.stream_interval
         use_simple_streaming = stream_interval == 1
+        admission_waited = self._pacer_admission_waited.is_set()
+
+        def note_admission_wait() -> None:
+            nonlocal admission_waited
+            admission_waited = True
+            self._pacer_admission_waited.set()
 
         while self._running:
             try:
@@ -576,10 +978,129 @@ class EngineCore:
                     self._last_reap = now
                     self._reap_orphaned_collectors(now)
 
-                if self.scheduler.has_requests():
-                    step_outputs = await loop.run_in_executor(
-                        self._mlx_executor, self._step_burst
+                coordinator = self.config.inference_coordinator
+                if coordinator is not None:
+                    coordinator.set_runnable(
+                        self.config.inference_model_id or self._engine_id,
+                        bool(
+                            getattr(self.scheduler, "waiting", None)
+                            or getattr(self.scheduler, "running", None)
+                        ),
                     )
+                if self.scheduler.has_requests():
+                    gate = self._generation_gate
+                    if gate.paused_snapshot:
+                        event = self._wake_event
+                        if event is not None:
+                            event.clear()
+                        await self._await_model_worker(loop, self._run_maintenance)
+                        await gate.wait(event)
+                        continue
+                    pacer = self.config.inference_pacer
+                    permit = None
+                    if (
+                        pacer is not None
+                        and not pacer.full_speed_snapshot
+                        and pacer.share <= 0.0
+                    ):
+                        # A model/user pause stops generation before queueing a
+                        # worker. The pacer's wake event also lets request
+                        # cancellation and maintenance continue promptly.
+                        event = self._wake_event
+                        if event is not None:
+                            event.clear()
+                        paused_admission = await pacer.acquire(
+                            self._engine_id, wake_event=event
+                        )
+                        if paused_admission is None:
+                            if not self._running:
+                                break
+                            await self._await_model_worker(loop, self._run_maintenance)
+                            continue
+                        if paused_admission is not PACING_DISABLED:
+                            pacer.complete(paused_admission, [])
+                        if pacer.share <= 0.0:
+                            continue
+                    if pacer is not None and not pacer.full_speed_snapshot:
+                        pacer.set_engine_busy(self._engine_id, True)
+                        if coordinator is not None:
+                            acquisition = PACING_DISABLED
+                        else:
+                            acquisition = await pacer.acquire(
+                                self._engine_id,
+                                wake_event=self._wake_event,
+                                on_admission_wait=note_admission_wait,
+                            )
+                        if acquisition is PACING_DISABLED:
+                            # Full mode was published while we waited. Submit
+                            # the ordinary scheduler burst, not maintenance.
+                            if not self._running:
+                                break
+                            permit = None
+                        elif acquisition is None:
+                            if not self._running:
+                                break
+                            event = self._wake_event
+                            if event is not None:
+                                event.clear()
+                            await self._await_model_worker(loop, self._run_maintenance)
+                            continue
+                        else:
+                            permit = acquisition
+
+                    lifecycle_generation = self._lifecycle_generation
+
+                    if permit is None:
+                        # Preserve the ordinary executor path at full speed:
+                        # no permit wrapper, timing list, or completion work.
+                        if pacer is None:
+                            step_outputs = await self._submit_execution_burst(loop)
+                        elif admission_waited:
+                            step_outputs = await self._submit_execution_burst(
+                                loop, None, None, lifecycle_generation, True
+                            )
+                        else:
+                            step_outputs = await self._submit_execution_burst(
+                                loop, None, None, lifecycle_generation
+                            )
+                    else:
+
+                        def run_burst(
+                            burst_permit=permit,
+                            burst_pacer=pacer,
+                            burst_lifecycle_generation=lifecycle_generation,
+                            burst_interrupt_mtp_timing=admission_waited,
+                        ):
+                            intervals: list[tuple[float, float]] = []
+                            try:
+                                return self._step_burst(
+                                    burst_permit,
+                                    intervals,
+                                    burst_lifecycle_generation,
+                                    burst_interrupt_mtp_timing,
+                                )
+                            finally:
+                                if burst_pacer is not None:
+                                    burst_pacer.complete(burst_permit, intervals)
+
+                        # Shield the executor future: cancelling this loop task
+                        # cannot cancel a queued callable before its `finally`
+                        # releases the registered permit.
+                        concurrent_future = await self._submit_model_worker(run_burst)
+                        wrapped_future = asyncio.wrap_future(
+                            concurrent_future, loop=loop
+                        )
+                        # If shutdown cancels this loop task, still retrieve a
+                        # later worker exception after the shielded job completes.
+                        wrapped_future.add_done_callback(
+                            lambda future: (
+                                None if future.cancelled() else future.exception()
+                            )
+                        )
+                        step_outputs = await asyncio.shield(wrapped_future)
+                    if not step_outputs:
+                        continue
+                    admission_waited = False
                     self._steps_executed += len(step_outputs)
 
                     # Distribute every step's outputs to collectors (one or
@@ -675,6 +1196,9 @@ class EngineCore:
                                     event.wait(), timeout=step_interval
                                 )
                 else:
+                    pacer = self.config.inference_pacer
+                    if pacer is not None and not pacer.full_speed_snapshot:
+                        pacer.set_engine_busy(self._engine_id, False)
                     event = self._wake_event
                     if event is None:
                         await asyncio.sleep(step_interval)
@@ -698,8 +1222,8 @@ class EngineCore:
                 # infinite loop (has_requests() must go False; a pending
                 # idle reclaim may hold it True for one extra step, which
                 # drains and clears it).
-                failed_ids = await loop.run_in_executor(
-                    self._mlx_executor, self.scheduler.fail_all_requests
+                failed_ids = await self._await_model_worker(
+                    loop, self._run_device_cleanup, self.scheduler.fail_all_requests
                 )
                 for rid in failed_ids:
                     collector = self._output_collectors.get(rid)
@@ -758,6 +1282,7 @@ class EngineCore:
         Returns:
             The request ID
         """
+        self._generation_gate.check_admission()
         if request_id is None:
             request_id = str(uuid.uuid4())
 
@@ -844,6 +1369,127 @@ class EngineCore:
         self._wake_engine_loop()
 
         return request_id
+
+    async def run_model_preparation(self, operation, *args):
+        """Pace vision preparation on the same coordinator as decode work."""
+        gate = self._generation_gate
+        gate.check_admission()
+        pacer = self.config.inference_pacer
+        engine_id = f"{self._engine_id}:vision:{uuid.uuid4()}"
+        deferred = object()
+        cancelled = threading.Event()
+        loop = asyncio.get_running_loop()
+        if pacer is not None:
+            pacer.start_engine(engine_id)
+            pacer.set_engine_busy(engine_id, True)
+        try:
+            while True:
+                stop = getattr(self, "_generation_stop_event", None)
+                if getattr(self, "_closed", False) or (
+                    stop is not None and stop.is_set()
+                ):
+                    raise RuntimeError(
+                        "Generation engine stopped during vision preparation"
+                    )
+                while gate.paused_snapshot:
+                    await gate.wait()
+                    if getattr(self, "_closed", False) or (
+                        stop is not None and stop.is_set()
+                    ):
+                        raise RuntimeError(
+                            "Generation engine stopped during vision preparation"
+                        )
+                permit = None
+                coordinated = self.config.inference_coordinator is not None
+                if (
+                    pacer is not None
+                    and not pacer.full_speed_snapshot
+                    and not coordinated
+                ):
+                    acquired = await pacer.acquire(engine_id)
+                    if acquired is None:
+                        continue
+                    if acquired is not PACING_DISABLED:
+                        permit = acquired
+
+                def uncoordinated_work(work_permit=permit):
+                    intervals = []
+                    try:
+                        if cancelled.is_set():
+                            return deferred
+                        if getattr(self, "_closed", False) or (
+                            stop is not None and stop.is_set()
+                        ):
+                            raise RuntimeError(
+                                "Generation engine stopped during vision preparation"
+                            )
+                        if gate.paused_snapshot:
+                            return deferred
+                        if work_permit is not None and not pacer.begin_step(
+                            work_permit
+                        ):
+                            return deferred
+                        started = time.monotonic()
+                        try:
+                            return operation(*args)
+                        finally:
+                            intervals.append((started, time.monotonic()))
+                    finally:
+                        if work_permit is not None:
+                            pacer.complete(work_permit, intervals)
+
+                def work():
+                    self._execution_thread_id = threading.get_ident()
+                    with self._execution_context(
+                        "vision", cancelled=cancelled.is_set
+                    ) as owner:
+                        self._execution_controls_pacing = owner is not None and (
+                            not owner._passthrough
+                            or (
+                                permit is None
+                                and pacer is not None
+                                and not pacer.full_speed_snapshot
+                            )
+                        )
+                        try:
+                            if self._execution_controls_pacing:
+                                if permit is not None:
+                                    pacer.complete(permit, [])
+                                self._acquire_execution_pacing(owner, cancelled.is_set)
+                            result = (
+                                uncoordinated_work(None)
+                                if self._execution_controls_pacing
+                                else uncoordinated_work()
+                            )
+                            return result
+                        finally:
+                            # Preparation does useful model work outside scheduler.step.
+                            if (
+                                getattr(self, "_execution_pacing_permit", None)
+                                is not None
+                            ):
+                                self.scheduler._step_inference_work_started = True
+                            self._finish_execution_pacing()
+                            self._execution_controls_pacing = False
+
+                try:
+                    submitted = await self._submit_model_worker(work)
+                except BaseException:
+                    if permit is not None:
+                        pacer.complete(permit, [])
+                    raise
+                future = asyncio.wrap_future(submitted, loop=loop)
+                future.add_done_callback(
+                    lambda done: None if done.cancelled() else done.exception()
+                )
+                result = await asyncio.shield(future)
+                if result is not deferred:
+                    return result
+        finally:
+            cancelled.set()
+            if pacer is not None:
+                pacer.set_engine_busy(engine_id, False)
+                pacer.retire_engine(engine_id)
 
     async def abort_request(self, request_id: str) -> bool:
         """Abort a request.
@@ -1222,7 +1868,31 @@ class EngineCore:
         final_output.first_token_at = first_token_at
         return final_output
 
-    def generate_batch_sync(
+    def generate_batch_sync(self, prompts, sampling_params=None):
+        if self._running and self.scheduler.has_requests():
+            raise RuntimeError(
+                "Synchronous generation cannot race an active async batch"
+            )
+
+        def generate():
+            self._execution_thread_id = threading.get_ident()
+            with self._execution_context("sync") as work:
+                self._execution_work = work
+                self._execution_controls_pacing = (
+                    work is not None and not work._passthrough
+                )
+                try:
+                    return self._generate_batch_sync_worker(prompts, sampling_params)
+                finally:
+                    self._finish_execution_pacing()
+                    self._execution_controls_pacing = False
+                    self._execution_work = None
+
+        if threading.get_ident() == self._execution_thread_id:
+            return generate()
+        return self._submit_model_worker_sync(generate).result()
+
+    def _generate_batch_sync_worker(
         self,
         prompts: List[Union[str, List[int]]],
         sampling_params: Optional[SamplingParams] = None,
@@ -1245,6 +1915,8 @@ class EngineCore:
 
         from .request import Request
 
+        self._generation_gate.check_admission()
+
         if sampling_params is None:
             sampling_params = SamplingParams()
 
@@ -1263,7 +1935,34 @@ class EngineCore:
         # Process until all done - direct scheduler access, no async overhead
         results: Dict[str, RequestOutput] = {}
         while self.scheduler.has_requests():
-            output = self.scheduler.step()
+            self._execution_checkpoint()
+            if (
+                self._generation_gate.paused_snapshot
+                and getattr(self, "_execution_work", None) is not None
+            ):
+                self._finish_execution_pacing()
+                while (
+                    self._generation_gate.paused_snapshot
+                    and not self._generation_stop_event.is_set()
+                ):
+                    self._execution_checkpoint()
+                    self._generation_stop_event.wait(0.01)
+            if not self._generation_gate.wait_sync(self._generation_stop_event.is_set):
+                raise RuntimeError("Generation stopped while battery-suspended")
+            started = time.monotonic()
+            self._execution_checkpoint()
+            try:
+                output = self.scheduler.step()
+            finally:
+                self._finish_execution_pacing()
+            pacer = self.config.inference_pacer
+            if (
+                pacer is not None
+                and not pacer.full_speed_snapshot
+                and not getattr(self, "_execution_controls_pacing", False)
+            ):
+                rest = min(1.0, (time.monotonic() - started) * (1 / pacer.share - 1))
+                self._generation_stop_event.wait(rest)
             for req_output in output.outputs:
                 if req_output.finished:
                     results[req_output.request_id] = req_output
@@ -1303,6 +2002,7 @@ class EngineCore:
 
     def close(self) -> None:
         """Close once, preserving SSD stores within a progress-gated budget."""
+        self._generation_stop_event.set()
         with self._close_lock:
             if self._closed:
                 return
@@ -1344,7 +2044,7 @@ class EngineCore:
             fn_name = getattr(fn, "__name__", repr(fn))
             try:
                 teardown.set_phase(fn_name)
-                self._mlx_executor.submit(fn).result(
+                self._submit_model_worker_sync(self._run_device_cleanup, fn).result(
                     timeout=teardown.remaining(mlx=fn_name != "shutdown")
                 )
             except concurrent.futures.TimeoutError:
@@ -1420,6 +2120,13 @@ class EngineCore:
         if self._owns_model:
             get_registry().release(self.model, self._engine_id)
             self._owns_model = False
+        registration = getattr(self, "_execution_registration", None)
+        if registration is not None:
+            self.config.inference_coordinator.unregister_model(
+                self.config.inference_model_id or self._engine_id,
+                generation=registration.generation,
+            )
+            self._execution_registration = None
         self.model = None
         self.tokenizer = None
         self.scheduler = None

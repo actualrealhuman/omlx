@@ -4,6 +4,7 @@
 import asyncio
 import copy
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -13,7 +14,7 @@ import omlx.server  # noqa: F401 - ensure server module is imported first
 from omlx.admin import routes as admin_routes
 from omlx.engine_pool import EngineEntry, EnginePool
 from omlx.model_settings import ModelSettings
-
+from omlx.settings import GlobalSettings
 
 def _failed_pool() -> tuple[EnginePool, EngineEntry]:
     pool = EnginePool()
@@ -123,6 +124,73 @@ async def test_embedding_audio_length_is_load_time_only_with_audio(audio_enabled
 
     assert settings.embedding_audio_max_seconds == 120
     assert entry.load_failed is not audio_enabled
+
+
+@pytest.mark.asyncio
+async def test_model_scheduling_policy_persists_and_hot_applies(tmp_path):
+    from omlx.model_settings import ModelSettingsManager
+
+    pool, _entry = _failed_pool()
+    pool.configure_model_scheduling = MagicMock()
+    pool.get_inference_scheduling_status = MagicMock(
+        return_value={"enabled": True, "models": []}
+    )
+    manager = ModelSettingsManager(tmp_path)
+    with (
+        patch("omlx.admin.routes._get_engine_pool", return_value=pool),
+        patch("omlx.admin.routes._get_settings_manager", return_value=manager),
+    ):
+        result = await admin_routes.update_model_scheduling(
+            "ling",
+            admin_routes.ModelSchedulingPatch(
+                inference_share=0.75,
+                inference_priority=8,
+                inference_exclusive=True,
+            ),
+            is_admin=True,
+        )
+
+    saved = ModelSettingsManager(tmp_path).get_settings("ling")
+    assert saved.inference_share is None
+    assert saved.inference_allowance == 0.75
+    assert saved.inference_priority == 8
+    assert saved.inference_exclusive is True
+    pool.configure_model_scheduling.assert_called_once_with(
+        "ling", share=None, allowance=0.75, priority=8, exclusive=True
+    )
+    assert result["settings"] == {
+        "inference_share": 0.75,
+        "inference_allowance": 0.75,
+        "inference_priority": 8,
+        "inference_exclusive": True,
+    }
+    assert result["runtime"]["enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_global_scheduling_settings_hot_apply_after_save(tmp_path):
+    settings = GlobalSettings(base_path=tmp_path)
+    pool = SimpleNamespace(configure_inference_scheduling=MagicMock())
+    state = SimpleNamespace(engine_pool=pool, battery_protection=None)
+    with (
+        patch("omlx.admin.routes._get_global_settings", return_value=settings),
+        patch("omlx.admin.routes._save_global_settings_async", AsyncMock()),
+        patch("omlx.server._server_state", state),
+    ):
+        result = await admin_routes.update_global_settings(
+            admin_routes.GlobalSettingsRequest(
+                inference_scheduling_enabled=True,
+                inference_scheduling_quantum_seconds=7.5,
+            ),
+            is_admin=True,
+        )
+
+    assert settings.server.inference_scheduling_enabled is True
+    assert settings.server.inference_scheduling_quantum_seconds == 7.5
+    pool.configure_inference_scheduling.assert_called_once_with(
+        enabled=True, quantum_seconds=7.5
+    )
+    assert "inference_scheduling" in result["runtime_applied"]
 
 
 @pytest.mark.asyncio

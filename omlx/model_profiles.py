@@ -102,6 +102,11 @@ EXCLUDED_FROM_PROFILES = frozenset(
         "model_type_override",
         "active_profile_name",
         "ttl_seconds",
+        # Scheduling is explicit per model, independent of generation profiles.
+        "inference_share",
+        "inference_allowance",
+        "inference_priority",
+        "inference_exclusive",
         # Hardware-specific residency choice; never propagate across models.
         "qwen4_ple_ssd_offload",
         "deepseek_v41_engram_ssd_offload",

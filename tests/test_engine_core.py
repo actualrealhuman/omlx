@@ -692,8 +692,9 @@ class TestEngineCoreClose:
             engine.close()
             engine.close()  # Should not raise
 
+    @pytest.mark.parametrize("phase", ["drain_gpu_errors", "shutdown", "deep_reset"])
     def test_close_fatal_exits_when_teardown_future_times_out(
-        self, mock_model, mock_tokenizer
+        self, mock_model, mock_tokenizer, phase
     ):
         """A stuck scheduler teardown is fatal so a supervisor can restart."""
         with patch("omlx.engine_core.get_registry") as mock_registry:
@@ -705,10 +706,14 @@ class TestEngineCoreClose:
             future = MagicMock()
             future.result.side_effect = concurrent.futures.TimeoutError
             executor = MagicMock()
-            executor.submit.side_effect = lambda fn, *args: (
-                future if getattr(fn, "__name__", "") == "shutdown" else MagicMock()
-            )
             engine._mlx_executor = executor
+            # Cleanup is submitted through the coordinator's maintenance
+            # wrapper. Inject the stuck future at that submission boundary.
+            engine._submit_model_worker_sync = MagicMock(
+                side_effect=lambda operation, fn: (
+                    future if getattr(fn, "__name__", "") == phase else MagicMock()
+                )
+            )
 
             with (
                 patch("omlx.engine_core.fatal_exit", side_effect=SystemExit) as fatal,
@@ -717,7 +722,7 @@ class TestEngineCoreClose:
                 engine.close()
 
             assert 0 < future.result.call_args.kwargs["timeout"] <= 120.0
-            assert "while running shutdown" in fatal.call_args.args[0]
+            assert f"while running {phase}" in fatal.call_args.args[0]
 
 
 class TestEngineCoreGetCacheStats:

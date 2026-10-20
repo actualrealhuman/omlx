@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import shutil
 from dataclasses import asdict, dataclass, field
@@ -31,6 +32,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from .config import parse_size
+from .battery_protection import BatteryProtectionSettings
 
 if TYPE_CHECKING:
     from .scheduler import SchedulerConfig
@@ -198,6 +200,19 @@ class ServerSettings:
     sse_keepalive_mode: str = "chunk"
     auto_start_on_launch: bool = True
     burst_decode_mode: str = DEFAULT_BURST_DECODE_MODE
+    # Requested share of covered batched text/VLM scheduler activity.
+    # 1.0 preserves the unpaced default.
+    inference_share: float = 1.0
+    # Relative class ceilings beneath the global inference_share ceiling.
+    inference_interactive_allowance: float = 1.0
+    inference_background_allowance: float = 1.0
+    inference_scheduling_enabled: bool = False
+    inference_scheduling_quantum_seconds: float = 5.0
+    inference_controls_enabled: bool = True
+    battery_protection_enabled: bool = False
+    battery_protection: dict[str, float] = field(
+        default_factory=lambda: BatteryProtectionSettings().numeric_options()
+    )
     preserve_mid_system_cache: bool = True
     distributed_inference_enabled: bool = False
     # Human-readable size, same grammar as cache limits ("100MB", "1GB").
@@ -214,6 +229,46 @@ class ServerSettings:
     # large resident models). Ticks stop after 5 minutes without requests.
     # 0 disables.
     gpu_keep_warm_interval: float = 0.5
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.inference_scheduling_enabled, bool):
+            raise ValueError("inference_scheduling_enabled must be a boolean")
+        if not isinstance(self.inference_controls_enabled, bool):
+            raise ValueError("inference_controls_enabled must be a boolean")
+        quantum = self.inference_scheduling_quantum_seconds
+        if (
+            isinstance(quantum, bool)
+            or not isinstance(quantum, (int, float))
+            or not math.isfinite(quantum)
+            or not 0.1 <= quantum <= 60
+        ):
+            raise ValueError(
+                "inference_scheduling_quantum_seconds must be between 0.1 and 60"
+            )
+        self.inference_scheduling_quantum_seconds = float(quantum)
+        if not isinstance(self.battery_protection_enabled, bool):
+            raise ValueError("battery_protection_enabled must be a boolean")
+        if isinstance(self.inference_share, bool):
+            raise ValueError("inference_share must be a finite number")
+        value = float(self.inference_share)
+        if not math.isfinite(value) or not 0.01 <= value <= 1.0:
+            raise ValueError("inference_share must be between 0.01 and 1.0")
+        self.inference_share = value
+        for name in (
+            "inference_interactive_allowance",
+            "inference_background_allowance",
+        ):
+            allowance = getattr(self, name)
+            if isinstance(allowance, bool) or not isinstance(allowance, (int, float)):
+                raise ValueError(f"{name} must be a finite number")
+            allowance = float(allowance)
+            if not math.isfinite(allowance) or not 0.0 <= allowance <= 1.0:
+                raise ValueError(f"{name} must be between 0.0 and 1.0")
+            setattr(self, name, allowance)
+        protection = BatteryProtectionSettings.from_options(
+            self.battery_protection_enabled, self.battery_protection
+        )
+        self.battery_protection = protection.numeric_options()
 
     def max_audio_upload_bytes(self) -> int:
         """Configured audio upload limit in bytes. Non-positive sizes raise ValueError."""
@@ -253,6 +308,25 @@ class ServerSettings:
             sse_keepalive_mode=data.get("sse_keepalive_mode", "chunk"),
             auto_start_on_launch=data.get("auto_start_on_launch", True),
             burst_decode_mode=data.get("burst_decode_mode", DEFAULT_BURST_DECODE_MODE),
+            inference_share=data.get("inference_share", 1.0),
+            inference_interactive_allowance=data.get(
+                "inference_interactive_allowance", 1.0
+            ),
+            inference_background_allowance=data.get(
+                "inference_background_allowance", 1.0
+            ),
+            inference_scheduling_enabled=data.get(
+                "inference_scheduling_enabled", False
+            ),
+            inference_scheduling_quantum_seconds=data.get(
+                "inference_scheduling_quantum_seconds", 5.0
+            ),
+            inference_controls_enabled=data.get("inference_controls_enabled", True),
+            battery_protection_enabled=data.get("battery_protection_enabled", False),
+            battery_protection=BatteryProtectionSettings.from_options(
+                data.get("battery_protection_enabled", False),
+                data.get("battery_protection", {}),
+            ).numeric_options(),
             preserve_mid_system_cache=data.get("preserve_mid_system_cache", True),
             distributed_inference_enabled=data.get(
                 "distributed_inference_enabled",

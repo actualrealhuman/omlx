@@ -300,6 +300,7 @@ class ServerState:
     bind_host: str | None = None
     settings_manager: Optional[object] = None  # ModelSettingsManager
     global_settings: Optional[object] = None  # GlobalSettings
+    battery_protection: Optional[object] = None  # BatteryProtectionService
     hf_downloader: Optional[object] = None  # HFDownloader
     ms_downloader: Optional[object] = None  # MSDownloader
     process_memory_enforcer: Optional[object] = None  # ProcessMemoryEnforcer
@@ -466,6 +467,8 @@ async def lifespan(app: FastAPI):
 
     bonjour_publisher = None
     bonjour_task = None
+    battery = None
+    _server_state.battery_protection = None
     # Startup: Auto-populate server aliases for the admin dashboard
     # so users get sensible hostname/IP options for API URL hints
     # without manual configuration. Only runs when the persisted list
@@ -494,6 +497,35 @@ async def lifespan(app: FastAPI):
             logger.warning("Server alias auto-detection failed: %s", exc)
 
     _reset_boundary_snapshots_for_server()
+
+    if (
+        _server_state.global_settings is not None
+        and _server_state.engine_pool is not None
+    ):
+        from .battery_service import BatteryProtectionService
+
+        settings = _server_state.global_settings
+        pool = _server_state.engine_pool
+        battery = BatteryProtectionService(
+            enabled=settings.server.battery_protection_enabled,
+            policy_options=settings.server.battery_protection,
+            requested_share=pool.get_requested_inference_share(),
+            apply_share=pool._inference_pacer.set_share,
+            apply_model_share=pool._apply_model_inference_share,
+            apply_suspension=pool._inference_coordinator.set_suspended,
+            state_path=settings.base_path / "battery-protection-state.json",
+        )
+        _server_state.battery_protection = battery
+        pool._battery_protection = battery
+        # Policies may already exist from initialization. Register their
+        # composed ceilings with the newly attached battery manager as well.
+        pool.configure_inference_allowances(
+            interactive=settings.server.inference_interactive_allowance,
+            background=settings.server.inference_background_allowance,
+        )
+        pool.configure_inference_controls(settings.server.inference_controls_enabled)
+        battery.set_requested_share(pool.get_requested_inference_share())
+        battery.start()
 
     # Reap distributed ranks orphaned by a crashed previous coordinator
     # (G8): all teardown used to live in-process, so a SIGKILL/panic of
@@ -750,6 +782,10 @@ async def lifespan(app: FastAPI):
         await _server_state.engine_pool.shutdown()
         _reset_boundary_snapshots_for_server()
         logger.info("Engine pool shutdown")
+    if battery is not None:
+        await battery.stop()
+        if _server_state.battery_protection is battery:
+            _server_state.battery_protection = None
 
 
 app = FastAPI(
@@ -758,6 +794,17 @@ app = FastAPI(
     version=__version__,
     lifespan=lifespan,
 )
+
+from .generation_gate import GenerationSuspendedError
+
+
+@app.exception_handler(GenerationSuspendedError)
+async def generation_suspended_handler(request, exc):
+    return JSONResponse(
+        status_code=503,
+        content=_openai_error_body(str(exc), 503, code="inference_suspended"),
+    )
+
 
 # Include MCP routes
 from .api.mcp_routes import router as mcp_router
@@ -1481,6 +1528,13 @@ async def get_engine(
         engine = await pool.get_engine(model_id, **_lease_kwargs)
         if _lease and _leased_out is not None:
             _leased_out.append(model_id)
+    except GenerationSuspendedError as e:
+        error = HTTPException(
+            status_code=503,
+            detail=f"Batched text/VLM generation is suspended: {e}",
+        )
+        setattr(error, "code", "inference_suspended")
+        raise error from e
     except ModelNotFoundError as e:
         # Fallback to default model if enabled (LLM only)
         if (
@@ -2404,6 +2458,22 @@ def init_server(
         Path(global_settings.base_path) if global_settings else Path.home() / ".omlx"
     )
     _server_state.settings_manager = ModelSettingsManager(base_path)
+    # Convert legacy absolute model limits once, before loading/configuring any
+    # engine. Migration verifies a rollback backup before replacing documents;
+    # a failure must stop startup rather than silently relax a saved ceiling.
+    _server_state.settings_manager.migrate_inference_allowances(
+        global_settings.server.inference_share if global_settings else 1.0,
+        (
+            global_settings.server.inference_interactive_allowance
+            if global_settings
+            else 1.0
+        ),
+        (
+            global_settings.server.inference_background_allowance
+            if global_settings
+            else 1.0
+        ),
+    )
 
     # Get pinned models from settings file only (managed via admin page)
     pinned_models = _server_state.settings_manager.get_pinned_model_ids()
@@ -2453,6 +2523,33 @@ def init_server(
     )
     _server_state.engine_pool.configure_gpu_keep_warm(
         global_settings.server.gpu_keep_warm_interval if global_settings else 0.5
+    )
+    _server_state.engine_pool.configure_inference_share(
+        global_settings.server.inference_share if global_settings else 1.0
+    )
+    _server_state.engine_pool.configure_inference_allowances(
+        interactive=(
+            global_settings.server.inference_interactive_allowance
+            if global_settings
+            else 1.0
+        ),
+        background=(
+            global_settings.server.inference_background_allowance
+            if global_settings
+            else 1.0
+        ),
+    )
+    _server_state.engine_pool.configure_inference_scheduling(
+        enabled=(
+            global_settings.server.inference_scheduling_enabled
+            if global_settings
+            else False
+        ),
+        quantum_seconds=(
+            global_settings.server.inference_scheduling_quantum_seconds
+            if global_settings
+            else 5.0
+        ),
     )
     from .cluster.enrollment import configure_cluster_enrollment, get_cluster_enrollment
     from .cluster.incidents import configure_cluster_incidents

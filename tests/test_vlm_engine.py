@@ -10,6 +10,7 @@ Tests cover:
 - Engine stop safety (close() exception guard)
 """
 
+import asyncio
 import base64
 import io
 import json
@@ -35,6 +36,21 @@ try:
     HAS_MLX = True
 except ImportError:
     HAS_MLX = False
+
+
+# Rendering/forwarding tests mock the execution-control boundary. Real gate,
+# pacing and VLM integration behavior is exercised in test_battery_generation.
+@pytest.fixture(autouse=True)
+def _preparation_runner(monkeypatch):
+    if not HAS_MLX:
+        return
+
+    async def prepare(engine, operation, *args):
+        return await asyncio.get_running_loop().run_in_executor(
+            engine._engine._mlx_executor, operation, *args
+        )
+
+    monkeypatch.setattr(vlm_module.VLMBatchedEngine, "_run_model_preparation", prepare)
 
 
 # ---------------------------------------------------------------------------

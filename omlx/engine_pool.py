@@ -18,6 +18,7 @@ import copy
 import gc
 import json
 import logging
+import math
 import time
 from collections import OrderedDict
 from contextlib import asynccontextmanager, suppress
@@ -61,6 +62,9 @@ from .exceptions import (
     ModelUnavailableError,
     describe_ceiling_binding,
 )
+from .model_pacing import ModelPacer
+from .inference_scheduling import ModelExecutionCoordinator
+from .inference_pacing import InferencePacer
 from .model_discovery import (
     VLM_NATIVE_TEXT_MODEL_TYPES,
     discover_models,
@@ -101,7 +105,10 @@ def _touch_gpu() -> None:
     arriving after a pause pays that on top of its TTFT. One tiny kernel
     per keep-warm period is enough to prevent it; CPU activity alone is not.
     """
-    mx.eval(mx.zeros((1,), dtype=mx.float32) + 1)
+    from .generation_gate import get_generation_gate
+
+    if not get_generation_gate().restricted_snapshot:
+        mx.eval(mx.zeros((1,), dtype=mx.float32) + 1)
 
 
 # Stop keep-warm ticks after this long without requests, so an idle laptop
@@ -428,7 +435,376 @@ class EnginePool:
         self._gpu_keep_warm_interval: float = 0.0
         self._gpu_keep_warm_task: asyncio.Task[None] | None = None
         self._gpu_keep_warm_last_active = 0.0
+        # One coordinator is shared by supported batched text/VLM engines.
+        self._inference_pacer = InferencePacer()
+        self._inference_requested_share = 1.0
+        self._inference_class_allowances = {"interactive": 1.0, "background": 1.0}
+        # Saved preferences remain available while the master control bypasses
+        # user scheduling enforcement. Battery protection is composed later.
+        self._inference_controls_enabled = True
+        self._inference_scheduling_requested_enabled = False
+        self._inference_scheduling_quantum_seconds = 5.0
+        self._inference_coordinator = ModelExecutionCoordinator()
+        self._model_pacers: dict[str, ModelPacer] = {}
+        self._model_scheduling: dict[str, dict] = {}
+        self._battery_deferred_pins: set[str] = set()
+        self._battery_preload_task: asyncio.Task | None = None
         self.configure_hot_cache_budget()
+
+    def configure_inference_share(self, share: float) -> None:
+        """Apply the shared generation submission share to loaded and future engines."""
+        InferencePacer._validate_share(share)
+        self._inference_requested_share = share
+        active_share = self.get_requested_inference_share()
+        manager = getattr(self, "_battery_protection", None)
+        if manager is not None:
+            manager.set_requested_share(active_share)
+        else:
+            self._inference_pacer.set_share(active_share)
+        for model_id, policy in tuple(self._model_scheduling.items()):
+            self._apply_model_policy(model_id, policy)
+
+    def configure_inference_allowances(
+        self, interactive: float = 1.0, background: float = 1.0
+    ) -> None:
+        """Set class fractions of the global ceiling and refresh model caps."""
+        for label, value in (("interactive", interactive), ("background", background)):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or not 0.0 <= value <= 1.0
+            ):
+                raise ValueError(f"{label} allowance must be between 0 and 1")
+        self._inference_class_allowances = {
+            "interactive": float(interactive),
+            "background": float(background),
+        }
+        manager = getattr(self, "_battery_protection", None)
+        if manager is not None:
+            manager.set_requested_share(self.get_requested_inference_share())
+        for model_id, policy in tuple(self._model_scheduling.items()):
+            self._apply_model_policy(model_id, policy)
+
+    def configure_inference_scheduling(
+        self, enabled: bool, quantum_seconds: float = 5.0
+    ) -> None:
+        if not isinstance(enabled, bool):
+            raise ValueError("inference scheduling enabled must be a boolean")
+        self._inference_coordinator.configure(
+            enabled=(enabled and self._inference_controls_enabled),
+            quantum_seconds=quantum_seconds,
+        )
+        self._inference_scheduling_requested_enabled = enabled
+        self._inference_scheduling_quantum_seconds = quantum_seconds
+
+    def get_requested_inference_share(self) -> float:
+        """Return the active global input to battery policy and pacing."""
+        return (
+            self._inference_requested_share if self._inference_controls_enabled else 1.0
+        )
+
+    def configure_inference_controls(self, enabled: bool) -> None:
+        """Enable saved user scheduling controls or bypass their enforcement.
+
+        Battery caps and suspension remain active in both modes. The bypass
+        replaces only user configured global, class, model and turn controls.
+        """
+        if not isinstance(enabled, bool):
+            raise ValueError("inference controls enabled must be a boolean")
+        if self._inference_controls_enabled == enabled:
+            return
+        self._inference_controls_enabled = enabled
+        manager = getattr(self, "_battery_protection", None)
+        active_share = self.get_requested_inference_share()
+        if manager is not None:
+            manager.set_requested_share(active_share)
+        else:
+            self._inference_pacer.set_share(active_share)
+        for model_id, policy in tuple(self._model_scheduling.items()):
+            self._apply_model_policy(model_id, policy)
+        self._inference_coordinator.configure(
+            enabled=(
+                self._inference_scheduling_requested_enabled
+                and self._inference_controls_enabled
+            ),
+            quantum_seconds=self._inference_scheduling_quantum_seconds,
+        )
+
+    def get_inference_controls_status(self) -> dict:
+        """Describe saved user preferences and the active enforcement inputs."""
+        manager = getattr(self, "_battery_protection", None)
+        battery_status = manager.status() if manager is not None else {}
+        coordinator = self._inference_coordinator.status_snapshot()
+        return {
+            "enabled": self._inference_controls_enabled,
+            "configured_global_share": self._inference_requested_share,
+            "effective_global_share": self.get_requested_inference_share(),
+            "effective_global_maximum_share": battery_status.get(
+                "effective_share", self.get_requested_inference_share()
+            ),
+            "configured_interactive_allowance": self._inference_class_allowances[
+                "interactive"
+            ],
+            "configured_background_allowance": self._inference_class_allowances[
+                "background"
+            ],
+            "effective_interactive_allowance": (
+                self._inference_class_allowances["interactive"]
+                if self._inference_controls_enabled
+                else 1.0
+            ),
+            "effective_background_allowance": (
+                self._inference_class_allowances["background"]
+                if self._inference_controls_enabled
+                else 1.0
+            ),
+            "configured_scheduling_enabled": (
+                self._inference_scheduling_requested_enabled
+            ),
+            "effective_scheduling_enabled": bool(coordinator.get("enabled", False)),
+            "quantum_seconds": self._inference_scheduling_quantum_seconds,
+        }
+
+    def _apply_model_inference_share(self, model_id: str, share: float) -> None:
+        pacer = self._model_pacers.get(model_id)
+        if pacer is not None:
+            pacer.set_share(share)
+        self._inference_coordinator.set_model_admission(model_id, share > 0.0)
+
+    def configure_model_scheduling(
+        self,
+        model_id: str,
+        share: float | None = None,
+        priority: int = 0,
+        exclusive: bool = False,
+        allowance: float | None = None,
+    ) -> None:
+        if share is not None:
+            InferencePacer._validate_share(share)
+        if allowance is not None and (
+            isinstance(allowance, bool)
+            or not isinstance(allowance, (int, float))
+            or not math.isfinite(allowance)
+            or not 0.0 <= allowance <= 1.0
+        ):
+            raise ValueError("model allowance must be null or between 0 and 1")
+        if (
+            isinstance(priority, bool)
+            or not isinstance(priority, int)
+            or not 0 <= priority <= 100
+        ):
+            raise ValueError("model priority must be an integer between 0 and 100")
+        if not isinstance(exclusive, bool):
+            raise ValueError("exclusive must be a boolean")
+        self._model_scheduling[model_id] = dict(
+            share=share, priority=priority, exclusive=exclusive, allowance=allowance
+        )
+        self._apply_model_policy(model_id, self._model_scheduling[model_id])
+
+    def _apply_model_policy(self, model_id: str, policy: dict) -> None:
+        class_name = "interactive" if policy.get("exclusive", False) else "background"
+        class_allowance = self._inference_class_allowances[class_name]
+        global_share = self._inference_requested_share
+        if policy.get("allowance") is not None:
+            configured_share = global_share * class_allowance * policy["allowance"]
+        elif policy.get("share") is not None:
+            # Explicit legacy fallback until settings migration supplies a
+            # numeric relative allowance. Preserve min(G*C, legacy absolute S).
+            configured_share = min(
+                global_share * class_allowance, float(policy["share"])
+            )
+        else:
+            configured_share = global_share * class_allowance
+        active_model_share = (
+            configured_share if self._inference_controls_enabled else 1.0
+        )
+        registered = (
+            self._inference_coordinator.status_snapshot()
+            .get("models", {})
+            .get(model_id, {})
+        )
+        if registered.get("registered"):
+            self._inference_coordinator.configure_model(
+                model_id,
+                priority=policy.get("priority", 0),
+                exclusive=policy.get("exclusive", False),
+            )
+        self._inference_coordinator.set_model_admission(
+            model_id,
+            configured_share > 0.0 if self._inference_controls_enabled else True,
+        )
+        manager = getattr(self, "_battery_protection", None)
+        if manager is not None:
+            manager.configure_model_share(model_id, active_model_share)
+        else:
+            self._apply_model_inference_share(model_id, active_model_share)
+
+    def _model_inference_pacer(self, model_id: str, settings) -> ModelPacer:
+        if model_id not in self._model_pacers:
+            self._model_pacers[model_id] = ModelPacer(self._inference_pacer)
+        self.configure_model_scheduling(
+            model_id,
+            share=getattr(settings, "inference_share", None),
+            priority=getattr(settings, "inference_priority", 0),
+            exclusive=getattr(settings, "inference_exclusive", False),
+            allowance=getattr(settings, "inference_allowance", None),
+        )
+        return self._model_pacers[model_id]
+
+    def get_inference_scheduling_status(self) -> dict:
+        snapshot = self._inference_coordinator.status_snapshot()
+        manager = getattr(self, "_battery_protection", None)
+        controls_enabled = getattr(self, "_inference_controls_enabled", True)
+        rows = []
+        # These are the user's saved limits, even while the master bypass is
+        # active. Effective limits are reported separately below.
+        global_maximum = self._inference_requested_share
+        class_maxima = {
+            name: global_maximum * allowance
+            for name, allowance in self._inference_class_allowances.items()
+        }
+        for model_id, entry in self._entries.items():
+            settings = None
+            if self._settings_manager is not None:
+                try:
+                    settings = self._settings_manager.get_settings(model_id)
+                except Exception:
+                    logger.debug("Could not read scheduling policy for %s", model_id)
+            policy = self._model_scheduling.get(model_id)
+            if policy is None:
+                policy = {
+                    "share": getattr(settings, "inference_share", None),
+                    "allowance": getattr(settings, "inference_allowance", None),
+                    "priority": getattr(settings, "inference_priority", 0),
+                    "exclusive": getattr(settings, "inference_exclusive", False),
+                }
+            pacer = self._model_pacers.get(model_id)
+            class_name = (
+                "interactive" if policy.get("exclusive", False) else "background"
+            )
+            class_allowance = self._inference_class_allowances[class_name]
+            model_allowance = policy.get("allowance")
+            if model_allowance is None:
+                model_allowance = 1.0
+            configured_share = (
+                global_maximum * class_allowance * model_allowance
+                if policy.get("allowance") is not None
+                else (
+                    min(class_maxima[class_name], policy["share"])
+                    if policy.get("share") is not None
+                    else class_maxima[class_name]
+                )
+            )
+            loaded = entry.engine is not None
+            capable = (
+                entry.model_type in {"llm", "vlm"}
+                and entry.engine_type in {"batched", "vlm"}
+                and not self._entry_is_diffusion_model(entry)
+            )
+            supported = (
+                loaded and capable and hasattr(entry.engine, "_inference_coordinator")
+            )
+            controllable = capable and (not loaded or supported)
+            state = "idle"
+            reason = (
+                "User paused this model"
+                if controls_enabled and configured_share == 0
+                else ""
+            )
+            effective = (
+                pacer.share
+                if pacer is not None
+                else (
+                    (configured_share if controls_enabled else 1.0)
+                    if not loaded
+                    else self._inference_pacer.share
+                )
+            )
+            if manager is not None and supported and loaded:
+                effective = manager.model_effective_share(model_id)
+                battery = manager.status()
+                if battery.get("suspended"):
+                    state, reason = "battery_suspended", battery.get(
+                        "state", "battery protection"
+                    )
+                elif effective < (configured_share if controls_enabled else 1.0):
+                    reason = (
+                        battery.get("state", "battery protection")
+                        .replace("_", " ")
+                        .capitalize()
+                    )
+            if (
+                state != "battery_suspended"
+                and supported
+                and loaded
+                and self._entry_has_active_requests(entry)
+            ):
+                state = "active" if snapshot.get("owner") == model_id else "waiting"
+                if not snapshot.get("enabled"):
+                    state = "active"
+            if snapshot.get("draining") and snapshot.get("owner") == model_id:
+                state, reason = "draining", "Completing submitted work before handover"
+            if state == "waiting" and not reason:
+                reason = "Waiting for another model's turn"
+            if not controllable:
+                state, reason = (
+                    "unsupported",
+                    "Local batched text and vision-language models only",
+                )
+            elif not loaded:
+                state, reason = "unloaded", "Policy applies when the model is loaded"
+            rows.append(
+                dict(
+                    model_id=model_id,
+                    supported=supported,
+                    capable=capable,
+                    controllable=controllable,
+                    unsupported=not controllable,
+                    loaded=loaded,
+                    display_name=(getattr(settings, "display_name", None) or model_id),
+                    is_favorite=bool(getattr(settings, "is_favorite", False)),
+                    requested_share=policy.get("share"),
+                    allowance=model_allowance,
+                    class_allowance=class_allowance,
+                    configured_share=configured_share,
+                    effective_share=effective,
+                    controls_enabled=controls_enabled,
+                    priority=policy.get("priority", 0),
+                    exclusive=policy.get("exclusive", False),
+                    state=state,
+                    reason=reason,
+                )
+            )
+        return dict(
+            controls_enabled=controls_enabled,
+            enabled=snapshot.get("enabled", False),
+            quantum_seconds=snapshot.get("quantum_seconds", 5.0),
+            owner_model_id=snapshot.get("owner"),
+            global_maximum_share=global_maximum,
+            effective_global_maximum_share=(
+                manager.status().get(
+                    "effective_share", self.get_requested_inference_share()
+                )
+                if manager is not None
+                else self.get_requested_inference_share()
+            ),
+            interactive_allowance=self._inference_class_allowances["interactive"],
+            background_allowance=self._inference_class_allowances["background"],
+            effective_interactive_allowance=(
+                self._inference_class_allowances["interactive"]
+                if controls_enabled
+                else 1.0
+            ),
+            effective_background_allowance=(
+                self._inference_class_allowances["background"]
+                if controls_enabled
+                else 1.0
+            ),
+            interactive_maximum_share=class_maxima["interactive"],
+            background_maximum_share=class_maxima["background"],
+            models=rows,
+        )
 
     def configure_gpu_keep_warm(self, interval_seconds: float) -> None:
         """Set the idle keep-warm period in seconds (0 or less disables it)."""
@@ -453,6 +829,13 @@ class EnginePool:
 
     def _gpu_keep_warm_needed(self) -> bool:
         """True when a model is resident, idle, and used within the idle window."""
+        from .generation_gate import get_generation_gate
+
+        if (
+            get_generation_gate().restricted_snapshot
+            or self._inference_coordinator.status_snapshot().get("enabled")
+        ):
+            return False
         now = time.time()
         last_request = self._gpu_keep_warm_last_active
         loaded = False
@@ -2377,6 +2760,23 @@ class EnginePool:
             entry.in_use += 1
         return entry.engine
 
+    def _battery_protects_entry(self, entry, runtime_settings=None) -> bool:
+        """Describe coverage without relabeling external or alternate engines."""
+        if entry is None or entry.engine_type not in ("batched", "vlm"):
+            return False
+        if entry.engine is not None:
+            return isinstance(
+                entry.engine, (BatchedEngine, VLMBatchedEngine)
+            ) and not bool(getattr(entry.engine, "is_diffusion_model", False))
+        if self._distributed_deployment_for_entry(entry) is not None:
+            return False
+        settings = runtime_settings
+        if settings is None and self._settings_manager is not None:
+            settings = self._settings_manager.get_settings(entry.model_id)
+        return not getattr(
+            settings, "external_engine", None
+        ) and not self._entry_is_diffusion_model(entry)
+
     async def get_engine(
         self,
         model_id: str,
@@ -2420,6 +2820,13 @@ class EnginePool:
             ModelLoadingError: If model is already being loaded
         """
         entry = self._entries.get(model_id)
+        from .generation_gate import get_generation_gate
+
+        gate = get_generation_gate()
+        if gate.paused_snapshot and self._battery_protects_entry(
+            entry, runtime_settings
+        ):
+            gate.check_admission()
         if force_lm and entry is not None and not self._has_mlx_lm_path(entry):
             # The VLM engine is the only text engine for these families.
             force_lm = False
@@ -3910,6 +4317,11 @@ class EnginePool:
                         scheduler_config=self._scheduler_config,
                         model_settings=model_settings,
                         prefill_eviction_callback=prefill_eviction_callback,
+                        inference_pacer=self._model_inference_pacer(
+                            model_id, model_settings
+                        ),
+                        inference_coordinator=self._inference_coordinator,
+                        inference_model_id=model_id,
                     )
                 elif entry.engine_type == "audio_stt":
                     engine = STTEngine(model_name=entry.model_path)
@@ -3927,6 +4339,11 @@ class EnginePool:
                         scheduler_config=self._scheduler_config,
                         model_settings=model_settings,
                         prefill_eviction_callback=prefill_eviction_callback,
+                        inference_pacer=self._model_inference_pacer(
+                            model_id, model_settings
+                        ),
+                        inference_coordinator=self._inference_coordinator,
+                        inference_model_id=model_id,
                     )
 
             if isinstance(engine, SplashEngine):
@@ -3963,6 +4380,11 @@ class EnginePool:
                         scheduler_config=self._scheduler_config,
                         model_settings=model_settings,
                         prefill_eviction_callback=prefill_eviction_callback,
+                        inference_pacer=self._model_inference_pacer(
+                            model_id, model_settings
+                        ),
+                        inference_coordinator=self._inference_coordinator,
+                        inference_model_id=model_id,
                     )
                     try:
                         await engine.start()
@@ -3999,6 +4421,11 @@ class EnginePool:
                         scheduler_config=self._scheduler_config,
                         model_settings=model_settings,
                         prefill_eviction_callback=prefill_eviction_callback,
+                        inference_pacer=self._model_inference_pacer(
+                            model_id, model_settings
+                        ),
+                        inference_coordinator=self._inference_coordinator,
+                        inference_model_id=model_id,
                     )
                     try:
                         await engine.start()
@@ -4292,13 +4719,53 @@ class EnginePool:
         for model_id in pinned_models:
             try:
                 logger.info(f"Preloading pinned model: {model_id}")
+                from .generation_gate import get_generation_gate
+
+                gate = get_generation_gate()
+                if gate.paused_snapshot and self._battery_protects_entry(
+                    self._entries.get(model_id)
+                ):
+                    self._battery_deferred_pins.add(model_id)
+                    continue
                 await self.get_engine(model_id)
             except Exception as e:
                 logger.error(f"Failed to preload pinned model {model_id}: {e}")
 
+        if self._battery_deferred_pins and (
+            self._battery_preload_task is None or self._battery_preload_task.done()
+        ):
+            self._battery_preload_task = asyncio.create_task(
+                self._preload_after_battery_recovery(), name="battery-deferred-preload"
+            )
+
+    async def _preload_after_battery_recovery(self) -> None:
+        from .generation_gate import GenerationSuspendedError, get_generation_gate
+
+        gate = get_generation_gate()
+        while self._battery_deferred_pins and not self._shutting_down:
+            if gate.paused_snapshot:
+                await gate.wait()
+                continue
+            model_id = next(iter(self._battery_deferred_pins))
+            self._battery_deferred_pins.discard(model_id)
+            entry = self._entries.get(model_id)
+            if entry is None or not entry.is_pinned:
+                continue
+            try:
+                await self.get_engine(model_id)
+            except GenerationSuspendedError:
+                self._battery_deferred_pins.add(model_id)
+            except Exception as exc:
+                logger.error("Deferred preload failed for %s: %s", model_id, exc)
+
     async def shutdown(self) -> None:
         """Shutdown all engines gracefully."""
         self._shutting_down = True
+        if self._battery_preload_task is not None:
+            self._battery_preload_task.cancel()
+            await asyncio.gather(self._battery_preload_task, return_exceptions=True)
+            self._battery_preload_task = None
+        self._battery_deferred_pins.clear()
         await self._stop_gpu_keep_warm()
         reclaim_tasks = tuple(self._failed_load_reclaim_tasks)
         for task in reclaim_tasks:

@@ -1,5 +1,6 @@
 """Regression tests for SpecPrefill parameter forwarding in VLM engine."""
 
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -7,6 +8,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from omlx.engine.vlm import VLMBatchedEngine
+
+
+# These tests isolate SpecPrefill argument forwarding from generation policy.
+@pytest.fixture(autouse=True)
+def _preparation_runner(monkeypatch):
+    async def prepare(engine, operation, *args):
+        return await asyncio.get_running_loop().run_in_executor(
+            engine._engine._mlx_executor, operation, *args
+        )
+
+    monkeypatch.setattr(VLMBatchedEngine, "_run_model_preparation", prepare)
 
 
 @pytest.mark.asyncio

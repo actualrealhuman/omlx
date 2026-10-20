@@ -85,6 +85,25 @@ class TestServerSettings:
             "sse_keepalive_mode": "chunk",
             "auto_start_on_launch": True,
             "burst_decode_mode": "balanced",
+            "inference_share": 1.0,
+            "inference_interactive_allowance": 1.0,
+            "inference_background_allowance": 1.0,
+            "inference_scheduling_enabled": False,
+            "inference_scheduling_quantum_seconds": 5.0,
+            "inference_controls_enabled": True,
+            "battery_protection_enabled": False,
+            "battery_protection": {
+                "throttle_start_percent": 75.0,
+                "suspend_percent": 50.0,
+                "resume_percent": 55.0,
+                "minimum_share": 0.1,
+                "outage_share": 0.25,
+                "emergency_share": 0.1,
+                "outage_grace_seconds": 60.0,
+                "ac_stabilization_seconds": 10.0,
+                "telemetry_stale_seconds": 5.0,
+                "restoration_share_per_second": 0.01,
+            },
             "preserve_mid_system_cache": True,
             "distributed_inference_enabled": False,
             "max_audio_upload_size": "100MB",
@@ -94,6 +113,16 @@ class TestServerSettings:
             "gpu_keep_warm_interval": 0.5,
         }
 
+    def test_global_limit_rejects_zero_while_class_allowances_allow_zero(self):
+        with pytest.raises(ValueError, match="inference_share"):
+            ServerSettings(inference_share=0.0)
+        settings = ServerSettings(
+            inference_interactive_allowance=0.0,
+            inference_background_allowance=0.0,
+        )
+        assert settings.inference_interactive_allowance == 0.0
+        assert settings.inference_background_allowance == 0.0
+
     def test_from_dict_distributed_inference_is_opt_in(self):
         assert ServerSettings.from_dict({}).distributed_inference_enabled is False
         assert (
@@ -102,6 +131,47 @@ class TestServerSettings:
             ).distributed_inference_enabled
             is True
         )
+
+    def test_battery_policy_defaults_migrate_and_round_trip(self):
+        defaults = ServerSettings.from_dict({})
+        assert defaults.battery_protection_enabled is False
+        assert defaults.to_dict()["battery_protection"] == defaults.battery_protection
+        legacy = ServerSettings.from_dict({"battery_protection_enabled": True})
+        assert legacy.battery_protection_enabled is True
+        assert legacy.battery_protection["minimum_share"] == 0.1
+        custom = ServerSettings.from_dict(
+            {
+                "battery_protection_enabled": False,
+                "battery_protection": {"throttle_start_percent": 80},
+            }
+        )
+        assert custom.battery_protection["throttle_start_percent"] == 80
+        assert custom.battery_protection_enabled is False
+        assert ServerSettings.from_dict(custom.to_dict()).to_dict() == custom.to_dict()
+
+    def test_invalid_battery_policy_is_not_ignored_even_when_disabled(self):
+        for options in (
+            {"suspend_percent": 75},
+            {"throttle_start_percent": float("inf")},
+            {"minimum_share": None},
+            {"enabled": True},
+            {"future_option": 1},
+            {"outage_grace_seconds": -1},
+            {"telemetry_stale_seconds": 0.5},
+            {"restoration_share_per_second": 1.1},
+        ):
+            with pytest.raises(ValueError):
+                ServerSettings.from_dict({"battery_protection": options})
+
+    def test_saved_invalid_battery_policy_fails_startup_load(self, tmp_path):
+        path = tmp_path / "settings.json"
+        path.write_text(
+            '{"version":"1.0","server":{"battery_protection_enabled":false,'
+            '"battery_protection":{"resume_percent":40}}}',
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError):
+            GlobalSettings.load(base_path=tmp_path)
 
     def test_from_dict_sse_keepalive_mode(self):
         """sse_keepalive_mode round-trips through from_dict / to_dict."""
