@@ -3566,6 +3566,14 @@ class PagedSSDCacheManager(CacheManager):
         # layout. Replace an indexed block written by an older cache schema
         # instead of treating it as an unconditional hit (#2487).
         indexed_metadata = self._index.get(block_hash)
+        if cache_mode == "memory" and indexed_metadata is not None:
+            # A memory request can reuse a compatible durable artifact, but
+            # must not replace or forget an incompatible one.
+            if not replace_existing and self._is_compatible_block(indexed_metadata):
+                self._index.touch(block_hash)
+                self._stats["hits"] += 1
+                return True
+            return False
         if (
             indexed_metadata is not None
             and not replace_existing
@@ -3599,6 +3607,8 @@ class PagedSSDCacheManager(CacheManager):
             if isinstance(
                 hot_metadata, PagedSSDBlockMetadata
             ) and not self._is_compatible_block(hot_metadata):
+                if cache_mode == "memory":
+                    return False
                 reason = (
                     self.signature_mismatch_reason(hot_metadata.cache_signature)
                     or "cache layout mismatch"
@@ -3610,6 +3620,15 @@ class PagedSSDCacheManager(CacheManager):
                 )
                 self.forget_block(block_hash)
                 hot_entry = None
+
+        if cache_mode == "memory" and hot_entry is not None:
+            # This request may reuse an existing copy, but it neither grants
+            # persistence nor triggers pressure write-through, even when the
+            # caller disabled normal write-back retention.
+            if replace_existing:
+                return False
+            self._stats["hits"] += 1
+            return True
 
         if hot_entry is not None and not replace_existing:
             if cache_mode == "default":
@@ -3629,7 +3648,8 @@ class PagedSSDCacheManager(CacheManager):
                 return True
             return False
 
-        self._wait_for_pending_write_slot()
+        if cache_mode == "default":
+            self._wait_for_pending_write_slot()
         file_path = self._get_file_path(block_hash)
 
         try:
@@ -3892,7 +3912,10 @@ class PagedSSDCacheManager(CacheManager):
 
             if cache_mode == "memory":
                 # Memory requests may use only the existing bounded RAM tier.
-                if not self._hot_cache_enabled or not hot_cache_write_back:
+                # The caller's pressure write-through flag applies to the
+                # default persistence path; memory mode never writes through
+                # and may retain a new entry whenever the RAM tier is enabled.
+                if not self._hot_cache_enabled:
                     return False
                 if not self._hot_cache_put(block_hash, cache_entry):
                     return False

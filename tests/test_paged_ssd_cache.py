@@ -4838,6 +4838,191 @@ class TestRequestCachePersistencePolicy:
     def _wait_for_writes(manager):
         assert manager.wait_for_pending_writes(5.0)
 
+    def test_memory_mode_never_waits_for_ssd_queue(self, tmp_path, monkeypatch):
+        mx = pytest.importorskip("mlx.core")
+        manager = PagedSSDCacheManager(
+            cache_dir=tmp_path / "memory-no-queue-wait",
+            max_size_bytes=1024**2,
+            hot_cache_max_bytes=1024**2,
+        )
+
+        def fail_if_waited():
+            raise AssertionError("memory mode waited for an SSD queue slot")
+
+        monkeypatch.setattr(manager, "_wait_for_pending_write_slot", fail_if_waited)
+        try:
+            assert manager.save_block(
+                b"memory-no-queue-wait-artifact",
+                self._cache_data(mx),
+                32,
+                layer_cache_types=["KVCache"],
+                cache_mode="memory",
+            )
+        finally:
+            manager.close()
+
+    def test_memory_duplicate_never_queues_or_changes_persistence_grant(
+        self, tmp_path, monkeypatch
+    ):
+        mx = pytest.importorskip("mlx.core")
+        manager = PagedSSDCacheManager(
+            cache_dir=tmp_path / "memory-duplicate-no-queue",
+            max_size_bytes=1024**2,
+            hot_cache_max_bytes=1024**2,
+        )
+        block_hash = b"memory-duplicate-no-queue-artifact"
+        pressure_hash = b"memory-pressure-flag-retained"
+        queued = []
+        monkeypatch.setattr(
+            manager, "_enqueue_ssd_write", lambda *args, **kwargs: queued.append(args)
+        )
+        try:
+            assert manager.save_block(
+                block_hash,
+                self._cache_data(mx),
+                32,
+                layer_cache_types=["KVCache"],
+                cache_mode="memory",
+            )
+            assert manager.save_block(
+                block_hash,
+                self._cache_data(mx),
+                32,
+                layer_cache_types=["KVCache"],
+                hot_cache_write_back=False,
+                cache_mode="memory",
+            )
+            entry = manager._hot_cache_get(block_hash)
+            assert entry is not None and entry["persist_allowed"] is False
+            assert queued == []
+
+            assert manager.save_block(
+                pressure_hash,
+                self._cache_data(mx),
+                32,
+                layer_cache_types=["KVCache"],
+                hot_cache_write_back=False,
+                cache_mode="memory",
+            )
+            pressure_entry = manager._hot_cache_get(pressure_hash)
+            assert pressure_entry is not None
+            assert pressure_entry["persist_allowed"] is False
+            assert queued == []
+
+            # An already eligible dirty entry is reusable, but a memory-mode
+            # duplicate still cannot enqueue it just because write-back is off.
+            granted_hash = b"memory-duplicate-preserves-grant"
+            assert manager.save_block(
+                granted_hash,
+                self._cache_data(mx),
+                32,
+                layer_cache_types=["KVCache"],
+            )
+            granted_entry = manager._hot_cache_get(granted_hash)
+            assert granted_entry is not None
+            assert granted_entry["persist_allowed"] is True
+            assert manager.save_block(
+                granted_hash,
+                self._cache_data(mx),
+                32,
+                layer_cache_types=["KVCache"],
+                hot_cache_write_back=False,
+                cache_mode="memory",
+            )
+            assert manager._hot_cache_get(granted_hash)["persist_allowed"] is True
+            assert queued == []
+        finally:
+            manager.close()
+
+    def test_memory_mode_preserves_incompatible_or_replace_existing_disk_entry(
+        self, tmp_path, monkeypatch
+    ):
+        mx = pytest.importorskip("mlx.core")
+        cache_dir = tmp_path / "memory-preserve-existing-disk"
+        manager = PagedSSDCacheManager(
+            cache_dir=cache_dir,
+            max_size_bytes=1024**2,
+            hot_cache_max_bytes=0,
+        )
+        block_hash = b"memory-preserve-existing-disk-artifact"
+        try:
+            assert manager.save_block(
+                block_hash,
+                self._cache_data(mx),
+                32,
+                layer_cache_types=["KVCache"],
+            )
+            self._wait_for_writes(manager)
+            payload_path = manager._get_file_path(block_hash)
+            assert payload_path.exists()
+
+            monkeypatch.setattr(
+                manager, "_is_compatible_block", lambda _metadata: False
+            )
+            assert not manager.save_block(
+                block_hash,
+                self._cache_data(mx),
+                32,
+                layer_cache_types=["KVCache"],
+                cache_mode="memory",
+            )
+            assert payload_path.exists()
+            assert manager._index.contains(block_hash)
+
+            monkeypatch.setattr(
+                manager, "_is_compatible_block", lambda _metadata: True
+            )
+            assert not manager.save_block(
+                block_hash,
+                self._cache_data(mx),
+                32,
+                layer_cache_types=["KVCache"],
+                replace_existing=True,
+                cache_mode="memory",
+            )
+            assert payload_path.exists()
+            assert manager._index.contains(block_hash)
+        finally:
+            manager.close()
+
+    def test_memory_mode_preserves_incompatible_hot_entry(self, tmp_path, monkeypatch):
+        mx = pytest.importorskip("mlx.core")
+        manager = PagedSSDCacheManager(
+            cache_dir=tmp_path / "memory-preserve-existing-hot",
+            max_size_bytes=1024**2,
+            hot_cache_max_bytes=1024**2,
+        )
+        block_hash = b"memory-preserve-existing-hot-artifact"
+        forgotten = []
+        monkeypatch.setattr(
+            manager, "forget_block", lambda value: forgotten.append(value)
+        )
+        try:
+            assert manager.save_block(
+                block_hash,
+                self._cache_data(mx),
+                32,
+                layer_cache_types=["KVCache"],
+            )
+            entry = manager._hot_cache_get(block_hash)
+            assert entry is not None and entry["persist_allowed"] is True
+            monkeypatch.setattr(
+                manager, "_is_compatible_block", lambda _metadata: False
+            )
+
+            assert not manager.save_block(
+                block_hash,
+                self._cache_data(mx),
+                32,
+                layer_cache_types=["KVCache"],
+                cache_mode="memory",
+            )
+            assert manager._hot_cache_get(block_hash) is entry
+            assert entry["persist_allowed"] is True
+            assert forgotten == []
+        finally:
+            manager.close()
+
     def test_memory_mode_is_not_written_by_write_through_clear_or_close(
         self, tmp_path
     ):

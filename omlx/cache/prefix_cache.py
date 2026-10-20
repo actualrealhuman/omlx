@@ -1670,34 +1670,35 @@ class BlockAwarePrefixCache(CacheManager):
                                     "committed",
                                     block.block_id,
                                 )
-                                block_removed = False
-                                delete_block = getattr(
-                                    self.paged_ssd_cache, "delete_block", None
-                                )
-                                if callable(delete_block):
-                                    try:
-                                        block_removed = bool(
-                                            delete_block(block.block_hash)
-                                        )
-                                    except Exception:
-                                        logger.exception(
-                                            "Failed to delete rejected split-GDN "
-                                            "block %s",
-                                            block.block_id,
-                                        )
-                                if not block_removed:
-                                    forget_block = getattr(
-                                        self.paged_ssd_cache, "forget_block", None
+                                if cache_mode != "memory":
+                                    block_removed = False
+                                    delete_block = getattr(
+                                        self.paged_ssd_cache, "delete_block", None
                                     )
-                                    if callable(forget_block):
+                                    if callable(delete_block):
                                         try:
-                                            forget_block(block.block_hash)
+                                            block_removed = bool(
+                                                delete_block(block.block_hash)
+                                            )
                                         except Exception:
                                             logger.exception(
-                                                "Failed to forget rejected split-GDN "
+                                                "Failed to delete rejected split-GDN "
                                                 "block %s",
                                                 block.block_id,
                                             )
+                                    if not block_removed:
+                                        forget_block = getattr(
+                                            self.paged_ssd_cache, "forget_block", None
+                                        )
+                                        if callable(forget_block):
+                                            try:
+                                                forget_block(block.block_hash)
+                                            except Exception:
+                                                logger.exception(
+                                                    "Failed to forget rejected split-GDN "
+                                                    "block %s",
+                                                    block.block_id,
+                                                )
                                 self.paged_cache.free_block(block.block_id)
                                 block_table.block_ids.pop()
                                 block_table.num_tokens -= len(block_tokens)

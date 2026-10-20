@@ -362,6 +362,56 @@ def test_memory_split_layout_embeds_recurrent_state_without_sidecar(tmp_path):
     assert len(list(cache_dir.rglob("*.safetensors"))) == 3
     assert list(cache_dir.rglob("*.tmp")) == []
 
+    # Verify the split-tagged artifacts survive manager teardown and can be
+    # restored by a fresh manager without an SSD boundary sidecar.
+    reopened_paged = PagedCacheManager(
+        block_size=BLOCK_SIZE,
+        max_blocks=16,
+        model_name="hybrid-model",
+        initial_blocks=16,
+    )
+    reopened_ssd = PagedSSDCacheManager(
+        cache_dir=cache_dir,
+        max_size_bytes=100 * 1024**2,
+        hot_cache_max_bytes=2 * 1024**2,
+        expected_model_name="hybrid-model",
+        expected_num_layers=2,
+        expected_block_size=BLOCK_SIZE,
+        expected_layer_cache_types=LAYER_TYPES,
+        gdn_ssd_split_enabled=True,
+    )
+    reopened_prefix = BlockAwarePrefixCache(
+        model=_HybridModel(),
+        paged_cache_manager=reopened_paged,
+        paged_ssd_cache_manager=reopened_ssd,
+        gdn_ssd_split_enabled=True,
+    )
+    try:
+        # The generic token-to-block prefix map is process-local. Rebuild a
+        # block table from the known persisted content hashes to exercise the
+        # fresh manager's disk scan and cold payload loader directly.
+        reopened_hit = reopened_paged.create_block_table(
+            "cold-reopen-memory-restore"
+        )
+        for block_hash in hashes:
+            block = reopened_paged.allocate_block()
+            assert block is not None
+            block.block_hash = block_hash
+            block.token_count = BLOCK_SIZE
+            reopened_hit.block_ids.append(block.block_id)
+            reopened_hit.num_tokens += BLOCK_SIZE
+        cold_restored = reopened_prefix.reconstruct_cache(reopened_hit)
+        assert cold_restored is not None
+        assert cold_restored[0].keys_and_values()[0].shape[2] == 12
+        assert float(cold_restored[1].cache[0][0, 0, 0]) == pytest.approx(12.0)
+        assert reopened_prefix.get_stats_dict()["gdn_last_restore"][
+            "chosen_endpoint_tokens"
+        ] == 12
+        assert reopened_ssd._gdn_sidecar_index.count == 0
+    finally:
+        reopened_prefix.release_cache("cold-reopen-memory-restore")
+        reopened_ssd.close()
+
 
 def test_split_store_commits_single_final_sidecar_outside_provider_index(tmp_path):
     cache_dir = tmp_path / "cache"
