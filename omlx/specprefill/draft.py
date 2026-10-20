@@ -20,7 +20,7 @@ class DraftPrefixCache(Protocol):
     """Draft-cache operations used by the scoring workflow."""
 
     def fetch_cache(
-        self, request_id: str, tokens: Sequence[int]
+        self, request_id: str, tokens: Sequence[int], cache_mode: str = ...
     ) -> tuple[Any, list[int]]: ...
 
     def preload_blocks(self, block_table: Any) -> int: ...
@@ -37,6 +37,7 @@ class DraftPrefixCache(Protocol):
         model_cache_config: Any = ...,
         boundary_snapshots: dict[int, list[Any]] | None = ...,
         hot_cache_write_back: bool = ...,
+        cache_mode: str = ...,
     ) -> Any: ...
 
     block_size: int
@@ -102,6 +103,7 @@ def run_specprefill_draft_scoring(
     sync_and_clear_cache: SyncAndClearCache,
     log: logging.Logger,
     use_hot_cache: bool = True,
+    cache_mode: str = "default",
 ) -> None:
     """Score draft tokens, persist reusable cache state, and update ``request``."""
     tokens_to_score = plan.tokens_to_score
@@ -117,18 +119,29 @@ def run_specprefill_draft_scoring(
         if draft_prefix_cache is not None:
             try:
                 # Leave the final token uncached to compute prompt-end logits without replay.
+                fetch_kwargs = (
+                    {"cache_mode": cache_mode} if cache_mode != "default" else {}
+                )
                 block_table, _draft_remaining = draft_prefix_cache.fetch_cache(
-                    request.request_id, tokens_to_score[:-1]
+                    request.request_id, tokens_to_score[:-1],
+                    **fetch_kwargs,
                 )
                 if block_table and block_table.num_tokens > 0:
-                    if use_hot_cache:
+                    if use_hot_cache and cache_mode != "none":
                         draft_prefix_cache.preload_blocks(block_table)
                     # Avoid an alias that would retain restored KV through sync_and_clear_cache().
                     draft_cache = draft_prefix_cache.reconstruct_cache(
-                        block_table, promote_to_hot_cache=use_hot_cache
+                        block_table,
+                        promote_to_hot_cache=(use_hot_cache and cache_mode != "none"),
                     )
                     if draft_cache:
                         draft_cached_tokens = block_table.num_tokens
+                        if cache_mode == "default":
+                            grant = getattr(
+                                draft_prefix_cache, "grant_persistence", None
+                            )
+                            if callable(grant):
+                                grant(block_table)
             except Exception as error:
                 log.debug(f"SpecPrefill: draft cache fetch failed: {error}")
 
@@ -271,10 +284,19 @@ def run_specprefill_draft_scoring(
             f"{', '.join(log_extra)})"
         )
 
-        if draft_prefix_cache is not None and used_cache is not None:
+        if (
+            cache_mode != "none"
+            and draft_prefix_cache is not None
+            and used_cache is not None
+        ):
             try:
                 extracted_cache, model_cache_config = extract_cache_states(used_cache)
                 if extracted_cache:
+                    store_kwargs = (
+                        {"cache_mode": cache_mode}
+                        if cache_mode != "default"
+                        else {}
+                    )
                     draft_prefix_cache.store_cache(
                         request.request_id,
                         tokens_to_score,
@@ -282,6 +304,7 @@ def run_specprefill_draft_scoring(
                         model_cache_config=model_cache_config,
                         boundary_snapshots=boundary_snapshots or None,
                         hot_cache_write_back=use_hot_cache,
+                        **store_kwargs,
                     )
             except Exception as error:
                 log.debug(f"SpecPrefill: draft cache store failed: {error}")

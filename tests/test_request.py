@@ -11,6 +11,15 @@ from omlx.request import (
     Request,
     RequestOutput,
 )
+from omlx.cache.policy import CachePolicy
+
+
+def test_request_has_independent_default_cache_policy():
+    first = Request("one", "prompt", SamplingParams())
+    second = Request("two", "prompt", SamplingParams())
+
+    assert first.cache_policy == CachePolicy()
+    assert first.cache_policy is not second.cache_policy
 
 
 class TestRequestStatus:

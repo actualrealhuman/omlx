@@ -12,6 +12,8 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
+from .cache.policy import CachePolicy
+
 if TYPE_CHECKING:
     from .cache.paged_cache import BlockTable
 
@@ -125,6 +127,7 @@ class Request:
     request_id: str
     prompt: Union[str, List[int]]
     sampling_params: SamplingParams
+    cache_policy: CachePolicy = field(default_factory=CachePolicy)
     arrival_time: float = field(default_factory=time.monotonic)
     priority: int = 0  # Lower is higher priority
 

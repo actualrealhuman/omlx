@@ -47,6 +47,7 @@ from .exceptions import (
 from .model_registry import get_registry
 from .output_collector import RequestOutputCollector, RequestStreamState
 from .request import Request, RequestOutput, SamplingParams
+from .cache.policy import CachePolicy, coerce_cache_policy
 from .scheduler import Scheduler, SchedulerConfig, _sync_and_clear_cache
 from .utils.fatal import (
     FATAL_TEARDOWN_TIMEOUT_S,
@@ -738,6 +739,7 @@ class EngineCore:
         benchmark_trace: bool = False,
         benchmark_ane_sequence_length: int = 0,
         tools: list[dict[str, Any]] | None = None,
+        cache_policy: CachePolicy | dict | None = None,
     ) -> str:
         """
         Add a request for processing.
@@ -768,6 +770,7 @@ class EngineCore:
             request_id=request_id,
             prompt=prompt,
             sampling_params=sampling_params,
+            cache_policy=coerce_cache_policy(cache_policy),
             tools=tools,
             images=images,
             videos=videos,
@@ -1226,6 +1229,7 @@ class EngineCore:
         self,
         prompts: List[Union[str, List[int]]],
         sampling_params: Optional[SamplingParams] = None,
+        cache_policy: CachePolicy | dict | None = None,
     ) -> List[RequestOutput]:
         """
         Generate responses synchronously for maximum throughput.
@@ -1256,6 +1260,7 @@ class EngineCore:
                 request_id=request_id,
                 prompt=prompt,
                 sampling_params=sampling_params,
+                cache_policy=coerce_cache_policy(cache_policy),
             )
             self.scheduler.add_request(request)
             request_ids.append(request_id)

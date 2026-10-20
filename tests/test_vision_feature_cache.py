@@ -678,3 +678,46 @@ class TestMemoryByteLRU:
             assert cache.get("h1", "m") is not None
         finally:
             cache.close()
+
+    def test_memory_policy_retains_ram_without_ssd_write(self, tmp_cache_dir):
+        cache = VisionFeatureSSDCache(cache_dir=tmp_cache_dir, max_memory_entries=3)
+        try:
+            features = mx.ones((4, 8))
+            mx.eval(features)
+            cache.put("memory-only", "model", features, cache_mode="memory")
+            assert cache.get("memory-only", "model") is not None
+            assert not list(tmp_cache_dir.rglob("*.safetensors"))
+        finally:
+            cache.close()
+
+    def test_none_policy_borrows_ssd_without_ram_promotion(self, tmp_cache_dir):
+        writer = VisionFeatureSSDCache(cache_dir=tmp_cache_dir, max_memory_entries=3)
+        features = mx.ones((4, 8))
+        mx.eval(features)
+        writer.put("existing", "model", features)
+        path = writer._file_path_for_key(_composite_key("model", "existing"))
+        assert _wait_until(path.exists)
+        writer.close()
+
+        reader = VisionFeatureSSDCache(cache_dir=tmp_cache_dir, max_memory_entries=3)
+        try:
+            borrowed = reader.get("existing", "model", cache_mode="none")
+            assert borrowed is not None
+            assert _composite_key("model", "existing") not in reader._memory_cache
+            reader.put("transient", "model", features, cache_mode="none")
+            assert _composite_key("model", "transient") not in reader._memory_cache
+            assert len(list(tmp_cache_dir.rglob("*.safetensors"))) == 1
+        finally:
+            reader.close()
+
+    def test_default_adoption_can_grant_memory_entry_persistence(self, tmp_cache_dir):
+        cache = VisionFeatureSSDCache(cache_dir=tmp_cache_dir, max_memory_entries=3)
+        try:
+            features = mx.ones((4, 8))
+            mx.eval(features)
+            cache.put("adopted", "model", features, cache_mode="memory")
+            assert cache.grant_persistence("adopted", "model")
+            path = cache._file_path_for_key(_composite_key("model", "adopted"))
+            assert _wait_until(path.exists)
+        finally:
+            cache.close()

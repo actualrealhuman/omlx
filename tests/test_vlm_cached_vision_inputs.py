@@ -193,6 +193,32 @@ def test_partial_miss_processes_only_missing(cache, monkeypatch):
     assert cache.get_grid(hashes[1], _MODEL) == [1, 2, 2]
 
 
+def test_none_policy_keeps_partial_features_request_local(cache, monkeypatch):
+    imgs = _images()
+    hashes = compute_per_image_hashes(imgs)
+    cache.put(hashes[0], _MODEL, mx.full((4, 8), 7.0), grid=[1, 4, 4])
+
+    def _fake_prepare(processor, images=None, prompts=None, **kw):
+        return {
+            "pixel_values": mx.full((4, 1536), 2.0),
+            "image_grid_thw": mx.array([[1, 2, 2]]),
+        }
+
+    monkeypatch.setattr("mlx_vlm.utils.prepare_inputs", _fake_prepare)
+    eng = _make_engine(_FakeTower(), cache)
+    out = eng._try_build_cached_vision_inputs(
+        f"A{MARKER}B{MARKER}C", imgs, cache_mode="none"
+    )
+
+    assert out is not None
+    features = out["cached_image_features"]
+    assert features.shape == (5, 8)
+    assert float(features[0, 0].item()) == 7.0
+    assert float(features[4, 0].item()) == 5.0
+    assert cache.get(hashes[1], _MODEL, cache_mode="none") is None
+    assert cache.get_grid(hashes[1], _MODEL) is None
+
+
 # ── guards: every failure must fall back to the full path ─────────────
 
 

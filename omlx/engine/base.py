@@ -538,6 +538,10 @@ class BaseEngine(ABC):
         """
         return None
 
+    def supports_cache_policy_component(self, component: str) -> bool:
+        """Whether this engine enforces a restrictive cache policy member."""
+        return False
+
     async def preflight_completion(
         self,
         prompt: str,
@@ -558,6 +562,7 @@ class BaseEngine(ABC):
         is_partial: bool | None = None,
         add_generation_prompt: bool | None = None,
         add_special_tokens: bool | None = None,
+        cache_policy=None,
     ) -> list[int]:
         """Return the prompt token IDs that ``chat()`` submits for ``messages``.
 

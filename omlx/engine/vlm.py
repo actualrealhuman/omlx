@@ -46,6 +46,7 @@ from ..api.utils import (
     remove_special_tokens_preserve_whitespace,
 )
 from ..cache.vision_feature_cache import VisionFeatureSSDCache
+from ..cache.policy import coerce_cache_policy
 from ..exceptions import InvalidRequestError
 from ..model_settings import ane_prefill_backend, ane_prefill_fraction
 from ..models.vlm import VLMModelAdapter
@@ -1901,6 +1902,11 @@ class VLMBatchedEngine(BaseEngine):
         self._diffusion_active_requests = 0
         self._diffusion_cancel_events: set[threading.Event] = set()
 
+    def supports_cache_policy_component(self, component: str) -> bool:
+        if self.is_diffusion_model:
+            return False
+        return component in {"kv", "images"}
+
     async def _preflight_or_raise_with_eviction(
         self,
         scheduler: Any,
@@ -3579,6 +3585,7 @@ class VLMBatchedEngine(BaseEngine):
         cached_per_image: List[Any],
         per_hashes: List[str],
         image_token_count: Optional[int],
+        cache_mode: str = "default",
     ) -> Optional[mx.array]:
         """Encode only uncached images and combine with cached ones in order.
 
@@ -3643,7 +3650,8 @@ class VLMBatchedEngine(BaseEngine):
             for i, f in zip(miss_idx, split_miss):
                 full[i] = f
                 self._vision_cache.put(
-                    per_hashes[i], self._model_name, f, grid=grids[i]
+                    per_hashes[i], self._model_name, f, grid=grids[i],
+                    cache_mode=cache_mode,
                 )
             combined = mx.concatenate(full, axis=0)
             if not self._vision_features_match_image_tokens(
@@ -3663,10 +3671,22 @@ class VLMBatchedEngine(BaseEngine):
             )
             return None
 
+    def _grant_vision_feature_persistence(
+        self, cache_mode: str, image_hashes: list[str]
+    ) -> None:
+        """Grant persistence only for cache entries adopted by default work."""
+        if cache_mode != "default" or self._vision_cache is None:
+            return
+        grant = getattr(self._vision_cache, "grant_persistence", None)
+        if callable(grant):
+            for image_hash in image_hashes:
+                grant(image_hash, self._model_name)
+
     def _try_build_cached_vision_inputs(
         self,
         prompt: str,
         images: List[Any],
+        cache_mode: str = "default",
     ) -> Optional[Dict[str, Any]]:
         """Build ``prepare_inputs``-style inputs, preprocessing only cache misses.
 
@@ -3716,7 +3736,9 @@ class VLMBatchedEngine(BaseEngine):
             feats: List[Optional[mx.array]] = []
             grids: List[Optional[List[int]]] = []
             for h in per_hashes:
-                feat = self._vision_cache.get(h, self._model_name)
+                feat = self._vision_cache.get(
+                    h, self._model_name, cache_mode=cache_mode
+                )
                 grid = self._vision_cache.get_grid(h, self._model_name)
                 # A row count mismatch means a different resize regime.
                 if (
@@ -3771,6 +3793,7 @@ class VLMBatchedEngine(BaseEngine):
                         self._model_name,
                         split_miss[k],
                         grid=miss_grids[k],
+                        cache_mode=cache_mode,
                     )
 
             token_ids: List[int] = []
@@ -3789,6 +3812,10 @@ class VLMBatchedEngine(BaseEngine):
             pad_total = sum(1 for t in token_ids if t == it_id)
             if pad_total != combined.shape[0]:
                 return None
+            self._grant_vision_feature_persistence(
+                cache_mode,
+                [h for h, feature in zip(per_hashes, feats) if feature is not None],
+            )
 
             pixel_values = (
                 miss_pv if miss_idx else mx.zeros((0, 1), dtype=mx.float32)
@@ -3965,7 +3992,8 @@ class VLMBatchedEngine(BaseEngine):
             return None
 
     def _cached_video_features(
-        self, video_identity: str, input_ids: Any, extra_model_inputs: dict
+        self, video_identity: str, input_ids: Any, extra_model_inputs: dict,
+        cache_mode: str = "default",
     ) -> mx.array | None:
         """Vision features of a request's clips, through the vision feature cache.
 
@@ -3976,10 +4004,13 @@ class VLMBatchedEngine(BaseEngine):
         if self._vision_cache is None or not self._vision_cache_enabled:
             return None
         token_count = self._image_token_count(input_ids, "video_token_id")
-        features = self._vision_cache.get(video_identity, self._model_name)
+        features = self._vision_cache.get(
+            video_identity, self._model_name, cache_mode=cache_mode
+        )
         if features is not None and self._vision_features_match_image_tokens(
             features, token_count
         ):
+            self._grant_vision_feature_persistence(cache_mode, [video_identity])
             return features
         try:
             # The vision tower encodes a video grid exactly like an image grid.
@@ -3997,7 +4028,9 @@ class VLMBatchedEngine(BaseEngine):
         ):
             return None
         mx.eval(features)
-        self._vision_cache.put(video_identity, self._model_name, features)
+        self._vision_cache.put(
+            video_identity, self._model_name, features, cache_mode=cache_mode
+        )
         return features
 
     def _vision_features_match_image_tokens(
@@ -4039,6 +4072,7 @@ class VLMBatchedEngine(BaseEngine):
         is_partial: bool | None = None,
         videos: list[str] | None = None,
         video_hashes: list[str] | None = None,
+        cache_mode: str = "default",
     ) -> Tuple[
         List[int],
         Optional[mx.array],
@@ -4248,7 +4282,9 @@ class VLMBatchedEngine(BaseEngine):
         fast_cached_features = None
         inputs = None
         if num_audios == 0 and num_videos == 0:
-            fast = self._try_build_cached_vision_inputs(prompt, images)
+            fast = self._try_build_cached_vision_inputs(
+                prompt, images, cache_mode=cache_mode
+            )
             if fast is not None:
                 fast_cached_features = fast.pop("cached_image_features", None)
                 inputs = fast
@@ -4438,7 +4474,8 @@ class VLMBatchedEngine(BaseEngine):
                     image_cache_key_start = 0
                     image_hash = self._video_cache_identity(video_hashes or [])
                 video_features = self._cached_video_features(
-                    image_hash, input_ids, extra_model_inputs
+                    image_hash, input_ids, extra_model_inputs,
+                    cache_mode=cache_mode,
                 )
                 if video_features is not None:
                     call_kwargs["cached_image_features"] = video_features
@@ -4452,7 +4489,9 @@ class VLMBatchedEngine(BaseEngine):
             ):
                 per_hashes = compute_per_image_hashes(images)
                 cached_per_image = [
-                    self._vision_cache.get(h, self._model_name) for h in per_hashes
+                    self._vision_cache.get(
+                        h, self._model_name, cache_mode=cache_mode
+                    ) for h in per_hashes
                 ]
 
                 # Per-image entries are keyed by the image alone, but the
@@ -4475,7 +4514,9 @@ class VLMBatchedEngine(BaseEngine):
                     # Fallback: whole-request entry (stored when per-image split
                     # is unsupported, e.g. Gemma 4 multi-image with per-image
                     # resize). Mirrors the store-side branch below.
-                    cached_whole = self._vision_cache.get(image_hash, self._model_name)
+                    cached_whole = self._vision_cache.get(
+                        image_hash, self._model_name, cache_mode=cache_mode
+                    )
 
                 used_cached_features = False
                 if per_image_usable:
@@ -4486,6 +4527,9 @@ class VLMBatchedEngine(BaseEngine):
                     ):
                         call_kwargs["cached_image_features"] = combined
                         used_cached_features = True
+                        self._grant_vision_feature_persistence(
+                            cache_mode, per_hashes
+                        )
                         logger.debug(
                             "Vision feature cache hit (per-image): all %d images cached",
                             num_images,
@@ -4496,6 +4540,9 @@ class VLMBatchedEngine(BaseEngine):
                     ):
                         call_kwargs["cached_image_features"] = cached_whole
                         used_cached_features = True
+                        self._grant_vision_feature_persistence(
+                            cache_mode, [image_hash]
+                        )
                         logger.debug(
                             "Vision feature cache hit (whole-request): %s",
                             image_hash[:16],
@@ -4510,10 +4557,16 @@ class VLMBatchedEngine(BaseEngine):
                         cached_per_image,
                         per_hashes,
                         image_token_count,
+                        cache_mode=cache_mode,
                     )
                     if partial is not None:
                         call_kwargs["cached_image_features"] = partial
                         used_cached_features = True
+                        self._grant_vision_feature_persistence(
+                            cache_mode,
+                            [h for h, feature in zip(per_hashes, cached_per_image)
+                             if feature is not None],
+                        )
 
                 if not used_cached_features:
                     # Some or all uncached — compute all, then cache per-image
@@ -4540,7 +4593,8 @@ class VLMBatchedEngine(BaseEngine):
                                 ):
                                     grid = _grid_row(grid_thw, j)
                                     self._vision_cache.put(
-                                        h, self._model_name, f, grid=grid
+                                        h, self._model_name, f, grid=grid,
+                                        cache_mode=cache_mode,
                                     )
                                 logger.debug(
                                     "Vision feature cache miss, stored %d per-image entries",
@@ -4549,7 +4603,8 @@ class VLMBatchedEngine(BaseEngine):
                             else:
                                 # Split unsupported for this model — store whole-request
                                 self._vision_cache.put(
-                                    image_hash, self._model_name, features
+                                    image_hash, self._model_name, features,
+                                    cache_mode=cache_mode,
                                 )
                                 logger.debug(
                                     "Vision feature cache miss, stored whole-request: %s",
@@ -5520,6 +5575,7 @@ class VLMBatchedEngine(BaseEngine):
         model_type = self.model_type or _read_config_model_type(self._model_name)
 
         ct_kwargs = kwargs.pop("chat_template_kwargs", None)
+        cache_mode = coerce_cache_policy(kwargs.get("cache_policy")).images
         partial = kwargs.pop("is_partial", None)
 
         # Keep VLM-capable models on one prompt-rendering path, even before the
@@ -5567,6 +5623,7 @@ class VLMBatchedEngine(BaseEngine):
                 tools=template_tools,
                 is_partial=partial,
                 **video_kwargs,
+                cache_mode=cache_mode,
             )
         finally:
             for path, _ in video_files:
@@ -6029,6 +6086,7 @@ class VLMBatchedEngine(BaseEngine):
         is_partial: bool | None = None,
         add_generation_prompt: bool | None = None,
         add_special_tokens: bool | None = None,
+        cache_policy=None,
     ) -> list[int]:
         if not self._loaded:
             await self.start()
@@ -6048,7 +6106,11 @@ class VLMBatchedEngine(BaseEngine):
         ct_kwargs = dict(chat_template_kwargs or {})
         if add_generation_prompt is not None:
             ct_kwargs["add_generation_prompt"] = add_generation_prompt
-        kwargs = {"chat_template_kwargs": ct_kwargs or None, "is_partial": is_partial}
+        kwargs = {
+            "chat_template_kwargs": ct_kwargs or None,
+            "is_partial": is_partial,
+            "cache_policy": coerce_cache_policy(cache_policy),
+        }
         loop = asyncio.get_running_loop()
         token_ids, *_ = await loop.run_in_executor(
             self._engine._mlx_executor,

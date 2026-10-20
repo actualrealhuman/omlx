@@ -104,6 +104,11 @@ class BatchedEngine(BaseEngine):
         self._grammar_compiler = None
         self._grammar_compiler_init_attempted = False
 
+    def supports_cache_policy_component(self, component: str) -> bool:
+        # KV retention is enforced by the scheduler. Text batching has no
+        # separate image-feature cache, so image restrictions are trivially safe.
+        return component in {"kv", "images"}
+
     async def _preflight_or_raise_with_eviction(
         self,
         scheduler: Any,
@@ -1011,6 +1016,7 @@ class BatchedEngine(BaseEngine):
         is_partial: bool | None = None,
         add_generation_prompt: bool | None = None,
         add_special_tokens: bool | None = None,
+        cache_policy=None,
     ) -> list[int]:
         if not self._loaded:
             await self.start()

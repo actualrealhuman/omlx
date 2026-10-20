@@ -84,7 +84,9 @@ class _DraftCache:
         self.stores: list[tuple[str, list[int], list[Any], Any]] = []
         self.hot_cache_flags: list[tuple[str, bool]] = []
 
-    def fetch_cache(self, request_id: str, tokens: list[int]) -> tuple[Any, list[int]]:
+    def fetch_cache(
+        self, request_id: str, tokens: list[int], cache_mode: str = "default"
+    ) -> tuple[Any, list[int]]:
         self.fetches.append((request_id, list(tokens)))
         if self.fetch_error is not None:
             raise self.fetch_error
@@ -109,6 +111,7 @@ class _DraftCache:
         model_cache_config: Any = None,
         boundary_snapshots: dict[int, list[Any]] | None = None,
         hot_cache_write_back: bool = True,
+        cache_mode: str = "default",
     ) -> None:
         self.stores.append((request_id, list(tokens), cache_data, model_cache_config))
         self.hot_cache_flags.append(("store", hot_cache_write_back))
@@ -148,6 +151,7 @@ def _run(
         Callable[[list[Any]], tuple[list[dict[str, Any]], Any]] | None
     ) = None,
     use_hot_cache: bool = True,
+    cache_mode: str = "default",
 ) -> tuple[_Tracker, _Logger, dict[str, Any]]:
     tracker = _Tracker()
     logger = _Logger()
@@ -189,6 +193,7 @@ def _run(
             sync_and_clear_cache=lambda: trace["syncs"].append(stream),
             log=logger,
             use_hot_cache=use_hot_cache,
+            cache_mode=cache_mode,
         )
     trace["selected_indices"] = selected_indices
     trace["stream"] = stream
@@ -266,6 +271,23 @@ def test_memory_pressure_keeps_draft_cache_out_of_hot_cache():
 
     assert draft_cache.preloads == []
     assert draft_cache.hot_cache_flags == [("reconstruct", False), ("store", False)]
+
+
+def test_none_policy_borrows_draft_cache_without_promotion_or_store():
+    request, plan = _request_and_plan()
+    draft_cache = _DraftCache(SimpleNamespace(num_tokens=3), ["reconstructed"])
+
+    _run(
+        request,
+        plan,
+        draft_cache=draft_cache,
+        extract_cache_states=lambda cache: ([{"state": "value"}], None),
+        cache_mode="none",
+    )
+
+    assert draft_cache.preloads == []
+    assert draft_cache.hot_cache_flags == [("reconstruct", False)]
+    assert draft_cache.stores == []
 
 
 def test_cache_fetch_error_falls_back_to_uncached_scoring():

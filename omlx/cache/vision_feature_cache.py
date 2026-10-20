@@ -134,7 +134,9 @@ class VisionFeatureSSDCache:
         )
         self._writer_thread.start()
 
-    def get(self, image_hash: str, model_name: str) -> Optional[Any]:
+    def get(
+        self, image_hash: str, model_name: str, *, cache_mode: str = "default"
+    ) -> Optional[Any]:
         """Look up cached vision features.
 
         Checks memory LRU first, then SSD. Returns None on miss.
@@ -146,12 +148,15 @@ class VisionFeatureSSDCache:
         Returns:
             Cached mx.array features, or None on miss.
         """
+        if cache_mode not in {"default", "memory", "none"}:
+            raise ValueError("cache_mode must be default, memory or none")
         key = _composite_key(model_name, image_hash)
 
         # Check memory LRU
         with self._memory_lock:
             if key in self._memory_cache:
-                self._memory_cache.move_to_end(key)
+                if cache_mode != "none":
+                    self._memory_cache.move_to_end(key)
                 self._stats["hits"] += 1
                 return self._memory_cache[key]
 
@@ -159,14 +164,16 @@ class VisionFeatureSSDCache:
         if self._cache_dir is not None:
             features = self._load_from_ssd(key)
             if features is not None:
-                # Promote to memory cache
+                # `none` may borrow an existing SSD entry for this request,
+                # but must not promote it into the reusable RAM tier.
                 with self._ssd_lock:
                     entry = self._ssd_index.get(key)
                     grid = entry.grid if entry is not None else None
-                with self._memory_lock:
-                    resident = self._memory_put(key, features)
-                    if grid is not None and resident:
-                        self._memory_grid[key] = grid
+                if cache_mode != "none":
+                    with self._memory_lock:
+                        resident = self._memory_put(key, features)
+                        if grid is not None and resident:
+                            self._memory_grid[key] = grid
                 self._stats["hits"] += 1
                 self._stats["ssd_loads"] += 1
                 return features
@@ -180,6 +187,8 @@ class VisionFeatureSSDCache:
         model_name: str,
         features: Any,
         grid: Optional[List[int]] = None,
+        *,
+        cache_mode: str = "default",
     ) -> None:
         """Store vision features in the cache.
 
@@ -191,6 +200,10 @@ class VisionFeatureSSDCache:
             features: Evaluated mx.array (or list of mx.array for multi-image).
             grid: Optional per-image patch grid ``[t, h, w]``.
         """
+        if cache_mode not in {"default", "memory", "none"}:
+            raise ValueError("cache_mode must be default, memory or none")
+        if cache_mode == "none":
+            return
         key = _composite_key(model_name, image_hash)
 
         # Store in memory LRU
@@ -200,7 +213,7 @@ class VisionFeatureSSDCache:
                 self._memory_grid[key] = list(grid)
 
         # Enqueue SSD write
-        if self._cache_dir is not None:
+        if cache_mode == "default" and self._cache_dir is not None:
             self._enqueue_ssd_write(key, image_hash, model_name, features, grid)
 
         self._stats["saves"] += 1
@@ -217,6 +230,31 @@ class VisionFeatureSSDCache:
                 entry = self._ssd_index.get(key)
                 return entry.grid if entry is not None else None
         return None
+
+    def grant_persistence(
+        self, image_hash: str, model_name: str, features: Any | None = None
+    ) -> bool:
+        """Persist an exact RAM entry after a default request adopts it.
+
+        The caller is responsible for invoking this only after validating and
+        using the feature. An SSD hit is already persistent; an absent or
+        evicted RAM entry cannot be promoted by this method.
+        """
+        if self._cache_dir is None:
+            return False
+        key = _composite_key(model_name, image_hash)
+        with self._ssd_lock:
+            if key in self._ssd_index:
+                return True
+        with self._memory_lock:
+            resident = self._memory_cache.get(key)
+            if resident is None:
+                return False
+            if features is not None and resident is not features:
+                return False
+            grid = self._memory_grid.get(key)
+        self._enqueue_ssd_write(key, image_hash, model_name, resident, grid)
+        return True
 
     def close(self) -> None:
         """Shut down the background writer and flush pending writes."""

@@ -1272,6 +1272,7 @@ class TestProcessChatMessages:
             chat_template_kwargs=None,
             tools=None,
             is_partial=None,
+            cache_mode="default",
         )
 
     @patch("omlx.engine.vlm.extract_images_from_messages")
@@ -1774,7 +1775,7 @@ class TestPrepareVisionInputs:
         entries = {hashes[i]: f for i, f in entries_by_index.items()}
 
         cache = MagicMock()
-        cache.get.side_effect = lambda h, _model: entries.get(h)
+        cache.get.side_effect = lambda h, _model, **kwargs: entries.get(h)
         engine._vision_cache = cache
         engine._vision_cache_enabled = True
 
@@ -3484,10 +3485,10 @@ class _DictVisionCache:
     def __init__(self):
         self.entries = {}
 
-    def get(self, key, model_name):
+    def get(self, key, model_name, cache_mode="default"):
         return self.entries.get((key, model_name))
 
-    def put(self, key, model_name, features, grid=None):
+    def put(self, key, model_name, features, grid=None, cache_mode="default"):
         self.entries[(key, model_name)] = features
 
 
