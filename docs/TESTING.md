@@ -228,3 +228,45 @@ Run `python -m pytest -q tests/integration/test_server_endpoints.py -k structure
 Run `python -m pytest -q tests/test_qwen4_qsa_decode_gather.py -k "batch_bank or batch_gather"` to check the batched QSA paths. The row-bank cases drive one attention layer through right-padded chunked prompt prefill, decode, verify windows, ragged vector rollback, reorder and drop filters, extend, trim and state restore, and require layer outputs and cache state to be bit-identical with fresh per-row indexer caches. The gathered cases compare batched decode steps and verify windows with the dense masked path: outputs allclose, cache state identical, every query bounded to the QSA budget plus its tail, and each fail-closed case kept on the dense path. Both groups include the served ratio 4 / top-k 512 geometry.
 
 For a real-server comparison, use the same model, prompts and cache state on main and the branch, with sessions of different lengths well past the QSA crossover (e.g. a 100K shared prompt plus 2K unshared tokens per session). Report aggregate decode while every stream is decoding, per batch size, with Lightning MTP on and off, and check a temperature-0 cold/warm identity and a multi-session codeword fan-out with prompts of different lengths.
+
+# Inference controls
+
+Run the scheduler, hierarchy, master switch, battery and persistence checks:
+
+```sh
+python -m pytest -q tests/test_inference_pacing.py tests/test_model_pacing.py tests/test_inference_scheduling.py tests/test_inference_scheduling_status.py tests/test_model_execution_integration.py tests/test_battery_protection.py tests/test_battery_service.py tests/test_battery_generation.py tests/test_battery_model_shares.py tests/test_inference_master_api.py tests/test_inference_master_runtime.py tests/test_admin_inference_allowance_persistence.py tests/test_admin_model_scheduling_api.py
+```
+
+Include the existing engine/core, settings, model settings, profile, admin and
+server suites, then run the default suite. Server-only tests must still collect
+without `apps/`; web-only checks live in `apps/omlx-web/tests`:
+
+```sh
+python -m pytest -q apps/omlx-web/tests/test_admin_inference_throttle_ui.py apps/omlx-web/tests/test_admin_battery_protection_ui.py apps/omlx-web/tests/test_admin_model_settings_template.py apps/omlx-web/tests/test_admin_usage_ui.py
+node --test apps/omlx-web/tests/inference_scheduling_ui.test.cjs
+make web
+```
+
+The tests use temporary settings, synthetic battery observations and controlled
+clocks/workers. Verify strict settings validation and persistence before runtime
+updates; a failed save must retain confirmed policy and editable drafts. Check
+G*C*M composition, zero allowance admission, live bypass/restoration, cancellation
+while paused, equal-priority turns, safe ownership drain and teardown, saved
+profile independence, battery hard suspension/recovery during bypass, stale
+polling, touch/keyboard behavior, explicit model selection and retry behavior.
+Tiny real MLX arrays exercise worker handovers; they are not a throughput test.
+
+For representative hardware qualification, keep two distinct models resident
+and warmed, compare current concurrency with serial turns, and retain same-model
+continuous batching as a control. Cover interactive arrival during background
+work, background resumption, equal-priority rotation, cancellation/disconnection,
+long prefill and unload/shutdown maintenance. Record first-token latency, stream
+gaps, completion lengths, aggregate completion time and exact source/runtime
+inputs. Distinguish output correctness from token identity for adaptive MTP.
+
+Capture the actual dashboard before/after in light and dark modes at desktop
+and narrow widths, with a short recording for drag/touch and live parent scaling.
+Fixture previews support layout development but are not hardware/runtime proof.
+No universal performance, hard-preemption or electrical-saving claim follows
+from these functional tests. Coordinate tests with active server use and keep
+installed preferences separate.

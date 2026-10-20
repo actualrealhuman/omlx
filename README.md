@@ -153,6 +153,8 @@ Supports text LLMs, vision-language models (VLM), OCR models, embeddings, and re
 
 Web UI at `/admin` for real-time monitoring, model management, chat, benchmark, and per-model settings. Supports English, Korean, Japanese, Chinese, French, Russian, Spanish, and Brazilian Portuguese. All CDN dependencies are vendored for fully offline operation.
 
+**Inference controls** combine a live global activity limit, relative class and model allowances, optional serial model turns and priority, and opt-in battery protection. The dashboard chart is the control surface, with exact percentage inputs and an expandable guide. Saved settings survive the master bypass. See the [inference controls guide](docs/inference-controls.md) for setup, examples, defaults and supported paths.
+
 <p align="center">
   <img src="docs/images/Screenshot 2026-02-10 at 00.45.34.png" alt="oMLX Admin Dashboard" width="720">
 </p>
