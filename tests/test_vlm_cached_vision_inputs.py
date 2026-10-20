@@ -57,6 +57,7 @@ def _make_engine(tower, cache):
     eng = VLMBatchedEngine.__new__(VLMBatchedEngine)
     eng._vlm_model = SimpleNamespace(
         vision_tower=tower,
+        get_input_embeddings=lambda input_ids, pixel_values=None, **kwargs: None,
         config=SimpleNamespace(
             model_type="qwen4_exp",
             vision_start_token_id=VS_ID,
@@ -67,6 +68,7 @@ def _make_engine(tower, cache):
     eng._model_name = _MODEL
     eng._vision_cache = cache
     eng._vision_cache_enabled = True
+    eng._vision_feature_cache_supported = None
     eng._processor = SimpleNamespace(
         tokenizer=_FakeTokenizer(),
         image_processor=SimpleNamespace(merge_size=MERGE),
