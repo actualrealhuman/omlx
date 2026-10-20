@@ -46,6 +46,7 @@
                 {% set ms_rail = [
                         ('ms-profiles', t('modal.model_settings.profiles.section_label'), "!modelSettings.is_diffusion_model"),
                         ('ms-basic', t('modal.model_settings.basic_label'), "true"),
+                        ('ms-scheduling', t('settings.inference_scheduling.heading'), "true"),
                         ('ms-generation', t('modal.model_settings.generation_label'), ms_llm),
                         ('ms-acceleration', t('modal.model_settings.acceleration_label'), ms_llm_non_diffusion),
                         ('ms-memory', t('modal.model_settings.memory_label'), ms_llm_non_diffusion),
@@ -919,6 +920,46 @@
                                     </select>
                                 </div>
                             </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Inference scheduling policy -->
+                <section id="ms-scheduling" class="model-settings-section mt-8">
+                    <h3 class="text-xs font-bold uppercase tracking-widest text-neutral-400 mb-3">{{ t('settings.inference_scheduling.heading') }}</h3>
+                    <div class="rounded-xl border border-neutral-200 bg-neutral-50 p-4 space-y-4">
+                        <p class="text-xs leading-relaxed text-neutral-600">{{ t('settings.inference_scheduling.hint') }}</p>
+                        <div class="flex flex-wrap items-center justify-between gap-3">
+                            <label class="flex min-h-10 items-center gap-3 text-sm font-medium text-neutral-700">
+                                <input type="checkbox" x-model="modelSettings.inference_share_enabled"
+                                       class="h-5 w-5 rounded border-neutral-300 accent-neutral-900 focus:ring-2 focus:ring-neutral-900">
+                                <span>{{ t('settings.inference_scheduling.custom_share') }}</span>
+                            </label>
+                            <span class="text-xs text-neutral-500" x-text="modelSettings.inference_share_enabled ? Math.round(modelSettings.inference_share_percent) + '%' : window.t('settings.inference_scheduling.inherited')"></span>
+                        </div>
+                        <div x-show="modelSettings.inference_share_enabled" class="flex items-center gap-3">
+                            <input type="range" min="0" max="100" step="1" x-model.number="modelSettings.inference_share_percent"
+                                   :aria-label="window.t('settings.inference_scheduling.model_share').replace('{model}', selectedModel?.display_name || selectedModel?.id || '')"
+                                   class="h-9 w-full touch-pan-y accent-neutral-900">
+                            <label class="flex items-center gap-1.5 text-xs text-neutral-500">
+                                <span class="sr-only">{{ t('settings.inference_scheduling.custom_share') }}</span>
+                                <input type="number" min="0" max="100" step="any" x-model.number="modelSettings.inference_share_percent"
+                                       class="w-16 rounded-lg border border-neutral-200 bg-white px-2 py-2 text-right text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-neutral-900">
+                                <span>%</span>
+                            </label>
+                        </div>
+                        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                            <label class="block text-sm text-neutral-700">
+                                <span class="mb-1.5 block font-medium">{{ t('settings.inference_scheduling.priority') }}</span>
+                                <input type="number" min="0" max="100" step="1" x-model.number="modelSettings.inference_priority"
+                                       class="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-neutral-900">
+                                <span class="mt-1 block text-xs text-neutral-500">Higher numbers run first; equal ranks share fairly.</span>
+                            </label>
+                            <label class="flex min-h-11 items-center gap-3 self-end rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700">
+                                <input type="checkbox" x-model="modelSettings.inference_exclusive"
+                                       class="h-5 w-5 rounded border-neutral-300 accent-neutral-900 focus:ring-2 focus:ring-neutral-900">
+                                <span>{{ t('settings.inference_scheduling.exclusive') }}</span>
+                            </label>
                         </div>
                     </div>
                 </section>

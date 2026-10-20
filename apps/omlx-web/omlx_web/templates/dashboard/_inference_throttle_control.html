@@ -1,0 +1,56 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<div class="inference-controls" data-inference-throttle-control>
+    <div class="inference-limit inference-global" :class="{'inference-bypassed': !inferenceControlsAreEnabled()}">
+        <div class="inference-control-heading">
+            <span class="inference-control-title">{{ t('settings.inference_scheduling.global_limit') }}</span>
+            <label class="inference-percent-field">
+                <input type="number" min="1" max="100" step="any" inputmode="decimal" :disabled="!inferenceControlsAreEnabled()"
+                       :value="inferenceThrottleNumericDraft"
+                       @input="stageInferenceThrottleNumeric($event.target.value)"
+                       @keydown.enter.prevent="commitInferenceThrottleNumeric($event.target.value); $el.blur()"
+                       @blur="if (_inferenceThrottleNumericDirty) commitInferenceThrottleNumeric($event.target.value)"
+                       :aria-label="window.t('settings.inference_scheduling.global_limit')">
+                <span>%</span>
+            </label>
+        </div>
+        <div class="bar-track inference-allowance-tray global-tray" :style="'--allow:' + inferenceGlobalThumbPercent() + '%'">
+            <div class="allowance-inner"><span class="allowance-cap" :style="'left:' + inferenceGlobalThumbPercent() + '%' "></span></div>
+            <input type="range" min="1" max="100" step="1" :value="inferenceThrottlePercent" :disabled="!inferenceControlsAreEnabled()"
+                   @input="queueInferenceThrottleUpdate($event.target.value)"
+                   @change="flushInferenceThrottleUpdate()" @blur="flushInferenceThrottleUpdate()" @keyup="flushInferenceThrottleUpdate()"
+                   :aria-label="window.t('settings.inference_scheduling.global_limit')"
+                   :aria-valuetext="inferenceThrottlePercent + '% global limit'"
+                   class="inference-allowance-range global-range">
+        </div>
+    </div>
+    <div x-show="inferenceThrottleSaveStatus() || inferenceThrottleError" x-cloak class="inference-feedback">
+        <span x-show="inferenceThrottleSaveStatus()" x-text="inferenceThrottleSaveStatus()" role="status"></span>
+        <span x-show="inferenceThrottleError" x-text="inferenceThrottleError" class="inference-error" role="alert"></span>
+        <button type="button" x-show="inferenceThrottleError" @click="flushInferenceThrottleUpdate()" class="inference-button">{{ t('settings.inference_scheduling.retry') }}</button>
+    </div>
+    <div class="inference-serial">
+        <div class="inference-control-heading">
+            <label class="inference-check">
+                <input type="checkbox" :disabled="!inferenceControlsAreEnabled()" x-model="globalSettings.server.inference_scheduling_enabled" @change="saveInferenceSchedulingConfig()">
+                <span class="inference-control-title">{{ t('settings.inference_scheduling.enabled') }}</span>
+            </label>
+            <label class="inference-turn-length">
+                <span>{{ t('settings.inference_scheduling.quantum') }}</span>
+                <input type="number" min="0.1" max="60" step="0.1" :disabled="!inferenceControlsAreEnabled()" x-model.number="globalSettings.server.inference_scheduling_quantum_seconds"
+                       @change="saveInferenceSchedulingConfig()" @keydown.enter.prevent="$el.blur()"
+                       :aria-label="window.t('settings.inference_scheduling.quantum')">
+                <span>{{ t('settings.inference_scheduling.seconds') }}</span>
+            </label>
+        </div>
+        <p class="inference-help-text" x-show="inferenceControlsAreEnabled()">{{ t('settings.inference_scheduling.serial_hint') }}</p>
+        <p class="inference-help-text" x-show="!inferenceControlsAreEnabled()">{{ t('settings.inference_scheduling.serial_bypassed') }}</p>
+
+    </div>
+
+    <div x-show="inferenceSchedulingSaving || _classAllowanceSaving || inferenceSchedulingError || _classAllowanceError" x-cloak class="inference-feedback">
+        <span x-show="inferenceSchedulingSaving || _classAllowanceSaving" role="status">{{ t('settings.inference_throttle.saving') }}</span>
+        <span x-show="inferenceSchedulingError || _classAllowanceError" role="alert" x-text="inferenceSchedulingError || _classAllowanceError" class="inference-error"></span>
+        <button type="button" x-show="inferenceSchedulingError || _classAllowanceError" @click="saveInferenceSchedulingConfig(); flushClassAllowanceUpdate()" class="inference-button">{{ t('settings.inference_scheduling.retry') }}</button>
+    </div>
+</div>
+<p x-cloak x-show="batteryProtection.enabled" class="inference-help-text" x-text="batteryProtectionMessage()"></p>

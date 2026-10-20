@@ -3136,6 +3136,10 @@
                 }
                 const payload = {
                     model_alias: ms.model_alias?.trim() || null,
+                    inference_allowance: ms.inference_share_enabled
+                        ? Number(ms.inference_share_percent) / 100 : null,
+                    inference_priority: Number(ms.inference_priority) || 0,
+                    inference_exclusive: !!ms.inference_exclusive,
                     model_type_override: ms.model_type_override || null,
                     max_context_window: ms.max_context_window || null,
                     max_tokens: ms.max_tokens || null,

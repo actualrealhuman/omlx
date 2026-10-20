@@ -1,0 +1,175 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<section class="inference-panel" aria-labelledby="inference-throttle-title">
+    <div class="inference-panel-heading">
+        <h2 id="inference-throttle-title" class="inference-panel-title">{{ t('settings.inference_throttle.label') }}</h2>
+        <button type="button" class="inference-guide-summary" @click="inferenceFeatureHelpOpen = !inferenceFeatureHelpOpen"
+                :aria-expanded="inferenceFeatureHelpOpen" aria-controls="inference-feature-guide">
+            <span aria-hidden="true" x-text="inferenceFeatureHelpOpen ? '▾' : '▸'"></span>
+            {{ t('settings.inference_scheduling.feature_help') }}
+        </button>
+        <div id="inference-feature-guide" x-show="inferenceFeatureHelpOpen" x-cloak class="inference-guide-content">
+                <p>{{ t('settings.inference_scheduling.guide_intro') }}</p>
+                <h3>{{ t('settings.inference_scheduling.guide_switch_title') }}</h3>
+                <p>{{ t('settings.inference_scheduling.guide_switch_all') }}</p>
+                <h3>{{ t('settings.inference_scheduling.guide_limits_title') }}</h3>
+                <p>{{ t('settings.inference_scheduling.guide_limits') }}</p>
+                <p class="inference-guide-example">{{ t('settings.inference_scheduling.guide_example') }}</p>
+                <p>{{ t('settings.inference_scheduling.guide_speed') }}</p>
+                <h3>{{ t('settings.inference_scheduling.guide_serial_title') }}</h3>
+                <p>{{ t('settings.inference_scheduling.guide_serial') }}</p>
+                <p>{{ t('settings.inference_scheduling.guide_turns') }}</p>
+                <h3>{{ t('settings.inference_scheduling.guide_battery_title') }}</h3>
+                <p>{{ t('settings.inference_scheduling.guide_battery') }}</p>
+                <a href="?tab=settings&amp;settingsTab=global#settings-battery-protection" class="inference-guide-link"
+                   @click.prevent="mainTab = 'settings'; activeTab = 'global'; $nextTick(() => settingsGoToSection('settings-battery-protection'))">{{ t('settings.inference_scheduling.battery_settings') }}</a>
+                <h3>{{ t('settings.inference_scheduling.guide_models_title') }}</h3>
+                <p>{{ t('settings.inference_scheduling.guide_models') }}</p>
+        </div>
+    </div>
+    <div x-show="inferenceThrottleControl" x-cloak class="inference-master" :class="inferenceControlsAreEnabled() ? 'is-enabled' : 'is-disabled'">
+        <div>
+            <div class="inference-control-title" x-text="window.t(inferenceControlsAreEnabled() ? 'settings.inference_scheduling.master_on' : 'settings.inference_scheduling.master_off')"></div>
+            <p class="inference-help-text" x-show="!inferenceControlsAreEnabled()" x-text="window.t('settings.inference_scheduling.master_off_all')"></p>
+        </div>
+        <button type="button" role="switch" :aria-checked="inferenceControlsAreEnabled()" :disabled="inferenceControlsSaving"
+                :aria-label="window.t('settings.inference_scheduling.master_label')" @click="toggleInferenceControls()" class="inference-master-switch">
+            <span class="inference-master-thumb" aria-hidden="true"></span>
+            <span x-text="window.t(inferenceControlsAreEnabled() ? 'settings.inference_scheduling.master_state_on' : 'settings.inference_scheduling.master_state_off')"></span>
+        </button>
+        <p x-show="inferenceControlsError" x-cloak x-text="inferenceControlsError" class="inference-error" role="alert"></p>
+    </div>
+    {% include 'dashboard/_inference_throttle_control.html' %}
+    <p x-show="inferenceSchedulingLoadError" x-cloak role="alert" x-text="inferenceSchedulingLoadError" class="inference-error"></p>
+    <div class="inference-model-management">
+        <div class="inference-control-heading">
+            <h3 class="inference-control-title">{{ t('settings.inference_scheduling.loaded_heading') }}</h3>
+            <button type="button" @click="inferenceSchedulingShowCatalog = !inferenceSchedulingShowCatalog"
+                    :aria-expanded="inferenceSchedulingShowCatalog" class="inference-button"
+                    x-text="window.t('settings.inference_scheduling.choose_models')"></button>
+        </div>
+        <p class="inference-help-text" x-text="window.t(schedulingPanelRows().length === 1 ? 'settings.inference_scheduling.selected_count_one' : 'settings.inference_scheduling.selected_count').replace('{count}', schedulingPanelRows().length)"></p>
+        <p class="inference-help-text">{{ t('settings.inference_scheduling.selection_hint') }}</p>
+        <div x-show="inferenceSchedulingShowCatalog" x-cloak class="inference-model-picker">
+            <label class="inference-picker-search">
+                <span>{{ t('settings.inference_scheduling.search_models') }}</span>
+                <input type="search" x-model="inferenceSchedulingSearch" :aria-label="window.t('settings.inference_scheduling.search_models')"
+                       placeholder="{{ t('settings.inference_scheduling.search_models') }}">
+            </label>
+            <p class="inference-help-text">{{ t('settings.inference_scheduling.chooser_hint') }}</p>
+            <div class="inference-picker-options">
+                <template x-for="candidate in schedulingCatalogRows()" :key="candidate.model_id">
+                    <label class="inference-picker-option">
+                        <input type="checkbox" :checked="schedulingModelSelected(candidate)" @change="setSchedulingModelSelected(candidate, $event.target.checked)">
+                        <span class="inference-picker-name" x-text="candidate.display_name || candidate.model_id"></span>
+                        <span class="inference-help-text" x-text="modelSchedulingStatus(candidate)"></span>
+                    </label>
+                </template>
+                <p x-show="!schedulingCatalogRows().length" class="inference-help-text">{{ t('settings.inference_scheduling.no_catalog_results') }}</p>
+            </div>
+        </div>
+    </div>
+    <p x-show="!schedulingPanelRows().length" class="inference-empty">{{ t('settings.inference_scheduling.empty_panel') }}</p>
+    <div class="inference-classes" :class="{'inference-bypassed': !inferenceControlsAreEnabled()}">
+        <template x-for="kind in ['interactive', 'background']" :key="kind">
+            <section class="inference-class" :class="kind === 'interactive' ? 'inference-interactive' : 'inference-background'"
+                     :aria-label="window.t('settings.inference_scheduling.' + kind)">
+                <div class="inference-class-heading">
+                    <div class="inference-control-heading">
+                        <h4 class="inference-class-title" x-text="(kind === 'interactive' ? '🧑 ' : '🤖 ') + window.t('settings.inference_scheduling.' + kind)"></h4>
+                        <label class="inference-percent-field inference-calculation">
+                            <span class="sr-only">{{ t('settings.inference_scheduling.allowance') }}</span>
+                            <input type="number" min="0" max="100" step="any" inputmode="decimal" :disabled="!inferenceControlsAreEnabled()"
+                                   :value="classAllowanceNumericDraft[kind] ?? classAllowancePercent(kind)"
+                                   @input="stageClassAllowanceNumeric(kind, $event.target.value)"
+                                   @keydown.enter.prevent="commitClassAllowanceNumeric(kind, $event.target.value); $el.blur()"
+                                   @blur="if (classAllowanceNumericDraft[kind] !== undefined) commitClassAllowanceNumeric(kind, $event.target.value)"
+                                   :aria-label="window.t('settings.inference_scheduling.' + kind) + ' ' + window.t('settings.inference_scheduling.allowance')">
+                            <span>%</span>
+                            <span>{{ t('settings.inference_scheduling.percent_of') }}</span>
+                            <span x-text="formatSchedulingCeiling(inferenceGlobalCeiling()) + '%' "></span>
+                            <span>=</span>
+                            <strong x-text="formatSchedulingCeiling(classAbsoluteCeiling(kind)) + '%' "></strong>
+                            <span x-text="window.t(inferenceControlsAreEnabled() ? 'settings.inference_scheduling.result_limit' : 'settings.inference_scheduling.result_saved_limit')"></span>
+                        </label>
+                    </div>
+                    <div class="allowance-plot inference-allowance-tray class-tray" :class="kind === 'interactive' ? 'interactive-tray' : 'background-tray'" :style="'--allow:' + classAbsoluteCeiling(kind) + '%'">
+                        <div class="allowance-inner"><span class="allowance-cap" :style="'left:' + inferenceGlobalCeiling() + '%' "></span>
+                            <div class="allowance-shell" :style="'width:' + inferenceGlobalCeiling() + '%;--allow:' + classAllowancePercent(kind) + '%'">
+                                <input type="range" min="0" max="100" step="any" :value="classAllowancePercent(kind)" :disabled="!inferenceControlsAreEnabled()"
+                                       @input="queueClassAllowanceUpdate(kind === 'interactive' ? 'inference_interactive_allowance' : 'inference_background_allowance', $event.target.value)"
+                                       @change="flushClassAllowanceUpdate()" @blur="flushClassAllowanceUpdate()" @keyup="flushClassAllowanceUpdate()"
+                                       :aria-label="window.t('settings.inference_scheduling.' + kind)"
+                                       :aria-valuetext="classAllowanceValueText(kind)" class="inference-allowance-range">
+                            </div>
+                        </div>
+                    </div>
+                    <p x-show="kind === 'interactive' && inferenceControlsAreEnabled() && globalSettings.server.inference_scheduling_enabled" class="inference-class-note">{{ t('settings.inference_scheduling.interactive_note') }}</p>
+                    <p x-show="kind === 'background' && inferenceControlsAreEnabled() && globalSettings.server.inference_scheduling_enabled" class="inference-class-note">{{ t('settings.inference_scheduling.background_separator') }}</p>
+                </div>
+                <p x-show="!schedulingClassRows(kind).some(candidate => schedulingModelVisible(candidate))" class="inference-class-empty">{{ t('settings.inference_scheduling.class_empty') }}</p>
+                <template x-for="row in schedulingClassRows(kind).filter(candidate => schedulingModelVisible(candidate))" :key="row.model_id">
+                    <div class="inference-model" :data-scheduling-model="row.model_id">
+                        <div class="inference-control-heading inference-model-heading">
+                            <div class="inference-model-name">
+                                <div class="inference-control-title" x-text="row.display_name || row.model_id"></div>
+                                <div class="inference-model-state" x-text="modelSchedulingStatus(row) + ' · ' + window.t(schedulingModelVisibilityReason(row))"></div>
+                            </div>
+                            <label class="inference-percent-field inference-calculation">
+                                <span class="sr-only">{{ t('settings.inference_scheduling.allowance') }}</span>
+                                <input type="number" min="0" max="100" step="any" inputmode="decimal"
+                                       :value="row.numericDraft ?? row.draftPercent" :disabled="!inferenceControlsAreEnabled() || !modelSchedulingEditable(row)"
+                                       @input="row.numericDraft = $event.target.value"
+                                       @keydown.enter.prevent="commitModelShareNumeric(row, $event.target.value); $el.blur()"
+                                       @blur="if (row.numericDraft !== undefined) commitModelShareNumeric(row, row.numericDraft)"
+                                       :aria-label="window.t('settings.inference_scheduling.numeric_share').replace('{model}', row.display_name || row.model_id)">
+                                <span>%</span>
+                                <span>{{ t('settings.inference_scheduling.percent_of') }}</span>
+                                <span x-text="formatSchedulingCeiling(classAbsoluteCeiling(row.exclusive ? 'interactive' : 'background')) + '%' "></span>
+                                <span>=</span>
+                                <strong x-text="formatSchedulingCeiling(modelSchedulingConfiguredShare(row) * 100) + '%' "></strong>
+                                <span x-text="window.t(inferenceControlsAreEnabled() ? 'settings.inference_scheduling.result_limit' : 'settings.inference_scheduling.result_saved_limit')"></span>
+                            </label>
+                        </div>
+                        <div x-show="modelSchedulingShowsEffectiveShare(row)" class="inference-model-ceilings">
+                            <span x-text="window.t('settings.inference_scheduling.battery_effective').replace('{share}', formatSchedulingCeiling(row.effective_share * 100) + '%')"></span>
+                        </div>
+                        <div class="allowance-plot inference-allowance-tray model-tray" :class="row.exclusive ? 'interactive-tray' : 'background-tray'"
+                             :style="'--allow:' + ((row.draftPercent / 100) * classAbsoluteCeiling(row.exclusive ? 'interactive' : 'background')) + '%'">
+                            <div class="allowance-inner">
+                                <span class="allowance-cap" :style="'left:' + inferenceGlobalCeiling() + '%' "></span>
+                                <span class="allowance-cap class-cap" :style="'left:' + classAbsoluteCeiling(row.exclusive ? 'interactive' : 'background') + '%' "></span>
+                                <div class="allowance-shell" :style="'width:' + classAbsoluteCeiling(row.exclusive ? 'interactive' : 'background') + '%;--allow:' + row.draftPercent + '%'">
+                                    <input type="range" min="0" max="100" step="any" :value="row.draftPercent" :disabled="!inferenceControlsAreEnabled() || !modelSchedulingEditable(row)"
+                                           @focus="row.sliderEditing = true" @blur="row.sliderEditing = false; flushModelSchedulingUpdate(row)"
+                                           @input="queueModelShareUpdate(row, $event.target.value)" @change="row.sliderEditing = false; flushModelSchedulingUpdate(row)" @keyup="flushModelSchedulingUpdate(row)"
+                                           :aria-label="window.t('settings.inference_scheduling.model_share').replace('{model}', row.display_name || row.model_id)" class="inference-allowance-range">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="inference-model-actions">
+                            <div class="inference-action-group">
+                                <button type="button" :disabled="!inferenceControlsAreEnabled() || !modelSchedulingEditable(row)" @click="saveModelSchedulingField(row, 'inference_exclusive', !row.exclusive)" :aria-pressed="!!row.exclusive"
+                                        :aria-label="window.t(row.exclusive ? 'settings.inference_scheduling.background' : 'settings.inference_scheduling.interactive') + ': ' + (row.display_name || row.model_id)"
+                                        class="inference-icon-button" x-text="row.exclusive ? '🧑' : '🤖'"></button>
+                                <button type="button" :disabled="!inferenceControlsAreEnabled() || !modelSchedulingEditable(row)" @click="moveModelSchedulingPriority(row, -1)" :aria-label="window.t('settings.inference_scheduling.priority_up').replace('{model}', row.display_name || row.model_id)" class="inference-icon-button">↑</button>
+                                <span class="inference-priority" :aria-label="window.t('settings.inference_scheduling.priority') + ' ' + (row.priority || 0)"><span class="inference-priority-label">{{ t('settings.inference_scheduling.priority') }}</span> <span x-text="row.priority || 0"></span></span>
+                                <button type="button" :disabled="!inferenceControlsAreEnabled() || !modelSchedulingEditable(row)" @click="moveModelSchedulingPriority(row, 1)" :aria-label="window.t('settings.inference_scheduling.priority_down').replace('{model}', row.display_name || row.model_id)" class="inference-icon-button">↓</button>
+                            </div>
+                            <div class="inference-action-group">
+                                <button type="button" :disabled="!inferenceControlsAreEnabled() || !modelSchedulingEditable(row)" @click="saveModelSchedulingField(row, 'inference_allowance', null)" class="inference-button inference-quiet-button">{{ t('settings.inference_scheduling.full_allowance') }}</button>
+                                <button type="button" @click="hideSchedulingModel(row)" :aria-label="window.t('settings.inference_scheduling.hide_model').replace('{model}', row.display_name || row.model_id)" class="inference-button inference-quiet-button">{{ t('settings.inference_scheduling.hide_action') }}</button>
+                            </div>
+                        </div>
+                        <div x-show="row.saving || row.error" x-cloak class="inference-feedback">
+                            <span x-show="row.saving" role="status">{{ t('settings.inference_throttle.saving') }}</span>
+                            <span x-show="row.error" x-text="row.error" role="alert" class="inference-error"></span>
+                            <button type="button" x-show="row.error && modelSchedulingCanRetry(row)" @click="retryModelSchedulingUpdate(row)" :aria-label="window.t('settings.inference_scheduling.retry') + ': ' + (row.display_name || row.model_id)" class="inference-button">{{ t('settings.inference_scheduling.retry') }}</button>
+                        </div>
+                        <p x-show="row.reason && (row.unsupported || row.effective_share === 0)" x-cloak x-text="row.reason" class="inference-help-text"></p>
+                    </div>
+                </template>
+            </section>
+        </template>
+    </div>
+    <p x-show="inferenceControlsAreEnabled() && globalSettings.server.inference_scheduling_enabled" class="inference-help-text inference-priority-help">{{ t('settings.inference_scheduling.class_priority_hint') }}</p>
+</section>

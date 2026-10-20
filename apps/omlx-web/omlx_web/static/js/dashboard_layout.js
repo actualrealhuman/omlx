@@ -4,6 +4,7 @@
     'use strict';
 
     const BLOCK_IDS = [
+        'inference_throttle',
         'serving_stats',
         'usage_history',
         'active_models',
