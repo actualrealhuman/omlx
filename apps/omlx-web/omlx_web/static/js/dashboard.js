@@ -161,7 +161,7 @@
             // Global settings
             globalSettings: {
                 base_path: '',
-                server: { host: '127.0.0.1', port: 8000, log_level: 'info', sse_keepalive_mode: 'chunk', burst_decode_mode: 'balanced', preserve_mid_system_cache: true, distributed_inference_enabled: false, distributed_inference_active: false, max_audio_upload_size: '100MB' },
+                server: { host: '127.0.0.1', port: 8000, log_level: 'info', sse_keepalive_mode: 'chunk', burst_decode_mode: 'balanced', inference_share: 1.0, inference_interactive_allowance: 1.0, inference_background_allowance: 1.0, inference_scheduling_enabled: false, inference_scheduling_quantum_seconds: 5, battery_protection_enabled: false, battery_protection: { throttle_start_percent: 75, suspend_percent: 50, resume_percent: 55, minimum_share: 0.10, outage_share: 0.25, emergency_share: 0.10, outage_grace_seconds: 60, ac_stabilization_seconds: 10, restoration_share_per_second: 0.01, telemetry_stale_seconds: 5 }, preserve_mid_system_cache: true, distributed_inference_enabled: false, distributed_inference_active: false, max_audio_upload_size: '100MB' },
                 model: { model_dirs: [''], model_fallback: false, hide_helper_models: false },
                 memory: { prefill_memory_guard: true, memory_guard_tier: 'balanced', memory_guard_custom_ceiling_gb: 0 },
                 scheduler: { max_concurrent_requests: 8, embedding_batch_size: 32, chunked_prefill: false, prefill_priority: 'context', decode_fairness: true },
@@ -209,6 +209,14 @@
                 idle_timeout: { idle_timeout_seconds: null },
                 system: { total_memory_bytes: 0, total_memory: '', auto_model_memory: '', ssd_total_bytes: 0, ssd_total: '' },
             },
+            inferenceThrottlePercent: 100,
+            inferenceThrottleNumericDraft: '100',
+            _inferenceThrottleNumericDirty: false,
+            inferenceThrottleError: '',
+            _inferenceThrottleSequence: 0,
+            _inferenceThrottleSavedSequence: 0,
+            _inferenceThrottleTimer: null,
+            _inferenceThrottleWritePromise: null,
 
             // Web search "Test search" button state
             webSearchTest: { running: false, ok: null, message: '' },
@@ -432,6 +440,32 @@
             showClearSsdCacheConfirm: false,
             showClearHotCacheConfirm: false,
             _statsRefreshTimer: null,
+            inferenceScheduling: { enabled: false, quantum_seconds: 5, owner_model_id: null, global_maximum_share: 1, models: [] },
+            inferenceSchedulingError: '',
+            inferenceSchedulingLoadError: '',
+            inferenceSchedulingSaving: false,
+            _inferenceSchedulingConfigWrite: { sequence: 0, saved: 0, pending: null, writePromise: null },
+            _modelSchedulingWrites: {},
+            _classAllowanceSequence: 0,
+            _classAllowanceSaved: 0,
+            _classAllowancePending: null,
+            _classAllowanceWritePromise: null,
+            _classAllowanceError: '',
+            _classAllowanceSaving: false,
+            _globalSettingsPatchTail: Promise.resolve(),
+            // A control adapter is supplied only when the host implements bypass.
+            // Hosts without an adapter retain the existing enforcement controls.
+            inferenceThrottleControl: null,
+            _inferenceControlsSequence: 0,
+            inferenceControlsSaving: false,
+            inferenceControlsError: '',
+            inferenceFeatureHelpOpen: false,
+            inferenceSchedulingSearch: '',
+            inferenceSchedulingShowCatalog: false,
+            _inferenceSchedulingSelectionKey: 'omlx_inference_scheduling_selection_v1',
+            _inferenceSchedulingSelectionLoaded: false,
+            inferenceSchedulingSelection: { included: [], seenLoaded: [], hidden: [] },
+            classAllowanceNumericDraft: {},
 
             // Log viewer state
             logContent: '',
@@ -759,6 +793,8 @@
             accCopied: false,
 
             async init() {
+                this.loadSchedulingSelection();
+                this.bindInferenceAllowancePointerControls();
                 // Apply theme
                 this.applyTheme();
                 this.applyTabStateFromUrl();
@@ -786,6 +822,16 @@
                 // Watch for main tab changes to manage refresh timers
                 this.$watch('mainTab', (value) => {
                     this.handleMainTabChange(value);
+                });
+
+                this.$watch('activeTab', () => {
+                    if (this.mainTab !== 'settings') return;
+                    if (this.shouldRefreshStats()) {
+                        this.loadStats(false);
+                        this.startStatsRefresh(false);
+                    } else {
+                        this.stopStatsRefresh();
+                    }
                 });
 
                 this.$watch('globalSettings.server.host', (value) => {
@@ -838,9 +884,10 @@
                 document.addEventListener('visibilitychange', () => {
                     if (document.hidden) {
                         this.stopStatsRefresh();
-                    } else if (this.mainTab === 'status') {
-                        this.loadStats();
-                        this.startStatsRefresh();
+                    } else if (this.shouldRefreshStats()) {
+                        const includeAlltime = this.mainTab === 'status';
+                        this.loadStats(includeAlltime);
+                        this.startStatsRefresh(includeAlltime);
                     }
                 });
             },
@@ -850,6 +897,9 @@
                     await this.loadStats();
                     this.startStatsRefresh();
                     this.$nextTick(() => this.ensureDashboardGrid());
+                } else if (value === 'settings' && this.activeTab === 'global') {
+                    await this.loadStats(false);
+                    this.startStatsRefresh(false);
                 } else {
                     this.stopStatsRefresh();
                 }
@@ -1178,11 +1228,36 @@
             showGlobalResetNotice: false,
             globalResetSnapshot: null,
             globalDefaultsPending: false,
+            batteryProtectionDraft: {
+                throttle_start_percent: '75', suspend_percent: '50', resume_percent: '55',
+                minimum_share: '10', outage_share: '25', emergency_share: '10',
+                outage_grace_seconds: '60', ac_stabilization_seconds: '10',
+                restoration_share_per_second: '1', telemetry_stale_seconds: '5',
+            },
+            batteryProtectionErrors: {},
+            batteryProtectionAdvancedOpen: false,
+            batteryProtectionMainFields: [
+                { key: 'throttle_start_percent', label: 'battery_protection.throttle_start', unit: 'battery_protection.percent_unit', min: 0, max: 100 },
+                { key: 'suspend_percent', label: 'battery_protection.suspend', unit: 'battery_protection.percent_unit', min: 0, max: 100 },
+                { key: 'resume_percent', label: 'battery_protection.resume', unit: 'battery_protection.percent_unit', min: 0, max: 100 },
+                { key: 'minimum_share', label: 'battery_protection.minimum_share', unit: 'battery_protection.percent_unit', min: 10, max: 100, share: true, hint: 'battery_protection.minimum_share_hint' },
+                { key: 'outage_share', label: 'battery_protection.outage_share', unit: 'battery_protection.percent_unit', min: 10, max: 100, share: true },
+                { key: 'emergency_share', label: 'battery_protection.emergency_share', unit: 'battery_protection.percent_unit', min: 10, max: 100, share: true },
+            ],
+            batteryProtectionAdvancedFields: [
+                { key: 'outage_grace_seconds', label: 'battery_protection.outage_grace', unit: 'battery_protection.seconds_unit', min: 0, hint: 'battery_protection.outage_grace_hint' },
+                { key: 'ac_stabilization_seconds', label: 'battery_protection.ac_stabilization', unit: 'battery_protection.seconds_unit', min: 0, hint: 'battery_protection.ac_stabilization_hint' },
+                { key: 'restoration_share_per_second', label: 'battery_protection.restoration_rate', unit: 'battery_protection.rate_unit', min: 0, max: 100, rate: true },
+                { key: 'telemetry_stale_seconds', label: 'battery_protection.telemetry_timeout', unit: 'battery_protection.seconds_unit', min: 1, hint: 'battery_protection.telemetry_timeout_hint' },
+            ],
 
             async resetGlobalSettingsDefaults() {
                 if (this.saving || this.loadingGlobalSettings || this.resettingGlobalSettings || this.showGlobalResetNotice) return;
+                this.globalSettings.server.inference_share = this.inferenceThrottlePercent / 100;
                 const previous = {
                     globalSettings: JSON.parse(JSON.stringify(this.globalSettings)),
+                    batteryProtectionDraft: { ...this.batteryProtectionDraft },
+                    batteryProtectionErrors: { ...this.batteryProtectionErrors },
                     globalDefaultsPending: this.globalDefaultsPending,
                     idleTimeoutValue: this.idleTimeoutValue,
                     cachePercent: this.cachePercent,
@@ -1205,12 +1280,21 @@
                             if (['base_path', 'model_dirs', 'model_dir', 'effective_model_dirs',
                                 'ssd_cache_dir', 'config_path', 'hf_cache_path', 'ca_bundle',
                                 'api_key', 'api_key_set', 'sub_keys', 'endpoint',
-                                'distributed_inference_active'].includes(key)) continue;
+                                'distributed_inference_active'].includes(key)
+                                || (section === 'server' && ['inference_share', 'inference_controls_enabled'].includes(key))) continue;
                             if (Object.hasOwn(defaults[section], key)) {
                                 s[section][key] = defaults[section][key];
                             }
                         }
                     }
+                    s.server.battery_protection = {
+                        ...this.globalSettings.server.battery_protection,
+                        ...(defaults.server?.battery_protection || {}),
+                    };
+                    this.batteryProtectionDraft = this.batteryProtectionDraftFromOptions(
+                        s.server.battery_protection
+                    );
+                    this.batteryProtectionErrors = {};
                     this.idleTimeoutValue = s.idle_timeout.idle_timeout_seconds == null
                         ? '' : String(s.idle_timeout.idle_timeout_seconds);
                     this.cachePercent = this.parseCacheToPercent(
@@ -1229,6 +1313,7 @@
 
             cancelGlobalSettingsReset() {
                 if (this.globalResetSnapshot) Object.assign(this, this.globalResetSnapshot);
+                this.globalSettings.server.inference_share = this.inferenceThrottlePercent / 100;
                 this.confirmGlobalSettingsReset();
             },
 
@@ -1237,7 +1322,794 @@
                 this.showGlobalResetNotice = false;
             },
 
-            async loadGlobalSettings() {
+            batteryProtection: {},
+
+            batteryProtectionDraftFromOptions(options = {}) {
+                const defaults = this.globalSettings.server.battery_protection;
+                const config = { ...defaults, ...(options || {}) };
+                const draft = {};
+                for (const field of [...this.batteryProtectionMainFields, ...this.batteryProtectionAdvancedFields]) {
+                    const value = Number(config[field.key]);
+                    const displayValue = field.share || field.rate ? value * 100 : value;
+                    draft[field.key] = Number.isFinite(displayValue)
+                        ? String(Number(displayValue.toPrecision(12))) : '';
+                }
+                return draft;
+            },
+
+            batteryProtectionOptionsForSave() {
+                const errors = {};
+                const values = {};
+                const fields = [...this.batteryProtectionMainFields, ...this.batteryProtectionAdvancedFields];
+                for (const field of fields) {
+                    const raw = String(this.batteryProtectionDraft[field.key] ?? '').trim();
+                    const value = raw === '' ? Number.NaN : Number(raw);
+                    if (!Number.isFinite(value)) {
+                        errors[field.key] = 'number';
+                        continue;
+                    }
+                    if (value < field.min || (field.max != null && value > field.max)
+                        || (field.key === 'restoration_share_per_second' && value <= 0)) {
+                        errors[field.key] = 'range';
+                        continue;
+                    }
+                    values[field.key] = field.share || field.rate ? value / 100 : value;
+                }
+
+                const thresholdKeys = ['suspend_percent', 'resume_percent', 'throttle_start_percent'];
+                if (thresholdKeys.every(key => Object.hasOwn(values, key))) {
+                    const [suspend, resume, throttleStart] = thresholdKeys.map(key => values[key]);
+                    if (!(0 <= suspend && suspend < resume && resume < throttleStart && throttleStart <= 100)) {
+                        for (const key of thresholdKeys) errors[key] = 'thresholds';
+                    }
+                }
+
+                if (Object.hasOwn(values, 'outage_share') && Object.hasOwn(values, 'emergency_share')
+                    && values.emergency_share > values.outage_share) {
+                    errors.outage_share = 'outage_caps';
+                    errors.emergency_share = 'outage_caps';
+                }
+
+                this.batteryProtectionErrors = errors;
+                if (this.batteryProtectionAdvancedFields.some(field => errors[field.key])) {
+                    this.batteryProtectionAdvancedOpen = true;
+                }
+                if (Object.keys(errors).length) return null;
+                return values;
+            },
+
+            batteryProtectionFieldError(key) {
+                const error = this.batteryProtectionErrors[key];
+                if (!error) return '';
+                const messages = {
+                    number: 'battery_protection.validation_number',
+                    range: 'battery_protection.validation_range',
+                    thresholds: 'battery_protection.validation_thresholds',
+                    outage_caps: 'battery_protection.validation_outage_caps',
+                };
+                return window.t(messages[error] || 'battery_protection.validation_range');
+            },
+
+            clearBatteryProtectionErrors() {
+                this.batteryProtectionErrors = {};
+            },
+
+            formatBatteryPercent(value) {
+                const number = Number(value);
+                if (!Number.isFinite(number)) return '—';
+                return new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 }).format(number);
+            },
+
+            formatSchedulingPercent(value) {
+                const number = Number(value);
+                if (!Number.isFinite(number)) return '—';
+                if (number !== 0 && Math.abs(number) < 1e-8) return number.toExponential(2);
+                return new Intl.NumberFormat(undefined, { maximumFractionDigits: 8 }).format(number);
+            },
+
+            inferenceControlsAreEnabled() {
+                return this.inferenceThrottleControl?.enabled !== false;
+            },
+
+            syncInferenceControls(enabled, sequence) {
+                if (typeof enabled !== 'boolean' || this.inferenceControlsSaving
+                    || sequence !== this._inferenceControlsSequence) return;
+                // Isolated preview hosts may supply their own transport.
+                if (this.inferenceThrottleControl && this.inferenceThrottleControl.source !== 'server') return;
+                if (!this.inferenceThrottleControl) {
+                    this.inferenceThrottleControl = {
+                        source: 'server', enabled,
+                        async setEnabled(value, app) {
+                            await app.postGlobalSettingsPatch({ inference_controls_enabled: value });
+                            this.enabled = value;
+                            app.globalSettings.server.inference_controls_enabled = value;
+                        },
+                    };
+                } else {
+                    this.inferenceThrottleControl.enabled = enabled;
+                }
+                this.globalSettings.server.inference_controls_enabled = enabled;
+            },
+
+            async toggleInferenceControls() {
+                const control = this.inferenceThrottleControl;
+                if (!control || typeof control.setEnabled !== 'function' || this.inferenceControlsSaving) return;
+                this.inferenceControlsSaving = true;
+                this._inferenceControlsSequence += 1;
+                this.inferenceControlsError = '';
+                try {
+                    await control.setEnabled(!control.enabled, this);
+                    // Invalidate reads begun before persistence completed.
+                    this._inferenceControlsSequence += 1;
+                    await this.loadInferenceScheduling();
+                } catch (_) {
+                    this.inferenceControlsError = window.t('settings.inference_scheduling.master_error');
+                } finally {
+                    this.inferenceControlsSaving = false;
+                }
+            },
+
+            formatSchedulingCeiling(value) {
+                const number = Number(value);
+                if (!Number.isFinite(number)) return '—';
+                if (number === 0) return '0';
+                if (number > 0 && number < 0.1) return '<0.1';
+                return new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(number);
+            },
+
+            stageClassAllowanceNumeric(kind, raw) {
+                this.classAllowanceNumericDraft = { ...this.classAllowanceNumericDraft, [kind]: String(raw) };
+            },
+
+            commitClassAllowanceNumeric(kind, raw) {
+                const value = String(raw ?? this.classAllowanceNumericDraft[kind] ?? '').trim();
+                const percent = Number(value);
+                if (!value || !Number.isFinite(percent) || percent < 0 || percent > 100) {
+                    this._classAllowanceError = window.t('settings.inference_throttle.validation');
+                    return false;
+                }
+                const field = kind === 'interactive' ? 'inference_interactive_allowance' : 'inference_background_allowance';
+                this.classAllowanceNumericDraft = { ...this.classAllowanceNumericDraft, [kind]: undefined };
+                this.queueClassAllowanceUpdate(field, percent);
+                this.flushClassAllowanceUpdate();
+                return true;
+            },
+
+            batteryProtectionMessage() {
+                const state = this.batteryProtection || {};
+                const key = state.restoring && !state.suspended
+                    ? 'battery_protection.restoring'
+                    : 'battery_protection.' + (state.state || 'initializing');
+                const policy = state.policy || this.globalSettings.server.battery_protection || {};
+                return window.t(key)
+                    .replace('{percent}', this.formatBatteryPercent((state.effective_share || 0) * 100))
+                    .replace('{battery}', state.battery_percent == null ? '—' : String(Math.round(state.battery_percent)))
+                    .replace('{maximum}', this.formatBatteryPercent((state.configured_share || 1) * 100))
+                    .replace('{resume}', this.formatBatteryPercent(policy.resume_percent ?? 55));
+            },
+
+            inferenceThrottleStatus() {
+                const percent = Number(this.inferenceThrottlePercent);
+                return percent >= 100
+                    ? window.t('settings.inference_throttle.status_full')
+                    : window.t('settings.inference_throttle.status_power')
+                        .replace('{percent}', String(percent));
+            },
+
+            classAllowanceValueText(kind) {
+                const key = kind === 'interactive' ? 'inference_interactive_allowance' : 'inference_background_allowance';
+                const value = Number(this.globalSettings.server[key] ?? 1);
+                const global = Number(this.globalSettings.server.inference_share ?? 1);
+                return `${this.formatSchedulingPercent(value * 100)}% of global; ${this.formatSchedulingCeiling(value * global * 100)}% configured ceiling`;
+            },
+
+            inferenceGlobalCeiling() {
+                return Math.max(1, Math.min(100, Number(this.globalSettings.server.inference_share ?? 1) * 100));
+            },
+
+            inferenceGlobalThumbPercent() {
+                const value = this.inferenceGlobalCeiling();
+                return Math.max(0, Math.min(100, (value - 1) / 99 * 100));
+            },
+
+            classAllowancePercent(kind) {
+                const field = kind === 'interactive' ? 'inference_interactive_allowance' : 'inference_background_allowance';
+                return Math.max(0, Math.min(100, Number(this.globalSettings.server[field] ?? 1) * 100));
+            },
+
+            classAbsoluteCeiling(kind) {
+                return this.inferenceGlobalCeiling() * this.classAllowancePercent(kind) / 100;
+            },
+
+            modelSchedulingConfiguredShare(row) {
+                const rawModelPercent = row.draftPercent ?? (Number(row.allowance ?? 1) * 100);
+                const modelAllowance = Math.max(0, Math.min(100, Number(rawModelPercent))) / 100;
+                const server = this.globalSettings.server;
+                const classField = row.exclusive ? 'inference_interactive_allowance' : 'inference_background_allowance';
+                const classAllowance = Math.max(0, Math.min(1, Number(server[classField] ?? 1)));
+                const configured = Math.max(0, Math.min(1, Number(server.inference_share ?? 1))) * classAllowance * modelAllowance;
+                return Number(configured.toPrecision(12));
+            },
+
+            modelSchedulingShowsEffectiveShare(row) {
+                if (row.effective_share == null) return false;
+                const effective = Number(row.effective_share);
+                if (!this.inferenceControlsAreEnabled()) return Number.isFinite(effective) && effective < 1;
+                const reportedConfigured = Number(row.configured_share);
+                const currentConfigured = this.modelSchedulingConfiguredShare(row);
+                const configurationMatches = Number.isFinite(reportedConfigured)
+                    && Math.abs(reportedConfigured - currentConfigured) < 1e-6;
+                const batteryReported = row.state === 'battery_suspended'
+                    || String(row.reason || '').toLowerCase().includes('battery');
+                return effective < reportedConfigured - 1e-9 && (configurationMatches || batteryReported);
+            },
+
+            schedulingClassRows(kind) {
+                return this.schedulingModelRows().filter(row => !!row.exclusive === (kind === 'interactive'));
+            },
+
+            async moveModelSchedulingPriority(row, direction) {
+                const rows = this.schedulingClassRows(row.exclusive ? 'interactive' : 'background')
+                    .filter(candidate => this.schedulingModelVisible(candidate));
+                const index = rows.findIndex(candidate => candidate.model_id === row.model_id);
+                const neighbor = rows[index + direction];
+                if (!neighbor || !this.modelSchedulingEditable(row) || !this.modelSchedulingEditable(neighbor)) return;
+                let first = Number(row.priority || 0);
+                let second = Number(neighbor.priority || 0);
+                if (first === second) {
+                    const ordered = rows.map((_, i) => 100 - i);
+                    first = ordered[index];
+                    second = ordered[index + direction];
+                }
+                await this.saveModelSchedulingField(row, 'inference_priority', second);
+                await this.saveModelSchedulingField(neighbor, 'inference_priority', first);
+            },
+
+            async postGlobalSettingsPatch(payload) {
+                const previous = this._globalSettingsPatchTail;
+                let release;
+                this._globalSettingsPatchTail = new Promise(resolve => { release = resolve; });
+                await previous;
+                try {
+                    const response = await fetch('/admin/api/global-settings', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload),
+                    });
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    return response;
+                } finally {
+                    release();
+                }
+            },
+
+            queueClassAllowanceUpdate(field, raw) {
+                const value = Number(raw);
+                if (!Number.isFinite(value) || value < 0 || value > 100) return;
+                const kind = field === 'inference_interactive_allowance' ? 'interactive' : 'background';
+                this.classAllowanceNumericDraft = { ...this.classAllowanceNumericDraft, [kind]: undefined };
+                this.globalSettings.server[field] = value / 100;
+                this._classAllowancePending = {
+                    inference_interactive_allowance: Number(this.globalSettings.server.inference_interactive_allowance ?? 1),
+                    inference_background_allowance: Number(this.globalSettings.server.inference_background_allowance ?? 1),
+                };
+                this._classAllowanceSequence += 1;
+                this._classAllowanceError = '';
+            },
+
+            bindInferenceAllowancePointerControls() {
+                if (this._inferenceAllowancePointerBound || typeof document === 'undefined') return;
+                this._inferenceAllowancePointerBound = true;
+                let drag = null;
+                const updateFromPointer = event => {
+                    if (!drag) return;
+                    const rect = drag.input.getBoundingClientRect();
+                    if (rect.width <= 0) return;
+                    const thumbInset = 12;
+                    const usableWidth = Math.max(1, rect.width - thumbInset * 2);
+                    const min = Number(drag.input.min);
+                    const max = Number(drag.input.max);
+                    const fraction = (event.clientX - drag.offset - rect.left - thumbInset) / usableWidth;
+                    const value = Math.max(min, Math.min(max, Math.round(min + fraction * (max - min))));
+                    if (Number(drag.input.value) !== value) {
+                        drag.input.value = String(value);
+                        drag.input.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+                };
+                const finish = (event, cancelled = false) => {
+                    if (!drag || event.pointerId !== drag.pointerId) return;
+                    const current = drag;
+                    const completed = !cancelled && !current.cancelled;
+                    if (completed) {
+                        updateFromPointer(event);
+                        if (Number(current.input.value) >= 98 && Number(current.input.value) < 100) {
+                            current.input.value = '100';
+                            current.input.dispatchEvent(new Event('input', { bubbles: true }));
+                        }
+                        current.input.dispatchEvent(new Event('change', { bubbles: true }));
+                    } else {
+                        // Keep the last preview; pointercancel coordinates may be
+                        // unrelated to the canceled gesture (often 0, 0).
+                        if (current.active) current.input.dispatchEvent(new Event('change', { bubbles: true }));
+                        current.input.blur();
+                    }
+                    drag = null;
+                    current.track.classList.remove('dragging');
+                    if (current.track.hasPointerCapture?.(event.pointerId)) current.track.releasePointerCapture(event.pointerId);
+                };
+                document.addEventListener('pointerdown', event => {
+                    const track = event.target.closest?.('.inference-allowance-tray');
+                    if (!track || !event.isPrimary || event.button !== 0 || drag) return;
+                    const input = track.querySelector('input[type="range"]');
+                    if (!input || input.disabled) return;
+                    const rect = input.getBoundingClientRect();
+                    const thumbInset = 12;
+                    const usableWidth = Math.max(1, rect.width - thumbInset * 2);
+                    const center = rect.left + thumbInset + usableWidth * ((Number(input.value) - Number(input.min)) / (Number(input.max) - Number(input.min)));
+                    const nearThumb = Math.abs(event.clientX - center) <= 22;
+                    drag = { track, input, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY,
+                        offset: nearThumb ? event.clientX - center : 0, active: event.pointerType !== 'touch', cancelled: false };
+                    input.focus({ preventScroll: true });
+                    track.setPointerCapture?.(event.pointerId);
+                    if (drag.active) {
+                        event.preventDefault();
+                        track.classList.add('dragging');
+                        updateFromPointer(event);
+                    }
+                });
+                document.addEventListener('pointermove', event => {
+                    if (!drag || event.pointerId !== drag.pointerId || drag.cancelled) return;
+                    if (!drag.active) {
+                        const dx = Math.abs(event.clientX - drag.startX);
+                        const dy = Math.abs(event.clientY - drag.startY);
+                        if (dy > 8 && dy > dx) { drag.cancelled = true; drag.input.blur(); return; }
+                        if (dx < 5) return;
+                        drag.active = true;
+                        drag.track.classList.add('dragging');
+                    }
+                    if (event.cancelable) event.preventDefault();
+                    updateFromPointer(event);
+                }, { passive: false });
+                document.addEventListener('pointerup', event => finish(event));
+                document.addEventListener('pointercancel', event => finish(event, true));
+                document.addEventListener('lostpointercapture', event => {
+                    if (drag && event.pointerId === drag.pointerId) finish(event, true);
+                });
+            },
+
+            async flushClassAllowanceUpdate() {
+                if (this._classAllowanceWritePromise) {
+                    await this._classAllowanceWritePromise;
+                    if (this._classAllowanceSaved < this._classAllowanceSequence && !this._classAllowanceError) return this.flushClassAllowanceUpdate();
+                    return;
+                }
+                if (this._classAllowanceSaved >= this._classAllowanceSequence) return;
+                this._classAllowanceSaving = true;
+                this._classAllowanceWritePromise = (async () => {
+                    while (this._classAllowanceSaved < this._classAllowanceSequence) {
+                        const sequence = this._classAllowanceSequence;
+                        const payload = { ...this._classAllowancePending };
+                        try {
+                            await this.postGlobalSettingsPatch(payload);
+                            this._classAllowanceSaved = sequence;
+                            if (sequence === this._classAllowanceSequence) this._classAllowanceError = '';
+                        } catch (_) {
+                            if (sequence !== this._classAllowanceSequence) continue;
+                            this._classAllowanceError = window.t('settings.inference_scheduling.save_error');
+                            break;
+                        }
+                    }
+                })();
+                try { await this._classAllowanceWritePromise; }
+                finally { this._classAllowanceWritePromise = null; this._classAllowanceSaving = false; }
+            },
+
+            async saveInferenceSchedulingConfig() {
+                const state = this._inferenceSchedulingConfigWrite;
+                state.pending = {
+                    inference_scheduling_enabled: !!this.globalSettings.server.inference_scheduling_enabled,
+                    inference_scheduling_quantum_seconds: Number(this.globalSettings.server.inference_scheduling_quantum_seconds) || 5,
+                    inference_interactive_allowance: Number(this.globalSettings.server.inference_interactive_allowance ?? 1),
+                    inference_background_allowance: Number(this.globalSettings.server.inference_background_allowance ?? 1),
+                };
+                state.sequence += 1;
+                this.inferenceSchedulingSaving = true;
+                this.inferenceSchedulingError = '';
+                if (!state.writePromise) {
+                    state.writePromise = (async () => {
+                        while (state.saved < state.sequence) {
+                            const sequence = state.sequence;
+                            const payload = { ...state.pending };
+                            try {
+                                await this.postGlobalSettingsPatch(payload);
+                                state.saved = sequence;
+                                if (sequence === state.sequence) {
+                                    this.inferenceSchedulingError = '';
+                                    await this.loadInferenceScheduling();
+                                }
+                            } catch (_) {
+                                if (sequence !== state.sequence) continue;
+                                state.saved = sequence;
+                                this.inferenceSchedulingError = window.t('settings.inference_scheduling.save_error');
+                                break;
+                            }
+                        }
+                    })();
+                }
+                try {
+                    await state.writePromise;
+                } finally {
+                    state.writePromise = null;
+                    this.inferenceSchedulingSaving = false;
+                }
+            },
+
+            async loadInferenceScheduling() {
+                const controlsSequence = this._inferenceControlsSequence;
+                try {
+                    const response = await fetch('/admin/api/inference-scheduling');
+                    if (!response.ok) return;
+                    const data = await response.json();
+                    this.syncInferenceControls(data.controls_enabled, controlsSequence);
+                    const oldRows = new Map((this.inferenceScheduling.models || []).map(row => [row.model_id, row]));
+                    this.inferenceScheduling = {
+                        ...data,
+                        models: (data.models || []).map(row => {
+                            const old = oldRows.get(row.model_id);
+                            const writeState = this._modelSchedulingWrites[row.model_id];
+                            const pending = !!(writeState
+                                && writeState.saved < writeState.sequence
+                                && (writeState.timer || writeState.writePromise));
+                            const preserveDraft = pending || old?.error || old?.sliderEditing || old?.numericDraft !== undefined;
+                            const allowance = Number(row.allowance ?? 1);
+                            const next = old || {};
+                            Object.assign(next, row, {
+                                draftPercent: preserveDraft ? old.draftPercent : Number((allowance * 100).toPrecision(12)),
+                                numericDraft: old?.numericDraft,
+                                sliderEditing: !!old?.sliderEditing,
+                                saving: !!pending,
+                                error: old?.error || '',
+                            });
+                            return next;
+                        }),
+                    };
+                    this.loadSchedulingSelection();
+                    let selectionChanged = false;
+                    for (const row of this.inferenceScheduling.models) {
+                        if (row.loaded === true && !this.inferenceSchedulingSelection.seenLoaded.includes(row.model_id)) {
+                            this.inferenceSchedulingSelection.seenLoaded.push(row.model_id);
+                            selectionChanged = true;
+                        }
+                    }
+                    if (selectionChanged) this.saveSchedulingSelection();
+                    this.inferenceSchedulingLoadError = '';
+                } catch (_) {
+                    this.inferenceSchedulingLoadError = window.t('settings.inference_scheduling.load_error');
+                }
+            },
+
+            modelSchedulingStatus(row) {
+                if (row.unsupported || row.state === 'unsupported' || (row.supported === false && row.loaded !== false)) {
+                    return window.t('settings.inference_scheduling.unsupported');
+                }
+                return window.t('settings.inference_scheduling.state.' + (row.state || 'idle'));
+            },
+
+            modelSchedulingEditable(row) {
+                return !(row.unsupported || row.controllable === false || row.state === 'unsupported'
+                    || (row.supported === false && row.loaded === true));
+            },
+
+            schedulingModelVisible(row) {
+                this.loadSchedulingSelection();
+                const id = row?.model_id;
+                if (!id || this.inferenceSchedulingSelection.hidden.includes(id)) return false;
+                return this.inferenceSchedulingSelection.included.includes(id)
+                    || this.inferenceSchedulingSelection.seenLoaded.includes(id)
+                    || row.loaded === true;
+            },
+
+            loadSchedulingSelection() {
+                if (this._inferenceSchedulingSelectionLoaded) return;
+                this._inferenceSchedulingSelectionLoaded = true;
+                try {
+                    const saved = localStorage.getItem(this._inferenceSchedulingSelectionKey);
+                    const parsed = saved ? JSON.parse(saved) : null;
+                    if (parsed && parsed.version === 1) {
+                        const ids = value => Array.isArray(value) ? [...new Set(value.filter(id => typeof id === 'string'))] : [];
+                        this.inferenceSchedulingSelection = {
+                            included: ids(parsed.included), seenLoaded: ids(parsed.seenLoaded), hidden: ids(parsed.hidden),
+                        };
+                        return;
+                    }
+                    const legacyPins = JSON.parse(localStorage.getItem('omlx_inference_scheduling_pins') || '[]');
+                    this.inferenceSchedulingSelection = {
+                        included: Array.isArray(legacyPins) ? [...new Set(legacyPins.filter(id => typeof id === 'string'))] : [],
+                        seenLoaded: [], hidden: [],
+                    };
+                    if (this.inferenceSchedulingSelection.included.length) this.saveSchedulingSelection();
+                } catch (_) {
+                    this.inferenceSchedulingSelection = { included: [], seenLoaded: [], hidden: [] };
+                }
+            },
+
+            saveSchedulingSelection() {
+                try {
+                    localStorage.setItem(this._inferenceSchedulingSelectionKey, JSON.stringify({
+                        version: 1,
+                        included: this.inferenceSchedulingSelection.included,
+                        seenLoaded: this.inferenceSchedulingSelection.seenLoaded,
+                        hidden: this.inferenceSchedulingSelection.hidden,
+                    }));
+                } catch (_) {}
+            },
+
+            setSchedulingModelSelected(row, checked) {
+                this.loadSchedulingSelection();
+                const id = row?.model_id;
+                if (!id) return;
+                const state = this.inferenceSchedulingSelection;
+                state.included = checked
+                    ? [...new Set([...state.included, id])]
+                    : state.included.filter(item => item !== id);
+                state.hidden = checked
+                    ? state.hidden.filter(item => item !== id)
+                    : [...new Set([...state.hidden, id])];
+                this.saveSchedulingSelection();
+            },
+
+            hideSchedulingModel(row) {
+                this.setSchedulingModelSelected(row, false);
+            },
+
+            schedulingModelSelected(row) {
+                return this.schedulingModelVisible(row);
+            },
+
+            schedulingModelVisibilityReason(row) {
+                this.loadSchedulingSelection();
+                return this.inferenceSchedulingSelection.included.includes(row?.model_id)
+                    ? 'settings.inference_scheduling.shown_manual'
+                    : 'settings.inference_scheduling.shown_loaded';
+            },
+
+            schedulingCatalogRows() {
+                const query = String(this.inferenceSchedulingSearch || '').trim().toLowerCase();
+                return this.schedulingModelRows().filter(row => !query
+                    || `${row.display_name || ''} ${row.model_id || ''}`.toLowerCase().includes(query));
+            },
+
+            schedulingPanelRows() {
+                return this.schedulingModelRows().filter(row => this.schedulingModelVisible(row));
+            },
+
+            schedulingModelRows() {
+                return [...(this.inferenceScheduling.models || [])].sort((a, b) =>
+                    Number(!!b.exclusive) - Number(!!a.exclusive)
+                    || Number(b.priority || 0) - Number(a.priority || 0)
+                    || String(a.display_name || a.model_id).localeCompare(String(b.display_name || b.model_id)));
+            },
+
+            schedulingModelFirstBackground(row) {
+                if (row.exclusive || !this.schedulingModelVisible(row)) return false;
+                const first = this.schedulingModelRows().find(candidate => !candidate.exclusive && this.schedulingModelVisible(candidate));
+                return first?.model_id === row.model_id;
+            },
+
+            schedulingModelFirstClass(row, kind) {
+                return !!row.exclusive === (kind === 'interactive')
+                    && this.schedulingClassRows(kind).find(candidate => this.schedulingModelVisible(candidate))?.model_id === row.model_id;
+            },
+
+            modelSchedulingCanRetry(row) {
+                const state = this._modelSchedulingWrites[row.model_id];
+                return !!(state
+                    && state.saved < state.sequence
+                    && !state.timer
+                    && !state.writePromise);
+            },
+
+            queueModelShareUpdate(row, rawValue) {
+                const percent = Number(rawValue);
+                if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+                    row.error = window.t('settings.inference_throttle.validation');
+                    return;
+                }
+                row.draftPercent = percent;
+                row.numericDraft = undefined;
+                row.error = '';
+                let state = this._modelSchedulingWrites[row.model_id];
+                if (!state) state = this._modelSchedulingWrites[row.model_id] = { sequence: 0, saved: 0, timer: null, pending: {} };
+                state.pending = { ...state.pending, inference_allowance: percent / 100 };
+                state.sequence += 1;
+                row.saving = true;
+                if (state.timer) clearTimeout(state.timer);
+                state.timer = setTimeout(() => {
+                    state.timer = null;
+                    this.flushModelSchedulingUpdate(row);
+                }, 220);
+            },
+
+            async commitModelShareNumeric(row, rawValue) {
+                const text = String(rawValue ?? '').trim();
+                const percent = Number(text);
+                if (!text || !Number.isFinite(percent) || percent < 0 || percent > 100) {
+                    row.error = window.t('settings.inference_throttle.validation');
+                    return;
+                }
+                row.numericDraft = undefined;
+                this.queueModelShareUpdate(row, percent);
+                await this.flushModelSchedulingUpdate(row);
+            },
+
+            async saveModelSchedulingField(row, field, value) {
+                let state = this._modelSchedulingWrites[row.model_id];
+                if (!state) state = this._modelSchedulingWrites[row.model_id] = { sequence: 0, saved: 0, timer: null, pending: {} };
+                if (field === 'inference_allowance' && value === null) {
+                    row.draftPercent = 100;
+                }
+                state.pending = { ...state.pending, [field]: value };
+                state.sequence += 1;
+                row.saving = true;
+                await this.flushModelSchedulingUpdate(row);
+            },
+
+            async retryModelSchedulingUpdate(row) {
+                const state = this._modelSchedulingWrites[row.model_id];
+                if (!state || state.saved >= state.sequence) return;
+                row.error = '';
+                row.saving = true;
+                await this.flushModelSchedulingUpdate(row);
+            },
+
+            async flushModelSchedulingUpdate(row) {
+                const state = this._modelSchedulingWrites[row.model_id];
+                if (!state) return;
+                if (state.timer) {
+                    clearTimeout(state.timer);
+                    state.timer = null;
+                }
+                if (state.writePromise) {
+                    await state.writePromise;
+                    if (state.saved < state.sequence && !row.error) return this.flushModelSchedulingUpdate(row);
+                    return;
+                }
+                const writeLatest = async () => {
+                    while (state.saved < state.sequence) {
+                        const sequence = state.sequence;
+                        const payload = { ...state.pending };
+                        try {
+                            const response = await fetch(`/admin/api/models/${encodeURIComponent(row.model_id)}/scheduling`, {
+                                method: 'PATCH',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(payload),
+                            });
+                            const data = await response.json().catch(() => ({}));
+                            if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
+                            state.saved = sequence;
+                            if (sequence === state.sequence) {
+                                row.error = '';
+                                row.saving = false;
+                                Object.assign(row, data.settings || {});
+                                if (Object.hasOwn(payload, 'inference_allowance')) {
+                                    row.allowance = payload.inference_allowance ?? 1;
+                                }
+                                if (Object.hasOwn(payload, 'inference_priority')) row.priority = payload.inference_priority;
+                                if (Object.hasOwn(payload, 'inference_exclusive')) row.exclusive = payload.inference_exclusive;
+                                await this.loadInferenceScheduling();
+                            }
+                        } catch (_) {
+                            if (sequence !== state.sequence) continue;
+                            row.error = window.t('settings.inference_scheduling.save_error');
+                            row.saving = false;
+                            break;
+                        }
+                    }
+                };
+                state.writePromise = writeLatest();
+                try {
+                    await state.writePromise;
+                } finally {
+                    state.writePromise = null;
+                }
+            },
+
+            inferenceThrottleSaveStatus() {
+                if (this._inferenceThrottleTimer !== null
+                    || this._inferenceThrottleWritePromise) {
+                    return window.t('settings.inference_throttle.saving');
+                }
+                if (this.inferenceThrottleError || this._inferenceThrottleSequence === 0
+                    || this._inferenceThrottleSavedSequence < this._inferenceThrottleSequence) return '';
+                return window.t('settings.inference_throttle.saved');
+            },
+
+            stageInferenceThrottleNumeric(rawValue) {
+                this.inferenceThrottleNumericDraft = String(rawValue ?? '');
+                this._inferenceThrottleNumericDirty = true;
+            },
+
+            commitInferenceThrottleNumeric(rawValue) {
+                const raw = String(rawValue ?? '').trim();
+                const percent = Number(raw);
+                if (!raw || !Number.isFinite(percent) || percent < 1 || percent > 100) {
+                    this.inferenceThrottleError = window.t('settings.inference_throttle.validation');
+                    this.inferenceThrottleNumericDraft = String(this.inferenceThrottlePercent);
+                    this._inferenceThrottleNumericDirty = false;
+                    return;
+                }
+                this.inferenceThrottleNumericDraft = raw;
+                this._inferenceThrottleNumericDirty = false;
+                this.queueInferenceThrottleUpdate(raw);
+                return this.flushInferenceThrottleUpdate();
+            },
+
+            queueInferenceThrottleUpdate(rawValue) {
+                const raw = String(rawValue ?? '').trim();
+                const percent = Number(raw);
+                if (!raw || !Number.isFinite(percent) || percent < 1 || percent > 100) {
+                    this.inferenceThrottleError = window.t('settings.inference_throttle.validation');
+                    return;
+                }
+                this.inferenceThrottleError = '';
+                this.inferenceThrottlePercent = percent;
+                this.inferenceThrottleNumericDraft = String(percent);
+                this._inferenceThrottleNumericDirty = false;
+                this.globalSettings.server.inference_share = percent / 100;
+                this._inferenceThrottleSequence += 1;
+                if (this._inferenceThrottleTimer !== null) {
+                    clearTimeout(this._inferenceThrottleTimer);
+                }
+                this._inferenceThrottleTimer = setTimeout(() => {
+                    this._inferenceThrottleTimer = null;
+                    this.flushInferenceThrottleUpdate();
+                }, 180);
+            },
+
+            async flushInferenceThrottleUpdate() {
+                if (this._inferenceThrottleTimer !== null) {
+                    clearTimeout(this._inferenceThrottleTimer);
+                    this._inferenceThrottleTimer = null;
+                }
+                if (this._inferenceThrottleWritePromise) {
+                    await this._inferenceThrottleWritePromise;
+                    if (this._inferenceThrottleSavedSequence < this._inferenceThrottleSequence
+                        && !this.inferenceThrottleError) {
+                        return this.flushInferenceThrottleUpdate();
+                    }
+                    return;
+                }
+                if (this._inferenceThrottleSavedSequence >= this._inferenceThrottleSequence) return;
+
+                const writeLatest = async () => {
+                    while (this._inferenceThrottleSavedSequence < this._inferenceThrottleSequence) {
+                        const sequence = this._inferenceThrottleSequence;
+                        const share = Number(this.inferenceThrottlePercent) / 100;
+                        try {
+                            await this.postGlobalSettingsPatch({ inference_share: share });
+                            this._inferenceThrottleSavedSequence = sequence;
+                            if (sequence === this._inferenceThrottleSequence) {
+                                this.inferenceThrottleError = '';
+                            }
+                        } catch (error) {
+                            if (sequence !== this._inferenceThrottleSequence) continue;
+                            this.inferenceThrottleError = window.t('settings.inference_throttle.save_error');
+                            break;
+                        }
+                    }
+                };
+                this._inferenceThrottleWritePromise = writeLatest();
+                try {
+                    await this._inferenceThrottleWritePromise;
+                } finally {
+                    this._inferenceThrottleWritePromise = null;
+                }
+            },
+
+            async loadGlobalSettings({ preserveBatteryDraft = false } = {}) {
+                const controlsSequence = this._inferenceControlsSequence;
+                const throttleSequenceAtStart = this._inferenceThrottleSequence;
+                const throttleSavedSequenceAtStart = this._inferenceThrottleSavedSequence;
                 this.loadingGlobalSettings = true;
                 try {
                     const response = await fetch('/admin/api/global-settings');
@@ -1248,10 +2120,37 @@
                         const modelDirs = data.model?.model_dirs?.length
                             ? data.model.model_dirs
                             : (data.model?.model_dir ? [data.model.model_dir] : ['']);
+                        const canSyncThrottle = throttleSequenceAtStart === this._inferenceThrottleSequence
+                            && throttleSavedSequenceAtStart === this._inferenceThrottleSavedSequence
+                            && this._inferenceThrottleSavedSequence >= this._inferenceThrottleSequence
+                            && !this._inferenceThrottleNumericDirty
+                            && this._inferenceThrottleTimer === null
+                            && !this._inferenceThrottleWritePromise;
+                        if (canSyncThrottle) {
+                            const savedShare = Number(data.server?.inference_share ?? 1);
+                            if (Number.isFinite(savedShare) && savedShare >= 0.01 && savedShare <= 1) {
+                                this.inferenceThrottlePercent = savedShare * 100;
+                                this.inferenceThrottleNumericDraft = String(this.inferenceThrottlePercent);
+                            }
+                        }
+                        const batteryEnabledDraft = this.globalSettings.server.battery_protection_enabled;
+                        const controlsEnabled = this.globalSettings.server.inference_controls_enabled;
                         this.globalSettings = {
                             ...this.globalSettings,
                             ...data,
-                            server: { ...this.globalSettings.server, ...data.server },
+                            server: {
+                                ...this.globalSettings.server,
+                                ...data.server,
+                                battery_protection: {
+                                    ...this.globalSettings.server.battery_protection,
+                                    ...(data.server?.battery_protection || {}),
+                                },
+                                inference_share: this.inferenceThrottlePercent / 100,
+                                inference_scheduling_enabled: data.server?.inference_scheduling_enabled
+                                    ?? this.globalSettings.server.inference_scheduling_enabled,
+                                inference_scheduling_quantum_seconds: data.server?.inference_scheduling_quantum_seconds
+                                    ?? this.globalSettings.server.inference_scheduling_quantum_seconds,
+                            },
                             model: { ...this.globalSettings.model, ...data.model, model_dirs: modelDirs },
                             memory: { ...this.globalSettings.memory, ...data.memory },
                             scheduler: { ...this.globalSettings.scheduler, ...data.scheduler },
@@ -1268,6 +2167,19 @@
                             idle_timeout: { ...this.globalSettings.idle_timeout, ...data.idle_timeout },
                             system: { ...this.globalSettings.system, ...data.system },
                         };
+                        if (controlsSequence !== this._inferenceControlsSequence || this.inferenceControlsSaving) {
+                            this.globalSettings.server.inference_controls_enabled = controlsEnabled;
+                        } else {
+                            this.syncInferenceControls(data.server?.inference_controls_enabled, controlsSequence);
+                        }
+                        if (preserveBatteryDraft) {
+                            this.globalSettings.server.battery_protection_enabled = batteryEnabledDraft;
+                        } else {
+                            this.batteryProtectionDraft = this.batteryProtectionDraftFromOptions(
+                                this.globalSettings.server.battery_protection
+                            );
+                            this.batteryProtectionErrors = {};
+                        }
                         this.globalSettings.ui = { language: 'en', dashboard_layout: null, ...(data.ui || {}) };
                         const layoutLib = this._dashLayoutLib();
                         this.dashLayout = layoutLib
@@ -1383,6 +2295,13 @@
                     return;
                 }
 
+                const batteryProtectionOptions = this.batteryProtectionOptionsForSave();
+                if (!batteryProtectionOptions) {
+                    this.saveError = window.t('battery_protection.validation_summary');
+                    this.saving = false;
+                    return;
+                }
+
                 if (!this.isLoopbackBindHost(s.server.host)) {
                     s.auth.skip_api_key_verification = false;
                     if (!s.auth.api_key && !s.auth.api_key_set) {
@@ -1417,6 +2336,10 @@
                             log_level: this.globalSettings.server.log_level,
                             sse_keepalive_mode: this.globalSettings.server.sse_keepalive_mode,
                             burst_decode_mode: this.globalSettings.server.burst_decode_mode,
+                            inference_scheduling_enabled: !!this.globalSettings.server.inference_scheduling_enabled,
+                            inference_scheduling_quantum_seconds: Number(this.globalSettings.server.inference_scheduling_quantum_seconds) || 5,
+                            battery_protection_enabled: this.globalSettings.server.battery_protection_enabled,
+                            battery_protection: batteryProtectionOptions,
                             preserve_mid_system_cache: this.globalSettings.server.preserve_mid_system_cache,
                             distributed_inference_enabled: this.globalSettings.server.distributed_inference_enabled,
                             max_audio_upload_size: this.globalSettings.server.max_audio_upload_size,
@@ -1468,6 +2391,10 @@
 
                     if (response.ok) {
                         const data = await response.json();
+                        this.globalSettings.server.battery_protection = batteryProtectionOptions;
+                        this.batteryProtectionDraft = this.batteryProtectionDraftFromOptions(
+                            batteryProtectionOptions
+                        );
                         this.saveSuccess = true;
                         this.saveMessage = data.message || window.t('js.success.settings_saved');
                         // Refresh stats and model list (cache changes unload models)
@@ -1483,14 +2410,14 @@
                     } else {
                         const data = await response.json();
                         this.saveError = Array.isArray(data.detail) ? data.detail.map(e => (e && typeof e === 'object') ? (e.msg || JSON.stringify(e)) : String(e)).join(', ') : (data.detail || window.t('js.error.save_settings_failed'));
-                        // Reload settings to revert to server values
-                        await this.loadGlobalSettings();
+                        // Refresh applied server values without discarding the
+                        // battery policy the user needs to correct or retry.
+                        await this.loadGlobalSettings({ preserveBatteryDraft: true });
                     }
                 } catch (err) {
                     console.error('Failed to save global settings:', err);
                     this.saveError = window.t('js.error.save_settings_failed');
-                    // Reload settings to revert to server values
-                    await this.loadGlobalSettings();
+                    await this.loadGlobalSettings({ preserveBatteryDraft: true });
                 } finally {
                     this.saving = false;
                 }
@@ -2111,6 +3038,11 @@
                 const isOcr = OCR_CONFIG_MODEL_TYPES.has(model?.config_model_type || '');
                 return {
                     model_alias: s.model_alias || '',
+                    inference_share: s.inference_share ?? null,
+                    inference_share_enabled: s.inference_allowance != null,
+                    inference_share_percent: s.inference_allowance == null ? 100 : Number(s.inference_allowance) * 100,
+                    inference_priority: s.inference_priority ?? 0,
+                    inference_exclusive: s.inference_exclusive === true,
                     model_type_override: s.model_type_override || '',
                     max_context_window: s.max_context_window || null,
                     max_tokens: s.max_tokens || null,
@@ -4398,9 +5330,11 @@
                     if (response.ok) {
                         const data = await response.json();
                         this.stats = { ...this.stats, ...data };
+                        this.batteryProtection = data.battery_protection || {};
                     } else if (response.status === 401) {
                         window.location.href = '/admin';
                     }
+                    await this.loadInferenceScheduling();
 
                     if (!includeAlltime) {
                         return;
@@ -4468,9 +5402,14 @@
                 }
             },
 
-            startStatsRefresh() {
+            shouldRefreshStats() {
+                return this.mainTab === 'status'
+                    || (this.mainTab === 'settings' && this.activeTab === 'global');
+            },
+
+            startStatsRefresh(includeAlltime = this.mainTab === 'status') {
                 this.stopStatsRefresh();
-                this.loadStats();
+                this.loadStats(includeAlltime);
                 this._statsRefreshTimer = setInterval(() => {
                     this.loadStats(false);
                 }, 500);
