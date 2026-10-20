@@ -78,6 +78,28 @@ class TestBoundarySnapshotSSDStore:
         yield
         self.store.shutdown()
 
+    def test_restrictive_mode_never_serializes_or_queues_request_snapshot(self):
+        def fail_if_called(_snapshot):
+            raise AssertionError("restrictive snapshot reached the serializer")
+
+        assert not self.store.save(
+            "memory-request",
+            4,
+            [],
+            fail_if_called,
+            cache_mode="memory",
+        )
+        assert not self.store.save(
+            "none-request",
+            4,
+            [],
+            fail_if_called,
+            cache_mode="none",
+        )
+        assert not self.store._pending_writes
+        assert list(self.base_dir.rglob("*.safetensors")) == []
+        assert list(self.base_dir.rglob("*.tmp")) == []
+
     def _wait_for_disk(self, store, request_id: str, token_count: int) -> Path:
         import time
 

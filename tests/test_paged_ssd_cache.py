@@ -4825,3 +4825,214 @@ class TestTurboquantBitsSignature:
             assert payload["turboquant_kv_bits"] == 6.0
         finally:
             mgr.close()
+
+
+class TestRequestCachePersistencePolicy:
+    @staticmethod
+    def _cache_data(mx):
+        return [
+            (mx.zeros((1, 1, 32, 16)), mx.zeros((1, 1, 32, 16))),
+        ]
+
+    @staticmethod
+    def _wait_for_writes(manager):
+        assert manager.wait_for_pending_writes(5.0)
+
+    def test_memory_mode_is_not_written_by_write_through_clear_or_close(
+        self, tmp_path
+    ):
+        mx = pytest.importorskip("mlx.core")
+        cache_dir = tmp_path / "memory-only"
+        manager = PagedSSDCacheManager(
+            cache_dir=cache_dir,
+            max_size_bytes=1024**2,
+            hot_cache_max_bytes=1024**2,
+            hot_cache_write_through=True,
+        )
+        block_hash = b"memory_policy_write_through"
+        try:
+            assert manager.save_block(
+                block_hash,
+                self._cache_data(mx),
+                32,
+                layer_cache_types=["KVCache"],
+                cache_mode="memory",
+            )
+            # Re-saving the exact deduplicated memory entry must not grant it
+            # persistence or trigger the configured write-through path.
+            assert manager.save_block(
+                block_hash,
+                self._cache_data(mx),
+                32,
+                layer_cache_types=["KVCache"],
+                cache_mode="memory",
+            )
+            entry = manager._hot_cache_get(block_hash)
+            assert entry is not None and entry["persist_allowed"] is False
+            manager.clear_hot_cache()
+            self._wait_for_writes(manager)
+        finally:
+            manager.close()
+
+        assert list(cache_dir.rglob("*.safetensors")) == []
+        assert list(cache_dir.rglob("*.tmp")) == []
+
+    def test_memory_mode_zero_and_oversized_budgets_drop_without_spill(self, tmp_path):
+        mx = pytest.importorskip("mlx.core")
+        for name, budget in (("zero", 0), ("small", 128)):
+            cache_dir = tmp_path / name
+            manager = PagedSSDCacheManager(
+                cache_dir=cache_dir,
+                max_size_bytes=1024**2,
+                hot_cache_max_bytes=budget,
+            )
+            try:
+                assert not manager.save_block(
+                    f"{name}-memory-policy".encode(),
+                    self._cache_data(mx),
+                    32,
+                    layer_cache_types=["KVCache"],
+                    cache_mode="memory",
+                )
+                assert manager.get_stats().hot_cache_size_bytes == 0
+            finally:
+                manager.close()
+            assert list(cache_dir.rglob("*.safetensors")) == []
+
+    def test_shared_budget_eviction_drops_memory_only_artifact(self, tmp_path):
+        mx = pytest.importorskip("mlx.core")
+        cache_dir = tmp_path / "shared-budget"
+        budget = SharedHotCacheBudget(5000)
+        manager = PagedSSDCacheManager(
+            cache_dir=cache_dir,
+            max_size_bytes=1024**2,
+            hot_cache_max_bytes=1024**2,
+            hot_cache_budget=budget,
+        )
+        first = b"shared-budget-memory-one"
+        second = b"shared-budget-memory-two"
+        try:
+            for block_hash in (first, second):
+                assert manager.save_block(
+                    block_hash,
+                    self._cache_data(mx),
+                    32,
+                    layer_cache_types=["KVCache"],
+                    cache_mode="memory",
+                )
+            assert manager._hot_cache_get(first) is None
+            assert manager._hot_cache_get(second) is not None
+            assert budget.total_bytes <= budget.max_bytes
+            assert manager.wait_for_pending_writes(1.0)
+        finally:
+            manager.close()
+        assert list(cache_dir.rglob("*.safetensors")) == []
+
+    def test_none_mode_does_not_retain_or_write(self, tmp_path):
+        cache_dir = tmp_path / "none"
+        manager = PagedSSDCacheManager(
+            cache_dir=cache_dir,
+            max_size_bytes=1024**2,
+            hot_cache_max_bytes=1024**2,
+        )
+        try:
+            assert not manager.save_block(
+                b"none-policy-artifact",
+                [],
+                32,
+                cache_mode="none",
+            )
+            assert manager._hot_cache_total_bytes == 0
+        finally:
+            manager.close()
+        assert list(cache_dir.rglob("*.safetensors")) == []
+
+    def test_default_adoption_grants_only_that_memory_artifact(self, tmp_path):
+        mx = pytest.importorskip("mlx.core")
+        cache_dir = tmp_path / "grant"
+        manager = PagedSSDCacheManager(
+            cache_dir=cache_dir,
+            max_size_bytes=1024**2,
+            hot_cache_max_bytes=1024**2,
+        )
+        adopted = b"adopted-memory-artifact"
+        unrelated = b"unrelated-memory-artifact"
+        try:
+            for block_hash in (adopted, unrelated):
+                assert manager.save_block(
+                    block_hash,
+                    self._cache_data(mx),
+                    32,
+                    layer_cache_types=["KVCache"],
+                    cache_mode="memory",
+                )
+            assert manager.grant_persistence(adopted)
+            manager.clear_hot_cache()
+            self._wait_for_writes(manager)
+        finally:
+            manager.close()
+
+        assert manager._get_file_path(adopted).exists()
+        assert not manager._get_file_path(unrelated).exists()
+        assert len(list(cache_dir.rglob("*.safetensors"))) == 1
+
+    def test_sink_rejects_ungranted_artifact_before_staging(self, tmp_path):
+        manager = PagedSSDCacheManager(
+            cache_dir=tmp_path / "sink",
+            max_size_bytes=1024**2,
+            hot_cache_max_bytes=1024**2,
+        )
+        target = tmp_path / "sink" / "blocked.safetensors"
+        try:
+            assert not manager._write_block_file(
+                b"blocked-memory-artifact",
+                {},
+                {},
+                target,
+                source="test",
+                persistence_allowed=False,
+            )
+            assert not target.exists()
+            assert not list(target.parent.glob("*.tmp"))
+        finally:
+            manager.close()
+
+    def test_default_grant_racing_clear_is_linearized_by_artifact(self, tmp_path):
+        mx = pytest.importorskip("mlx.core")
+        from concurrent.futures import ThreadPoolExecutor
+
+        cache_dir = tmp_path / "grant-clear-race"
+        manager = PagedSSDCacheManager(
+            cache_dir=cache_dir,
+            max_size_bytes=1024**2,
+            hot_cache_max_bytes=1024**2,
+        )
+        block_hash = b"grant-clear-race-memory"
+        try:
+            assert manager.save_block(
+                block_hash,
+                self._cache_data(mx),
+                32,
+                layer_cache_types=["KVCache"],
+                cache_mode="memory",
+            )
+            gate = threading.Barrier(2)
+
+            def grant():
+                gate.wait()
+                return manager.grant_persistence(block_hash)
+
+            def clear():
+                gate.wait()
+                manager.clear_hot_cache()
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                grant_future = pool.submit(grant)
+                clear_future = pool.submit(clear)
+                granted = grant_future.result()
+                clear_future.result()
+            self._wait_for_writes(manager)
+        finally:
+            manager.close()
+
+        assert manager._get_file_path(block_hash).exists() is granted

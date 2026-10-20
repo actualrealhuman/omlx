@@ -45,6 +45,7 @@ from .pooling_delta import (
     POOLING_CACHE_DELTA_FORMAT_VERSION,
 )
 from .stats import PagedSSDCacheStats
+from .policy import CacheMode, coerce_cache_policy
 
 logger = logging.getLogger(__name__)
 
@@ -2006,6 +2007,8 @@ class PagedSSDCacheManager(CacheManager):
         self._stats["hot_cache_evictions"] += 1
         if entry.get("staging"):
             return  # Its SSD write is already queued.
+        if not entry.get("persist_allowed", True):
+            return
         if not entry.get("dirty", True):
             logger.debug(
                 "Evicted clean hot cache block %s; SSD copy already exists",
@@ -2014,12 +2017,16 @@ class PagedSSDCacheManager(CacheManager):
             return
         self._enqueue_ssd_write(block_hash, entry)
 
-    def _hot_cache_put(self, block_hash: bytes, entry: dict) -> None:
+    def _hot_cache_put(self, block_hash: bytes, entry: dict) -> bool:
         """Add entry to hot cache, evicting LRU entries if capacity exceeded.
 
         Evicted entries are flushed to SSD via the background writer thread.
         """
         entry_size = self._hot_cache_entry_size(entry)
+        if not entry.get("persist_allowed", True):
+            capacity = self._effective_hot_cache_max_bytes()
+            if capacity <= 0 or entry_size > capacity:
+                return False
         evicted_entries: list = []
 
         if self._hot_cache_budget is not None:
@@ -2035,7 +2042,7 @@ class PagedSSDCacheManager(CacheManager):
                 evicted = owner._hot_cache_remove(victim_hash, update_budget=False)
                 if evicted is not None:
                     owner._handle_hot_cache_eviction(victim_hash, evicted)
-            return
+            return self._hot_cache_get(block_hash) is not None
 
         with self._hot_cache_lock:
             # Remove old entry if updating
@@ -2058,6 +2065,7 @@ class PagedSSDCacheManager(CacheManager):
         # Flush evicted entries to SSD outside the hot cache lock
         for evicted_hash, evicted in evicted_entries:
             self._handle_hot_cache_eviction(evicted_hash, evicted)
+        return self._hot_cache_get(block_hash) is not None
 
     def _enqueue_ssd_write(
         self,
@@ -2075,7 +2083,7 @@ class PagedSSDCacheManager(CacheManager):
         caller writes inline so dirty hot-cache blocks are never dropped just
         because the background writer is behind.
         """
-        if self._hot_cache_only:
+        if self._hot_cache_only or not entry.get("persist_allowed", True):
             return False
         if not entry.get("dirty", True):
             return True
@@ -2106,7 +2114,7 @@ class PagedSSDCacheManager(CacheManager):
 
         # 3. Queue third — enqueue for background writer.
         try:
-            item = (block_hash, tensors_raw, metadata, file_path)
+            item = (block_hash, tensors_raw, metadata, file_path, True)
             # Non-blocking callers (hot-cache LRU spill) also wait so a
             # transient writer backlog doesn't silently drop blocks. Blocking
             # callers (shutdown flush) use the same bounded wait.
@@ -3245,8 +3253,11 @@ class PagedSSDCacheManager(CacheManager):
         file_path: Path,
         *,
         source: str,
+        persistence_allowed: bool = True,
     ) -> bool:
         """Write one serialized block to disk from raw tensor bytes."""
+        if not persistence_allowed:
+            return False
         with self._persistence_io():
             temp_path = None
             try:
@@ -3373,6 +3384,20 @@ class PagedSSDCacheManager(CacheManager):
             if entry is not None:
                 entry["dirty"] = False
 
+    def grant_persistence(self, block_hash: bytes) -> bool:
+        """Grant persistence to one exact artifact after validated adoption."""
+        with self._hot_cache_lock:
+            entry = self._hot_cache.get(block_hash)
+            if entry is not None:
+                entry["persist_allowed"] = True
+                return True
+        with self._pending_write_hashes_lock:
+            entry = self._pending_write_buffers.get(block_hash)
+            if entry is not None:
+                entry["persist_allowed"] = True
+                return True
+        return self._index.contains(block_hash)
+
     def _writer_loop(self) -> None:
         """Background writer that drains the write queue.
 
@@ -3399,10 +3424,19 @@ class PagedSSDCacheManager(CacheManager):
             if item is None:  # Sentinel for shutdown
                 break
 
-            block_hash, tensors_raw, metadata, file_path = item
+            if len(item) == 4:
+                block_hash, tensors_raw, metadata, file_path = item
+                persistence_allowed = True
+            else:
+                block_hash, tensors_raw, metadata, file_path, persistence_allowed = item
             try:
                 write_succeeded = self._write_block_file(
-                    block_hash, tensors_raw, metadata, file_path, source="background"
+                    block_hash,
+                    tensors_raw,
+                    metadata,
+                    file_path,
+                    source="background",
+                    persistence_allowed=persistence_allowed,
                 )
                 if write_succeeded:
                     self._mark_hot_cache_clean(block_hash)
@@ -3427,6 +3461,7 @@ class PagedSSDCacheManager(CacheManager):
         replace_existing: bool = False,
         parent_hash: bytes | None = None,
         tail_terminal: bool = False,
+        cache_mode: CacheMode = "default",
     ) -> bool:
         """
         Save a KV cache block to SSD storage (non-blocking).
@@ -3458,6 +3493,9 @@ class PagedSSDCacheManager(CacheManager):
         Returns:
             True if enqueued successfully, False otherwise.
         """
+        cache_mode = coerce_cache_policy({"kv": cache_mode}).kv
+        if cache_mode == "none":
+            return False
         if not HAS_MLX:
             logger.error("MLX not available, cannot save block")
             return False
@@ -3533,6 +3571,8 @@ class PagedSSDCacheManager(CacheManager):
             and not replace_existing
             and self._is_compatible_block(indexed_metadata)
         ):
+            if cache_mode == "default":
+                self.grant_persistence(block_hash)
             self._index.touch(block_hash)
             self._stats["hits"] += 1
             return True
@@ -3572,6 +3612,8 @@ class PagedSSDCacheManager(CacheManager):
                 hot_entry = None
 
         if hot_entry is not None and not replace_existing:
+            if cache_mode == "default":
+                hot_entry["persist_allowed"] = True
             if hot_cache_write_back or self._hot_cache_only:
                 self._stats["hits"] += 1
                 return True
@@ -3845,7 +3887,17 @@ class PagedSSDCacheManager(CacheManager):
                 "layer_cache_types": layer_cache_types,
                 "block_metadata": block_metadata,
                 "dirty": True,
+                "persist_allowed": cache_mode == "default",
             }
+
+            if cache_mode == "memory":
+                # Memory requests may use only the existing bounded RAM tier.
+                if not self._hot_cache_enabled or not hot_cache_write_back:
+                    return False
+                if not self._hot_cache_put(block_hash, cache_entry):
+                    return False
+                self._stats["saves"] += 1
+                return True
 
             if self._hot_cache_enabled and (
                 hot_cache_write_back or self._hot_cache_only
@@ -3905,7 +3957,7 @@ class PagedSSDCacheManager(CacheManager):
             try:
                 with self._persistence_io():
                     self._write_queue.put(
-                        (block_hash, tensors_raw, metadata, file_path),
+                        (block_hash, tensors_raw, metadata, file_path, True),
                         timeout=_PENDING_WRITE_PUT_TIMEOUT_SECONDS,
                     )
             except queue.Full:

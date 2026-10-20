@@ -42,6 +42,7 @@ from .paged_ssd_cache import (
     _write_safetensors_no_mx,
 )
 from .pooling_delta import compact_pooling_cache_snapshot
+from .policy import CacheMode, coerce_cache_policy
 
 if HAS_MLX:
     import mlx.core as mx
@@ -226,6 +227,7 @@ class BoundarySnapshotSSDStore:
         extract_cache_states_fn: Callable,
         *,
         block_size: int | None = None,
+        cache_mode: CacheMode = "default",
     ) -> bool:
         """Serialize snapshot to SSD (non-blocking).
 
@@ -251,6 +253,11 @@ class BoundarySnapshotSSDStore:
         bool
             True if successfully enqueued for writing.
         """
+        # Request-scoped memory snapshots are owned by the scheduler's
+        # bounded RAM snapshot map. This SSD staging store must never turn a
+        # restrictive request into a temporary or queued disk write.
+        if coerce_cache_policy({"kv": cache_mode}).kv != "default":
+            return False
         if not HAS_MLX:
             return False
 

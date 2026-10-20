@@ -50,6 +50,7 @@ from .paged_ssd_cache import (
 )
 from .pooling_delta import POOLING_CACHE_DELTA_CLASS
 from .stats import PrefixCacheStats
+from .policy import CacheMode, coerce_cache_policy
 from .type_registry import CacheTypeRegistry
 
 # Shared with class-level signature eligibility.
@@ -478,6 +479,32 @@ class BlockAwarePrefixCache(CacheManager):
             payloads[layer_idx] = (cache_data, layer_state.get("meta_state", ()))
         return payloads
 
+    def _embedded_gdn_checkpoint_payloads(
+        self,
+        block_data: Any,
+        layer_cache_types: list[str] | tuple[str, ...] | None,
+        layer_meta_states: list[Any] | None = None,
+    ) -> dict[int, tuple[Any, Any]] | None:
+        """Return complete recurrent state embedded in one hot block, if any."""
+        if not isinstance(block_data, (list, tuple)):
+            return None
+        payloads: dict[int, tuple[Any, Any]] = {}
+        for layer_idx, type_name in enumerate(layer_cache_types or []):
+            if not CacheTypeRegistry.is_arrays_family(type_name):
+                continue
+            if layer_idx >= len(block_data):
+                return None
+            state = block_data[layer_idx]
+            if self._is_placeholder_state(state):
+                return None
+            meta = (
+                layer_meta_states[layer_idx]
+                if layer_meta_states and layer_idx < len(layer_meta_states)
+                else ()
+            )
+            payloads[layer_idx] = (state, meta)
+        return payloads or None
+
     def _has_split_gdn_checkpoint(
         self,
         block_hash: bytes,
@@ -814,6 +841,7 @@ class BlockAwarePrefixCache(CacheManager):
         extra_keys: tuple[Any, ...] | None = None,
         extra_key_token_start: int | None = None,
         extra_key_ranges: list[tuple[int, tuple[Any, ...]]] | None = None,
+        cache_mode: CacheMode = "default",
     ) -> tuple[BlockTable | None, list[int]]:
         """
         Find cached prefix blocks for the given tokens.
@@ -828,6 +856,7 @@ class BlockAwarePrefixCache(CacheManager):
             - block_table: BlockTable if prefix found, None otherwise
             - remaining_tokens: Tokens that need processing
         """
+        coerce_cache_policy({"kv": cache_mode})
         if not tokens:
             return None, tokens
 
@@ -933,6 +962,25 @@ class BlockAwarePrefixCache(CacheManager):
         logger.debug(f"Cache miss for {request_id}")
         return None, tokens
 
+    def grant_persistence(self, block_table: BlockTable | None) -> int:
+        """Grant writes for the exact blocks in a successfully adopted table.
+
+        Callers must invoke this only after the complete prefix has passed
+        reconstruction and compatibility validation. The table bounds the
+        promotion, so unmatched suffixes and sibling blocks remain ineligible.
+        """
+        if block_table is None or self.paged_ssd_cache is None:
+            return 0
+        granted = 0
+        for block_id in tuple(block_table.block_ids):
+            block = self.paged_cache.allocated_blocks.get(block_id)
+            block_hash = getattr(block, "block_hash", None)
+            if block_hash is not None and self.paged_ssd_cache.grant_persistence(
+                block_hash
+            ):
+                granted += 1
+        return granted
+
     def store_cache(
         self,
         request_id: str,
@@ -946,6 +994,7 @@ class BlockAwarePrefixCache(CacheManager):
         hot_cache_write_back: bool = True,
         _store_exact_terminal: bool = False,
         _store_tail_terminal: bool = False,
+        cache_mode: CacheMode = "default",
     ) -> BlockTable | None:
         """
         Store computed cache for future reuse.
@@ -977,7 +1026,8 @@ class BlockAwarePrefixCache(CacheManager):
         Returns:
             BlockTable for the stored cache, or None on failure
         """
-        if not tokens:
+        cache_mode = coerce_cache_policy({"kv": cache_mode}).kv
+        if cache_mode == "none" or not tokens:
             return None
 
         # Check if cache_data contains extracted tensor states
@@ -1224,6 +1274,7 @@ class BlockAwarePrefixCache(CacheManager):
 
             if (
                 split_gdn_layout
+                and cache_mode != "memory"
                 and not _store_exact_terminal
                 and not callable(
                     getattr(boundary_snapshots, "commit_gdn_checkpoint", None)
@@ -1305,13 +1356,28 @@ class BlockAwarePrefixCache(CacheManager):
                     if split_gdn_layout and not self._has_split_gdn_checkpoint(
                         existing_block.block_hash, layer_cache_types
                     ):
-                        checkpoint_committed = self._commit_split_gdn_checkpoint(
-                            boundary_snapshots,
-                            global_end,
-                            existing_block.block_hash,
-                            layer_cache_types,
-                            layer_meta_states,
-                        )
+                        if cache_mode == "memory":
+                            embedded_data = self.paged_ssd_cache.load_block(
+                                existing_block.block_hash
+                            )
+                            embedded_meta = getattr(
+                                existing_block, "layer_meta_states", None
+                            )
+                            checkpoint_committed = bool(
+                                self._embedded_gdn_checkpoint_payloads(
+                                    embedded_data,
+                                    layer_cache_types,
+                                    embedded_meta,
+                                )
+                            )
+                        else:
+                            checkpoint_committed = self._commit_split_gdn_checkpoint(
+                                boundary_snapshots,
+                                global_end,
+                                existing_block.block_hash,
+                                layer_cache_types,
+                                layer_meta_states,
+                            )
                         if not checkpoint_committed:
                             logger.warning(
                                 "Stopping split-GDN prefix store for %s at %d "
@@ -1348,6 +1414,7 @@ class BlockAwarePrefixCache(CacheManager):
                                 global_end,
                                 snapshot_cache_data,
                                 hot_cache_write_back=hot_cache_write_back,
+                                cache_mode=cache_mode,
                             )
                         )
                         if backfilled:
@@ -1443,7 +1510,7 @@ class BlockAwarePrefixCache(CacheManager):
                 block_boundary_tc = existing_tokens + end_idx
                 snapshot_cache_data = None
                 if (
-                    not split_gdn_layout
+                    (not split_gdn_layout or cache_mode == "memory")
                     and boundary_snapshots
                     and block_boundary_tc in boundary_snapshots
                 ):
@@ -1496,7 +1563,7 @@ class BlockAwarePrefixCache(CacheManager):
                     model_cache_config,
                     is_last_block=is_last_block,
                     snapshot_cache_data=snapshot_cache_data,
-                    externalize_arrays=split_gdn_layout,
+                    externalize_arrays=(split_gdn_layout and cache_mode != "memory"),
                     live_state_at_true_end=live_state_at_true_end,
                 )
 
@@ -1563,9 +1630,17 @@ class BlockAwarePrefixCache(CacheManager):
                         replace_existing=False,
                         parent_hash=parent_hash,
                         tail_terminal=is_tail_terminal,
+                        cache_mode=cache_mode,
                     )
                     if saved:
-                        if split_gdn_layout:
+                        if split_gdn_layout and cache_mode == "memory":
+                            checkpoint_committed = bool(
+                                self._embedded_gdn_checkpoint_payloads(
+                                    block_kv_data, layer_cache_types, block_meta
+                                )
+                                and (snapshot_cache_data or live_state_at_true_end)
+                            )
+                        elif split_gdn_layout:
                             if is_exact_split_block:
                                 checkpoint_committed = (
                                     not is_exact_terminal
@@ -1705,12 +1780,12 @@ class BlockAwarePrefixCache(CacheManager):
                     and prev_tip_hash in self._store_tip_hashes
                 ):
                     superseded = self._tip_lineage.pop(prev_tip_hash, None)
-                    if superseded is not None:
+                    if superseded is not None and cache_mode != "memory":
                         if superseded in self._tail_hashes:
                             self._discard_tail_block(superseded, layer_cache_types)
                         elif rotating_layout:
                             self._strip_rotating_payload(
-                                superseded, hot_cache_write_back
+                                superseded, hot_cache_write_back, cache_mode
                             )
                     self._tip_lineage[new_tip.block_hash] = prev_tip_hash
                     if len(self._tip_lineage) > _TIP_LINEAGE_MAX_ENTRIES:
@@ -2167,7 +2242,10 @@ class BlockAwarePrefixCache(CacheManager):
         return True
 
     def _strip_rotating_payload(
-        self, block_hash: bytes, hot_cache_write_back: bool = True
+        self,
+        block_hash: bytes,
+        hot_cache_write_back: bool = True,
+        cache_mode: CacheMode = "default",
     ) -> bool:
         """Replace a superseded tip block's rotating payload with placeholders.
 
@@ -2190,6 +2268,11 @@ class BlockAwarePrefixCache(CacheManager):
             True if the block was rewritten with at least one layer stripped.
         """
         if self.paged_ssd_cache is None or not HAS_MLX:
+            return False
+        if cache_mode == "memory":
+            # Rewriting by hash would evict a prior durable artifact before
+            # replacing it with a RAM-only version. Leave its exact payload
+            # and persistence grant untouched for restrictive requests.
             return False
         try:
             # Inspection load only: forget_block() drops the entry right after,
@@ -2238,6 +2321,7 @@ class BlockAwarePrefixCache(CacheManager):
                 layer_cache_types=types or None,
                 layer_meta_states=meta.get("layer_meta_states"),
                 hot_cache_write_back=hot_cache_write_back,
+                cache_mode=cache_mode,
             )
             if saved:
                 logger.debug(
@@ -2308,6 +2392,7 @@ class BlockAwarePrefixCache(CacheManager):
         boundary_tc: int,
         snapshot_cache_data: list[dict[str, Any]],
         hot_cache_write_back: bool = True,
+        cache_mode: CacheMode = "default",
     ) -> bool:
         """Rewrite a dedup'd placeholder block with boundary-snapshot state.
 
@@ -2333,6 +2418,11 @@ class BlockAwarePrefixCache(CacheManager):
         """
         if self.paged_ssd_cache is None or not HAS_MLX:
             return True
+        if cache_mode == "memory":
+            # Backfill uses forget_block() followed by a replacement. A
+            # memory-only request may not delete or downgrade an existing
+            # durable artifact just to improve its boundary coverage.
+            return False
         try:
             # Inspection load only: do not promote into the hot cache. A
             # legacy-cumulative block (pm-ineligible CacheList layouts, e.g.
@@ -2424,6 +2514,7 @@ class BlockAwarePrefixCache(CacheManager):
                 layer_cache_types=types or None,
                 layer_meta_states=new_meta,
                 hot_cache_write_back=hot_cache_write_back,
+                cache_mode=cache_mode,
             )
             if not saved:
                 return False
@@ -3225,7 +3316,9 @@ class BlockAwarePrefixCache(CacheManager):
 
         return forked_table
 
-    def preload_blocks(self, block_table: BlockTable) -> int:
+    def preload_blocks(
+        self, block_table: BlockTable, cache_mode: CacheMode = "default"
+    ) -> int:
         """
         Pre-load matched blocks from SSD into hot cache in parallel.
 
@@ -3239,6 +3332,8 @@ class BlockAwarePrefixCache(CacheManager):
         Returns:
             Number of blocks successfully preloaded into hot cache.
         """
+        if coerce_cache_policy({"kv": cache_mode}).kv == "none":
+            return 0
         if self.paged_ssd_cache is None:
             return 0
         if not block_table or not block_table.block_ids:
@@ -3259,6 +3354,7 @@ class BlockAwarePrefixCache(CacheManager):
         self,
         block_table: BlockTable,
         promote_to_hot_cache: bool = True,
+        cache_mode: CacheMode = "default",
     ) -> list[Any] | None:
         """
         Reconstruct cache objects from paged SSD-stored block data.
@@ -3285,6 +3381,8 @@ class BlockAwarePrefixCache(CacheManager):
             List of reconstructed cache objects (one per layer),
             or None if reconstruction fails completely
         """
+        cache_mode = coerce_cache_policy({"kv": cache_mode}).kv
+        promote_to_hot_cache = promote_to_hot_cache and cache_mode != "none"
         if not block_table or not block_table.block_ids:
             return None
 
@@ -3652,6 +3750,28 @@ class BlockAwarePrefixCache(CacheManager):
                                 block.block_hash, cache_signature
                             )
                         if checkpoint_path is None:
+                            embedded = self._embedded_gdn_checkpoint_payloads(
+                                all_block_data[idx],
+                                layer_cache_types,
+                                all_block_meta_states[idx]
+                                if idx < len(all_block_meta_states)
+                                else None,
+                            )
+                            if embedded:
+                                chosen_idx = idx
+                                chosen_payloads = embedded
+                                chosen_endpoint_tokens = sum(
+                                    self.paged_cache.allocated_blocks[bid].token_count
+                                    for bid in block_table.block_ids[: idx + 1]
+                                    if bid in self.paged_cache.allocated_blocks
+                                )
+                                source_hash = block.block_hash
+                                chosen_diagnostic = {
+                                    "chosen_endpoint_tokens": chosen_endpoint_tokens,
+                                    "walkback_blocks": len(all_block_data) - idx - 1,
+                                    "source_block_hash": block.block_hash.hex()[:16],
+                                    "embedded_memory_checkpoint": True,
+                                }
                             break
                         if self._gdn_checkpoint_loader is None:
                             logger.warning(

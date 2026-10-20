@@ -79,6 +79,33 @@ def test_unsupported_gdn_layout_logs_embedded_fallback_once(tmp_path, caplog):
     assert caplog.text.count("falling back to embedded GDN snapshots") == 1
 
 
+def test_memory_replacement_helpers_leave_prior_artifacts_untouched():
+    paged = PagedCacheManager(
+        block_size=BLOCK_SIZE,
+        max_blocks=8,
+        model_name="hybrid-model",
+        initial_blocks=8,
+    )
+    ssd = MagicMock()
+    prefix = BlockAwarePrefixCache(
+        model=_HybridModel(),
+        paged_cache_manager=paged,
+        paged_ssd_cache_manager=ssd,
+    )
+
+    assert not prefix._strip_rotating_payload(
+        b"existing-durable-artifact", cache_mode="memory"
+    )
+    assert not prefix._maybe_backfill_dedup_block_payload(
+        b"existing-durable-artifact",
+        4,
+        _hybrid_extracted(4, 4.0),
+        cache_mode="memory",
+    )
+    ssd.forget_block.assert_not_called()
+    ssd.save_block.assert_not_called()
+
+
 def test_split_store_restores_one_sidecar_and_walks_back(tmp_path):
     cache_dir = tmp_path / "cache"
     paged = PagedCacheManager(
@@ -267,6 +294,73 @@ def test_split_store_restores_one_sidecar_and_walks_back(tmp_path):
     finally:
         boundary.shutdown()
         ssd.close()
+
+
+def test_memory_split_layout_embeds_recurrent_state_without_sidecar(tmp_path):
+    cache_dir = tmp_path / "memory-hybrid"
+    paged = PagedCacheManager(
+        block_size=BLOCK_SIZE,
+        max_blocks=16,
+        model_name="hybrid-model",
+        initial_blocks=16,
+    )
+    ssd = PagedSSDCacheManager(
+        cache_dir=cache_dir,
+        max_size_bytes=100 * 1024**2,
+        hot_cache_max_bytes=2 * 1024**2,
+        expected_model_name="hybrid-model",
+        expected_num_layers=2,
+        expected_block_size=BLOCK_SIZE,
+        expected_layer_cache_types=LAYER_TYPES,
+        gdn_ssd_split_enabled=True,
+    )
+    prefix = BlockAwarePrefixCache(
+        model=_HybridModel(),
+        paged_cache_manager=paged,
+        paged_ssd_cache_manager=ssd,
+        gdn_ssd_split_enabled=True,
+    )
+    tokens = list(range(12))
+    snapshots = {
+        token_count: _hybrid_extracted(token_count, float(token_count))
+        for token_count in (4, 8, 12)
+    }
+    try:
+        stored = prefix.store_cache(
+            "memory-hybrid-request",
+            tokens,
+            _hybrid_extracted(12, 12.0),
+            boundary_snapshots=snapshots,
+            cache_mode="memory",
+        )
+        assert stored is not None and stored.num_tokens == 12
+        hashes = _block_hashes(prefix, stored)
+        assert len(hashes) == 3
+        assert ssd._gdn_sidecar_index.count == 0
+        for block_hash in hashes:
+            block_data, _ = ssd.load_block_with_metadata(block_hash)
+            assert block_data is not None
+            assert tuple(block_data[1][0].shape) == (1, 3, 8)
+            assert tuple(block_data[1][1].shape) == (1, 2, 4, 8)
+
+        hit, remaining = prefix.fetch_cache("memory-hybrid-restore", tokens)
+        assert hit is not None and remaining == []
+        restored = prefix.reconstruct_cache(hit)
+        assert restored is not None
+        assert restored[0].keys_and_values()[0].shape[2] == 12
+        assert float(restored[1].cache[0][0, 0, 0]) == pytest.approx(12.0)
+        assert list(cache_dir.rglob("*.safetensors")) == []
+        assert prefix.grant_persistence(hit) == 3
+        prefix.release_cache("memory-hybrid-restore")
+        ssd.clear_hot_cache()
+        assert ssd.wait_for_pending_writes(5.0)
+    finally:
+        ssd.close()
+
+    # The exact adopted blocks were explicitly promoted after reconstruction.
+    # Their full recurrent state travels inside the same persisted artifacts.
+    assert len(list(cache_dir.rglob("*.safetensors"))) == 3
+    assert list(cache_dir.rglob("*.tmp")) == []
 
 
 def test_split_store_commits_single_final_sidecar_outside_provider_index(tmp_path):
