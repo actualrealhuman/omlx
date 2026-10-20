@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, model_serializer, model_validator
 
+from .cache_policy import CachePolicyRequest
 from .shared_models import IDPrefix, generate_id, get_unix_timestamp
 
 
@@ -96,6 +97,7 @@ class ResponsesRequest(BaseModel):
     """Request body for POST /v1/responses."""
 
     model: str
+    cache_policy: Optional[CachePolicyRequest] = None
     input: Optional[Union[str, List[InputItem]]] = None
     instructions: Optional[str] = None
     temperature: Optional[float] = None

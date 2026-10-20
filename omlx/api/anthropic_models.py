@@ -12,6 +12,7 @@ from typing import Annotated, Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag, model_validator
 
+from .cache_policy import CachePolicyRequest
 from omlx.api.shared_models import IDPrefix, generate_id
 
 # =============================================================================
@@ -225,6 +226,7 @@ class MessagesRequest(BaseModel):
     model: str
     max_tokens: int
     messages: list[AnthropicMessage]
+    cache_policy: CachePolicyRequest | None = None
     system: str | list[SystemContent] | None = None
     stop_sequences: list[str] | None = None
     stream: bool = False

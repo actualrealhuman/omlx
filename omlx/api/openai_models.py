@@ -15,6 +15,7 @@ from typing import Annotated, Any, Dict, List, Optional, Union
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 
+from .cache_policy import CachePolicyRequest
 from omlx.api.shared_models import (
     BaseUsage,
     IDPrefix,
@@ -335,6 +336,7 @@ class ChatCompletionRequest(BaseModel):
 
     model: str
     messages: List[Message]
+    cache_policy: CachePolicyRequest | None = None
     temperature: float | None = None
     top_p: float | None = None
     top_k: int | None = None
@@ -490,6 +492,7 @@ class CompletionRequest(BaseModel):
 
     model: str
     prompt: Union[str, List[str]]
+    cache_policy: CachePolicyRequest | None = None
     temperature: float | None = None
     top_p: float | None = None
     top_k: int | None = None

@@ -93,6 +93,13 @@ from .api.anthropic_utils import (
     request_has_cache_control,
 )
 from .api.body_limit import RequestBodySizeLimitMiddleware
+from .api.cache_policy import (
+    cache_policy_response_headers,
+    effective_cache_policy,
+    ensure_cache_policy_supported,
+    resolve_request_cache_policy,
+)
+from .cache.policy import CachePolicy
 from .api.embedding_models import (
     EmbeddingData,
     EmbeddingRequest,
@@ -2437,6 +2444,7 @@ def init_server(
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["X-oMLX-KV-Cache", "X-oMLX-Image-Cache"],
     )
     logger.info(f"CORS origins: {cors_origins}")
 
@@ -3580,6 +3588,8 @@ async def _stream_markitdown_chat_response(
 async def _create_markitdown_chat_completion(
     request: ChatCompletionRequest,
     http_request: FastAPIRequest,
+    *,
+    policy_headers: dict[str, str] | None = None,
 ):
     if not _markitdown_is_visible():
         raise HTTPException(
@@ -3611,7 +3621,11 @@ async def _create_markitdown_chat_completion(
                 keepalive_chunk=keepalive,
             ),
             media_type="text/event-stream",
-            headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+            headers={
+                "X-Accel-Buffering": "no",
+                "Cache-Control": "no-cache",
+                **(policy_headers or {}),
+            },
         )
 
     async def _build_markitdown_completion():
@@ -3642,7 +3656,7 @@ async def _create_markitdown_chat_completion(
         ).model_dump_json(exclude_none=True)
 
     return await _json_response_or_keepalive(
-        http_request, _build_markitdown_completion()
+        http_request, _build_markitdown_completion(), headers=policy_headers
     )
 
 
@@ -4456,6 +4470,11 @@ async def create_completion(
 ):
     """Create a text completion."""
     _reject_lone_surrogates(request)
+    cache_policy, explicit_cache_components = resolve_request_cache_policy(
+        request.cache_policy,
+        http_request,
+        body_present="cache_policy" in request.model_fields_set,
+    )
     if _server_state.oq_manager and _server_state.oq_manager.is_quantizing:
         raise HTTPException(
             status_code=503,
@@ -4467,6 +4486,10 @@ async def create_completion(
         engine = await get_engine_for_model(request.model, lease=lease)
         model_load_duration = time.perf_counter() - load_start
         resolved_model = _serving_model_id(lease, request.model)
+        ensure_cache_policy_supported(engine, cache_policy, explicit_cache_components)
+        policy_headers = cache_policy_response_headers(
+            effective_cache_policy(engine, cache_policy, _server_state.global_settings)
+        )
 
         # Handle single prompt or list of prompts
         prompts = (
@@ -4488,7 +4511,9 @@ async def create_completion(
         upstream_request_id = http_request.headers.get("x-request-id")
         await _raise_if_llm_lease_abort_requested(lease)
         for prompt in prompts:
-            await engine.preflight_completion(prompt, request_id=upstream_request_id)
+            await engine.preflight_completion(
+                prompt, request_id=upstream_request_id, cache_policy=cache_policy
+            )
         await _raise_if_llm_lease_abort_requested(lease)
         inference_request_id = str(uuid.uuid4())
 
@@ -4510,6 +4535,7 @@ async def create_completion(
                                 resolved_model=resolved_model,
                                 response_id=response_id,
                                 inference_request_id=inference_request_id,
+                                cache_policy=cache_policy,
                             ),
                             http_request=http_request,
                             keepalive_chunk=keepalive,
@@ -4525,6 +4551,7 @@ async def create_completion(
                     "X-Accel-Buffering": "no",
                     "Cache-Control": "no-cache",
                     _REQUEST_ID_HEADER: inference_request_id,
+                    **policy_headers,
                 },
             )
 
@@ -4569,6 +4596,7 @@ async def create_completion(
             # A list prompt runs one engine request per prompt, so no single id.
             if len(prompts) == 1:
                 gen_kwargs["_request_id"] = inference_request_id
+            gen_kwargs["cache_policy"] = cache_policy
             # Widen the repetition-penalty look-back window when the client
             # asks for it (mlx-lm default window is 20 tokens).
             repetition_context_size = getattr(
@@ -4674,9 +4702,9 @@ async def create_completion(
             _build_completion(),
             lease=lease,
             headers=(
-                {_REQUEST_ID_HEADER: inference_request_id}
+                {_REQUEST_ID_HEADER: inference_request_id, **policy_headers}
                 if len(prompts) == 1
-                else None
+                else policy_headers
             ),
         )
     except BaseException:
@@ -4887,6 +4915,11 @@ async def create_chat_completion(
     ```
     """
     _reject_lone_surrogates(request)
+    cache_policy, explicit_cache_components = resolve_request_cache_policy(
+        request.cache_policy,
+        http_request,
+        body_present="cache_policy" in request.model_fields_set,
+    )
     # Log incoming request summary at debug, message content at trace
     logger.debug(
         f"Chat completion request received: model={request.model}, "
@@ -4901,9 +4934,13 @@ async def create_chat_completion(
             )
 
     if is_markitdown_model(request.model):
-        return await _create_markitdown_chat_completion(request, http_request)
-
-    request = await _preprocess_markitdown_files_for_llm(request)
+        return await _create_markitdown_chat_completion(
+            request,
+            http_request,
+            policy_headers=cache_policy_response_headers(
+                CachePolicy(kv="none", images="none")
+            ),
+        )
 
     # Block inference during quantization to prevent GPU Metal errors
     if _server_state.oq_manager and _server_state.oq_manager.is_quantizing:
@@ -4917,6 +4954,12 @@ async def create_chat_completion(
         load_start = time.perf_counter()
         engine = await get_engine_for_model(request.model, lease=lease)
         model_load_duration = time.perf_counter() - load_start
+        ensure_cache_policy_supported(engine, cache_policy, explicit_cache_components)
+        policy_headers = cache_policy_response_headers(
+            effective_cache_policy(engine, cache_policy, _server_state.global_settings)
+        )
+
+        request = await _preprocess_markitdown_files_for_llm(request)
 
         # Use the exact model selected by the pool, including fallback.
         resolved_model = _serving_model_id(lease, request.model)
@@ -5056,6 +5099,7 @@ async def create_chat_completion(
             "frequency_penalty": frequency_penalty,
             "xtc_probability": xtc_probability,
             "xtc_threshold": xtc_threshold,
+            "cache_policy": cache_policy,
         }
 
         # Widen the repetition-penalty look-back window when the client
@@ -5154,6 +5198,7 @@ async def create_chat_completion(
                 "X-Accel-Buffering": "no",
                 "Cache-Control": "no-cache",
                 _REQUEST_ID_HEADER: inference_request_id,
+                **policy_headers,
             }
             if response_format_warning:
                 sse_headers["Warning"] = response_format_warning
@@ -5340,7 +5385,7 @@ async def create_chat_completion(
                 ),
             ).model_dump_json(exclude_none=True)
 
-        json_headers = {_REQUEST_ID_HEADER: inference_request_id}
+        json_headers = {_REQUEST_ID_HEADER: inference_request_id, **policy_headers}
         if response_format_warning:
             json_headers["Warning"] = response_format_warning
         return await _json_response_or_keepalive(
@@ -5879,6 +5924,7 @@ async def stream_completion(
     resolved_model: str | None = None,
     response_id: str | None = None,
     inference_request_id: str | None = None,
+    cache_policy: CachePolicy | None = None,
 ) -> AsyncIterator[str]:
     """Stream completion response."""
     response_id = response_id or f"cmpl-{uuid.uuid4().hex[:8]}"
@@ -5922,6 +5968,8 @@ async def stream_completion(
         gen_kwargs["thinking_budget"] = thinking_budget
     if inference_request_id is not None:
         gen_kwargs["_request_id"] = inference_request_id
+    if cache_policy is not None:
+        gen_kwargs["cache_policy"] = cache_policy
     progress_request_id = None
     if request.return_progress:
         # The engine keys the prefill tracker by this id.
@@ -7510,6 +7558,11 @@ async def create_anthropic_message(
     Streaming is supported with `stream: true`.
     """
     _reject_lone_surrogates(request)
+    cache_policy, explicit_cache_components = resolve_request_cache_policy(
+        request.cache_policy,
+        http_request,
+        body_present="cache_policy" in request.model_fields_set,
+    )
     logger.debug(
         f"Anthropic Messages request: model={request.model}, "
         f"messages={len(request.messages)}, stream={request.stream}, "
@@ -7525,6 +7578,10 @@ async def create_anthropic_message(
     lease = _LLMEngineLease()
     try:
         engine = await get_engine_for_model(request.model, lease=lease)
+        ensure_cache_policy_supported(engine, cache_policy, explicit_cache_components)
+        policy_headers = cache_policy_response_headers(
+            effective_cache_policy(engine, cache_policy, _server_state.global_settings)
+        )
 
         # Use the exact model selected by the pool, including fallback.
         resolved_model = _serving_model_id(lease, request.model)
@@ -7652,6 +7709,7 @@ async def create_anthropic_message(
             "frequency_penalty": frequency_penalty,
             "xtc_probability": xtc_probability,
             "xtc_threshold": xtc_threshold,
+            "cache_policy": cache_policy,
         }
 
         # Widen the repetition-penalty look-back window when the client
@@ -7809,6 +7867,7 @@ async def create_anthropic_message(
                     "X-Accel-Buffering": "no",
                     "Cache-Control": "no-cache",
                     _REQUEST_ID_HEADER: inference_request_id,
+                    **policy_headers,
                 },
             )
 
@@ -7914,7 +7973,7 @@ async def create_anthropic_message(
             http_request,
             _build_anthropic_message(),
             lease=lease,
-            headers={_REQUEST_ID_HEADER: inference_request_id},
+            headers={_REQUEST_ID_HEADER: inference_request_id, **policy_headers},
         )
 
     except BaseException:
@@ -8243,6 +8302,11 @@ async def create_response(
 ):
     """Create a response (OpenAI Responses API)."""
     _reject_lone_surrogates(request)
+    cache_policy, explicit_cache_components = resolve_request_cache_policy(
+        request.cache_policy,
+        http_request,
+        body_present="cache_policy" in request.model_fields_set,
+    )
     if _server_state.oq_manager and _server_state.oq_manager.is_quantizing:
         raise HTTPException(
             status_code=503,
@@ -8260,6 +8324,10 @@ async def create_response(
         model_load_duration = time.perf_counter() - load_start
 
         resolved_model = _serving_model_id(lease, request.model)
+        ensure_cache_policy_supported(engine, cache_policy, explicit_cache_components)
+        policy_headers = cache_policy_response_headers(
+            effective_cache_policy(engine, cache_policy, _server_state.global_settings)
+        )
 
         # Images in function_call_output lists survive only for engines that
         # can extract them; text engines get a placeholder instead so base64
@@ -8484,6 +8552,7 @@ async def create_response(
             "frequency_penalty": frequency_penalty,
             "xtc_probability": xtc_probability,
             "xtc_threshold": xtc_threshold,
+            "cache_policy": cache_policy,
         }
 
         # Widen the repetition-penalty look-back window when the client
@@ -8551,6 +8620,7 @@ async def create_response(
                 "X-Accel-Buffering": "no",
                 "Cache-Control": "no-cache",
                 _REQUEST_ID_HEADER: inference_request_id,
+                **policy_headers,
             }
             if response_format_warning:
                 sse_headers["Warning"] = response_format_warning
@@ -8755,7 +8825,7 @@ async def create_response(
 
             return response_obj.model_dump_json()
 
-        json_headers = {_REQUEST_ID_HEADER: inference_request_id}
+        json_headers = {_REQUEST_ID_HEADER: inference_request_id, **policy_headers}
         if response_format_warning:
             json_headers["Warning"] = response_format_warning
         return await _json_response_or_keepalive(
