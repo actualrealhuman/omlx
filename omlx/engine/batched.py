@@ -15,6 +15,7 @@ from typing import Any
 
 from ..api.tool_calling import convert_tools_for_template
 from ..api.utils import clean_special_tokens, detect_and_strip_partial
+from ..cache.policy import coerce_cache_policy
 from ..model_settings import (
     ane_prefill_backend,
     ane_prefill_fraction,
@@ -1199,6 +1200,7 @@ class BatchedEngine(BaseEngine):
         output = await self._engine.generate(
             prompt=prompt,
             sampling_params=sampling_params,
+            cache_policy=coerce_cache_policy(kwargs.get("cache_policy")),
             request_id=kwargs.pop("_request_id", None),
             tools=tools,
             skip_cache_store=bool(kwargs.get("skip_cache_store", False)),
@@ -1285,6 +1287,7 @@ class BatchedEngine(BaseEngine):
         request_id = await engine.add_request(
             prompt=prompt,
             sampling_params=sampling_params,
+            cache_policy=coerce_cache_policy(kwargs.get("cache_policy")),
             request_id=kwargs.pop("_request_id", None),
             tools=tools,
             skip_cache_store=bool(kwargs.get("skip_cache_store", False)),
