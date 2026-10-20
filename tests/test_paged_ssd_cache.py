@@ -5023,6 +5023,69 @@ class TestRequestCachePersistencePolicy:
         finally:
             manager.close()
 
+    @pytest.mark.parametrize("shared_budget", [False, True])
+    @pytest.mark.parametrize("same_metadata", [False, True])
+    def test_memory_cold_save_racing_default_insert_preserves_only_exact_grants(
+        self, tmp_path, monkeypatch, shared_budget, same_metadata
+    ):
+        mx = pytest.importorskip("mlx.core")
+        budget = SharedHotCacheBudget(2 * 1024**2) if shared_budget else None
+        manager = PagedSSDCacheManager(
+            cache_dir=tmp_path / f"race-{shared_budget}-{same_metadata}",
+            max_size_bytes=1024**2,
+            hot_cache_max_bytes=1024**2,
+            hot_cache_budget=budget,
+            hot_cache_write_through=True,
+        )
+        block_hash = b"memory-default-hot-insert-race"
+        real_hot_cache_put = manager._hot_cache_put
+        state = {}
+
+        def insert_default_before_memory(candidate_hash, entry):
+            if not entry.get("persist_allowed", True) and not state.get("inserted"):
+                # save_block has passed its initial hot-cache miss and built
+                # the memory payload. Insert the default copy at the exact
+                # point before memory's hot-cache replacement to exercise the
+                # same TOCTOU interleaving without calling Metal from a worker.
+                state["inserted"] = True
+                assert manager.save_block(
+                    block_hash,
+                    self._cache_data(mx),
+                    32,
+                    layer_cache_types=["KVCache"],
+                    layer_meta_states=[(32,)],
+                )
+                state["default_entry"] = manager._hot_cache_get(block_hash)
+            return real_hot_cache_put(candidate_hash, entry)
+
+        monkeypatch.setattr(
+            manager, "_hot_cache_put", insert_default_before_memory
+        )
+        memory_meta = (32,) if same_metadata else (31,)
+        try:
+            memory_saved = manager.save_block(
+                block_hash,
+                self._cache_data(mx),
+                32,
+                layer_cache_types=["KVCache"],
+                layer_meta_states=[memory_meta],
+                cache_mode="memory",
+            )
+            assert manager.wait_for_pending_writes(5.0)
+            final_entry = manager._hot_cache_get(block_hash)
+            default_entry = state["default_entry"]
+            assert final_entry is not None
+            assert final_entry["persist_allowed"] is True
+            if same_metadata:
+                assert memory_saved is True
+                assert final_entry is not default_entry
+            else:
+                assert memory_saved is False
+                assert final_entry is default_entry
+            assert manager._get_file_path(block_hash).exists()
+        finally:
+            manager.close()
+
     def test_memory_mode_is_not_written_by_write_through_clear_or_close(
         self, tmp_path
     ):
@@ -5181,6 +5244,42 @@ class TestRequestCachePersistencePolicy:
             )
             assert not manager._get_file_path(block_hash).exists()
             assert manager.grant_persistence(block_hash)
+            self._wait_for_writes(manager)
+            entry = manager._hot_cache_get(block_hash)
+            assert entry is not None
+            assert entry["persist_allowed"] is True
+            assert entry["dirty"] is False
+            assert manager._get_file_path(block_hash).exists()
+        finally:
+            manager.close()
+
+    def test_default_duplicate_save_grants_memory_entry_with_write_through(
+        self, tmp_path
+    ):
+        mx = pytest.importorskip("mlx.core")
+        cache_dir = tmp_path / "default-duplicate-write-through"
+        manager = PagedSSDCacheManager(
+            cache_dir=cache_dir,
+            max_size_bytes=1024**2,
+            hot_cache_max_bytes=1024**2,
+            hot_cache_write_through=True,
+        )
+        block_hash = b"default-duplicate-grants-memory"
+        try:
+            assert manager.save_block(
+                block_hash,
+                self._cache_data(mx),
+                32,
+                layer_cache_types=["KVCache"],
+                cache_mode="memory",
+            )
+            assert not manager._get_file_path(block_hash).exists()
+            assert manager.save_block(
+                block_hash,
+                self._cache_data(mx),
+                32,
+                layer_cache_types=["KVCache"],
+            )
             self._wait_for_writes(manager)
             entry = manager._hot_cache_get(block_hash)
             assert entry is not None

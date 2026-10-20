@@ -2003,6 +2003,57 @@ class PagedSSDCacheManager(CacheManager):
             return self._hot_cache_budget.remaining_bytes
         return max(0, self._hot_cache_max_bytes - self._hot_cache_total_bytes)
 
+    def _same_compatible_hot_artifact(
+        self, block_hash: bytes, old: dict, new: dict
+    ) -> bool:
+        """Whether two hot entries represent the same compatible payload."""
+        old_meta = old.get("block_metadata")
+        new_meta = new.get("block_metadata")
+        if not isinstance(old_meta, PagedSSDBlockMetadata) or not isinstance(
+            new_meta, PagedSSDBlockMetadata
+        ):
+            return False
+        if old_meta.block_hash != block_hash or new_meta.block_hash != block_hash:
+            return False
+        if not self._is_compatible_block(old_meta) or not self._is_compatible_block(
+            new_meta
+        ):
+            return False
+        if (
+            old_meta.token_count != new_meta.token_count
+            or old_meta.num_layers != new_meta.num_layers
+            or old_meta.model_name != new_meta.model_name
+            or old_meta.block_size != new_meta.block_size
+            or old_meta.cache_signature != new_meta.cache_signature
+            or _canonicalize_layer_cache_types(old_meta.layer_cache_types)
+            != _canonicalize_layer_cache_types(new_meta.layer_cache_types)
+            or old_meta.parent_hash != new_meta.parent_hash
+            or old_meta.tail_terminal != new_meta.tail_terminal
+        ):
+            return False
+        try:
+            old_meta_states = json.dumps(old_meta.layer_meta_states, sort_keys=True)
+            new_meta_states = json.dumps(new_meta.layer_meta_states, sort_keys=True)
+        except (TypeError, ValueError):
+            return False
+        return old_meta_states == new_meta_states
+
+    def _preserve_hot_cache_replacement_permission(
+        self, block_hash: bytes, old: dict | None, new: dict
+    ) -> bool:
+        """Reconcile an entry replacement while the hot-cache lock is held."""
+        if old is None:
+            return True
+        same_artifact = self._same_compatible_hot_artifact(block_hash, old, new)
+        if not same_artifact:
+            # A restrictive save that raced with another insertion must leave
+            # that other artifact intact; it cannot replace it or inherit its
+            # persistence grant.
+            return bool(new.get("persist_allowed", True))
+        if old.get("persist_allowed", True):
+            new["persist_allowed"] = True
+        return True
+
     def _handle_hot_cache_eviction(self, block_hash: bytes, entry: dict) -> None:
         self._stats["hot_cache_evictions"] += 1
         if entry.get("staging"):
@@ -2031,6 +2082,11 @@ class PagedSSDCacheManager(CacheManager):
 
         if self._hot_cache_budget is not None:
             with self._hot_cache_lock:
+                old = self._hot_cache.get(block_hash)
+                if not self._preserve_hot_cache_replacement_permission(
+                    block_hash, old, entry
+                ):
+                    return False
                 old = self._hot_cache.pop(block_hash, None)
                 if old is not None:
                     self._hot_cache_total_bytes -= self._hot_cache_entry_size(old)
@@ -2046,7 +2102,12 @@ class PagedSSDCacheManager(CacheManager):
 
         with self._hot_cache_lock:
             # Remove old entry if updating
-            if block_hash in self._hot_cache:
+            old = self._hot_cache.get(block_hash)
+            if not self._preserve_hot_cache_replacement_permission(
+                block_hash, old, entry
+            ):
+                return False
+            if old is not None:
                 old = self._hot_cache.pop(block_hash)
                 self._hot_cache_total_bytes -= self._hot_cache_entry_size(old)
 
@@ -3657,7 +3718,7 @@ class PagedSSDCacheManager(CacheManager):
 
         if hot_entry is not None and not replace_existing:
             if cache_mode == "default":
-                hot_entry["persist_allowed"] = True
+                self.grant_persistence(block_hash)
             if hot_cache_write_back or self._hot_cache_only:
                 self._stats["hits"] += 1
                 return True
