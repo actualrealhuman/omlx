@@ -54,6 +54,7 @@ from mlx_vlm.models import cache as _vlm_cache
 from .cache.deepseek_v41_delta import compact_snapshot as compact_deepseek_v41_snapshot
 from .cache.observability import BoundarySnapshotDiagnostics, CacheRateTracker
 from .cache.paged_cache import PagedCacheManager
+from .cache.policy import CacheMode, CachePolicy
 from .cache.pooling_delta import compact_pooling_cache_snapshot
 from .cache.prefix_cache import BlockAwarePrefixCache, cachelist_pm_member_plan
 from .decode_activity import get_decode_activity
@@ -1960,6 +1961,11 @@ class _ResumedStopSequences:
         return self._matcher
 
 
+def _request_kv_cache_mode(request: Any) -> CacheMode:
+    policy = getattr(request, "cache_policy", None)
+    return policy.kv if isinstance(policy, CachePolicy) else "default"
+
+
 class _BoundarySnapshotProvider:
     """Dict-like loader for extracted boundary snapshots.
 
@@ -2821,6 +2827,7 @@ class Scheduler:
         extra_key_token_start: int | None,
         extra_key_ranges: list[tuple[int, tuple[Any, ...]]] | None,
         hot_cache_write_back: bool = True,
+        cache_mode: CacheMode = "default",
     ) -> None:
         """Run store_cache + paged_cache cleanup off the inference thread.
 
@@ -2856,6 +2863,14 @@ class Scheduler:
         threading.RLock so concurrent access from main and worker is safe.
         """
         self._store_cache_thread_id = threading.get_ident()
+        if cache_mode == "none":
+            if self.paged_cache_manager is not None:
+                table = self.paged_cache_manager.get_block_table(request_id)
+                if table:
+                    self.paged_cache_manager.release_for_eviction(table.block_ids)
+            if self.block_aware_cache is not None:
+                self.block_aware_cache.clear_request_entry(request_id)
+            return
         try:
             # Hold _mx_buffer_access_lock across the worker's mx-buffer
             # access. store_cache eventually drives _extract_tensor_bytes,
@@ -2880,6 +2895,7 @@ class Scheduler:
                     extra_key_ranges=extra_key_ranges,
                     hot_cache_write_back=hot_cache_write_back,
                     _store_tail_terminal=store_tail_terminal,
+                    **({"cache_mode": cache_mode} if cache_mode != "default" else {}),
                 )
             if block_table is None and self.paged_cache_manager is not None:
                 block_table = self.paged_cache_manager.get_block_table(request_id)
@@ -8432,6 +8448,9 @@ class Scheduler:
         snapshot_block_size: int | None = None,
     ) -> None:
         """Record a prefill boundary or a verified terminal response snapshot."""
+        cache_mode = _request_kv_cache_mode(self.requests.get(request_id))
+        if cache_mode == "none":
+            return
         if self._model_has_unreconstructible_cache():
             return
 
@@ -8500,7 +8519,7 @@ class Scheduler:
         # Offload snapshot to SSD if store is available, keeping only a
         # None marker in the dict.  Falls back to in-memory storage when
         # the SSD store is unavailable or the write fails.
-        if self._boundary_snapshot_store is not None:
+        if self._boundary_snapshot_store is not None and cache_mode == "default":
             # Keep the extraction + serialization eval on the per-engine
             # stream, mirroring _eval_snapshot_cache on the in-memory path
             # below. save() slices the live cache state and mx.eval's it on
@@ -8547,6 +8566,10 @@ class Scheduler:
             )
             storage = "memory"
 
+        if cache_mode == "memory":
+            self._trim_memory_boundary_snapshots()
+            if token_count not in self._boundary_cache_snapshots.get(request_id, {}):
+                return
         self._boundary_snapshot_required = True
         self._enable_mtp_boundary_alignment()
         self._boundary_snapshot_diagnostics.record(
@@ -8566,6 +8589,37 @@ class Scheduler:
         )
 
     _PREFILL_SNAPSHOT_MARKER = "__prefill_extracted__"
+
+    def _trim_memory_boundary_snapshots(self) -> None:
+        """Bound request-local checkpoints before handing them to cache storage.
+
+        Completed reusable artifacts are separately charged to the hot tier.
+        A missing checkpoint is a cache miss, never permission to spill to SSD.
+        """
+        limit = max(0, int(getattr(self.config, "hot_cache_max_size", 0) or 0))
+        shared = getattr(self.config, "hot_cache_budget", None)
+        if shared is not None:
+            limit = min(limit, max(0, int(shared.remaining_bytes)))
+
+        def size(value: Any) -> int:
+            if isinstance(value, dict):
+                return sum(size(v) for v in value.values())
+            if isinstance(value, (list, tuple)):
+                return sum(size(v) for v in value)
+            return int(value.nbytes) if isinstance(value, mx.array) else 0
+
+        entries = [
+            (rid, tc, size(value))
+            for rid, snapshots in self._boundary_cache_snapshots.items()
+            if _request_kv_cache_mode(self.requests.get(rid)) == "memory"
+            for tc, value in snapshots.items()
+        ]
+        total = sum(nbytes for _, _, nbytes in entries)
+        for rid, tc, nbytes in entries:
+            if total <= limit:
+                break
+            self._boundary_cache_snapshots[rid].pop(tc, None)
+            total -= nbytes
 
     def _prefill_snapshot_value(self, snapshot_cache: list[Any]) -> Any:
         """In-memory snapshot value: pre-extracted states when possible.
@@ -8887,6 +8941,9 @@ class Scheduler:
 
     def _maybe_capture_boundary_snapshot(self, request: Request, uid: int) -> None:
         """Capture cache snapshot exactly at block boundaries for safe reuse."""
+        cache_mode = _request_kv_cache_mode(request)
+        if cache_mode == "none":
+            return
         if self._model_has_unreconstructible_cache():
             return
 
@@ -8925,7 +8982,7 @@ class Scheduler:
         snapshot_block_size = self._boundary_snapshot_block_size(request, total_tokens)
 
         # Offload to SSD with in-memory fallback.
-        if self._boundary_snapshot_store is not None:
+        if self._boundary_snapshot_store is not None and cache_mode == "default":
             with self._phase_timer("boundary_snapshot_save"):
                 saved = self._boundary_snapshot_store.save(
                     request.request_id,
@@ -8967,6 +9024,10 @@ class Scheduler:
             )
             storage = "memory"
 
+        if cache_mode == "memory":
+            self._trim_memory_boundary_snapshots()
+            if total_tokens not in self._boundary_cache_snapshots.get(request.request_id, {}):
+                return
         self._boundary_snapshot_diagnostics.record(
             "capture_success",
             request_id=request.request_id,
@@ -9395,7 +9456,7 @@ class Scheduler:
 
         Only an aligned end qualifies; a prefill tail below it does not block it.
         """
-        if getattr(request, "skip_cache_store", False):
+        if getattr(request, "skip_cache_store", False) or _request_kv_cache_mode(request) == "none":
             return
         token_count = (
             request.num_tokens
@@ -10431,6 +10492,8 @@ class Scheduler:
                         request.vlm_extra_key_token_start_for_cache
                     ),
                     extra_key_ranges=request.vlm_extra_key_ranges_for_cache,
+                    **({"cache_mode": _request_kv_cache_mode(request)}
+                       if _request_kv_cache_mode(request) != "default" else {}),
                 )
             fetch_ms = (time.perf_counter() - fetch_started) * 1000.0
             # A split GDN sidecar represents state at a full block boundary.
@@ -10467,7 +10530,10 @@ class Scheduler:
                     self.paged_cache_manager.delete_block_table(request.request_id)
                 block_table = None
             if block_table and block_table.num_tokens > 0:
-                bypass_hot_cache = self._bypass_hot_cache_under_pressure()
+                bypass_hot_cache = (
+                    self._bypass_hot_cache_under_pressure()
+                    or _request_kv_cache_mode(request) == "none"
+                )
                 if bypass_hot_cache:
                     logger.info(
                         "Skipping hot-cache promotion for %s under memory pressure",
@@ -10488,6 +10554,8 @@ class Scheduler:
                     reconstructed = self.block_aware_cache.reconstruct_cache(
                         block_table,
                         promote_to_hot_cache=not bypass_hot_cache,
+                        **({"cache_mode": _request_kv_cache_mode(request)}
+                           if _request_kv_cache_mode(request) != "default" else {}),
                     )
                 reconstruct_ms = (time.perf_counter() - reconstruct_started) * 1000.0
                 if block_table.num_tokens < minimum_prefix:
@@ -10565,6 +10633,14 @@ class Scheduler:
                                 f"Request {request.request_id}: exact cache hit could "
                                 f"not be trimmed safely, falling back to full prefill"
                             )
+                    if (
+                        request.prompt_cache is not None
+                        and request.cached_tokens > 0
+                        and _request_kv_cache_mode(request) == "default"
+                    ):
+                        grant = getattr(self.block_aware_cache, "grant_persistence", None)
+                        if callable(grant):
+                            grant(block_table)
                     if block_table.num_tokens < original_tokens:
                         logger.debug(
                             f"Request {request.request_id}: partial cache hit, "
@@ -11307,6 +11383,8 @@ class Scheduler:
             sync_and_clear_cache=lambda: Scheduler._clear_cache(self),
             log=logger,
             use_hot_cache=not self._bypass_hot_cache_under_pressure(),
+            **({"cache_mode": _request_kv_cache_mode(request)}
+               if _request_kv_cache_mode(request) != "default" else {}),
         )
 
     def _cleanup_specprefill(self, request_id: str) -> None:
@@ -11824,6 +11902,7 @@ class Scheduler:
             self.block_aware_cache is not None
             and not self._admission_paused
             and not getattr(request, "skip_cache_store", False)
+            and _request_kv_cache_mode(request) != "none"
             and request.specprefill_indices is None
             and not self._model_has_unreconstructible_cache()
         )
@@ -11878,6 +11957,7 @@ class Scheduler:
                 request.vlm_extra_key_token_start_for_cache,
                 request.vlm_extra_key_ranges_for_cache,
                 not self._bypass_hot_cache_under_pressure(),
+                _request_kv_cache_mode(request),
             )
         except BaseException:
             if gate is not None:
@@ -13862,7 +13942,7 @@ class Scheduler:
                 # The token list keeps the drafter context for prefix hits.
                 keep = request is not None and not getattr(
                     request, "vlm_extra_keys_for_cache", None
-                )
+                ) and _request_kv_cache_mode(request) != "none"
                 finished_drafter.release_request(
                     request_id,
                     (
@@ -13889,6 +13969,7 @@ class Scheduler:
                     # blocks are released for eviction.
                     skip_store = (
                         getattr(request, "skip_cache_store", False)
+                        or _request_kv_cache_mode(request) == "none"
                         or self._model_has_unreconstructible_cache()
                     )
                     if skip_store or (
@@ -14103,6 +14184,7 @@ class Scheduler:
                                         request.vlm_extra_key_token_start_for_cache,
                                         request.vlm_extra_key_ranges_for_cache,
                                         hot_cache_write_back,
+                                        _request_kv_cache_mode(request),
                                     )
                                 except BaseException:
                                     if gate is not None:
@@ -14133,6 +14215,7 @@ class Scheduler:
                                     request.vlm_extra_key_token_start_for_cache,
                                     request.vlm_extra_key_ranges_for_cache,
                                     hot_cache_write_back,
+                                    _request_kv_cache_mode(request),
                                 )
                             logger.debug(
                                 f"Submitted async store_cache for {request_id} "
@@ -14743,6 +14826,8 @@ class Scheduler:
     def _memory_requeue_blocker(self, request: "Request") -> str | None:
         """Why ``request`` cannot be requeued, or None. Safe on any thread."""
         request_id = request.request_id
+        if _request_kv_cache_mode(request) != "default":
+            return "request prohibits SSD cache spill"
         if request.memory_requeues >= self._MAX_MEMORY_REQUEUES:
             return "requeue budget spent"
         if (
@@ -14896,6 +14981,8 @@ class Scheduler:
 
     def _store_for_memory_requeue(self, request: "Request") -> int:
         """Write a live request's KV to the paged SSD cache; returns tokens kept."""
+        if _request_kv_cache_mode(request) != "default":
+            return 0
         request_id = request.request_id
         state = self._prefill_states.get(request_id)
         if state is not None:
