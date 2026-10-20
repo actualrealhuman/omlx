@@ -152,6 +152,10 @@ def _effective_kv_mode(engine, requested: str) -> str:
 
 
 def _effective_image_mode(engine, requested: str) -> str:
+    if getattr(engine, "_vision_cache_enabled", None) is False:
+        return "disabled"
+    if getattr(engine, "_vision_feature_cache_supported", None) is False:
+        return "disabled"
     cache = getattr(engine, "_vision_cache", None)
     if cache is None:
         return "disabled"

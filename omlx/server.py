@@ -94,6 +94,7 @@ from .api.anthropic_utils import (
 )
 from .api.body_limit import RequestBodySizeLimitMiddleware
 from .api.cache_policy import (
+    CachePolicyAcknowledgement,
     cache_policy_response_headers,
     effective_cache_policy,
     ensure_cache_policy_supported,
@@ -4936,7 +4937,7 @@ async def create_chat_completion(
             request,
             http_request,
             policy_headers=cache_policy_response_headers(
-                CachePolicy(kv="none", images="none")
+                CachePolicyAcknowledgement(kv="disabled", images="disabled")
             ),
         )
 

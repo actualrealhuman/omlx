@@ -201,6 +201,43 @@ def test_effective_ack_uses_active_manager_and_best_effort_memory_choice():
 
 
 @pytest.mark.parametrize(
+    "unsupported_flag",
+    ["_vision_cache_enabled", "_vision_feature_cache_supported"],
+)
+def test_image_ack_is_disabled_when_model_does_not_use_feature_cache(
+    unsupported_flag,
+):
+    engine = SimpleNamespace(
+        _vision_cache=SimpleNamespace(_cache_dir="/cache", _max_memory_bytes=1024),
+        **{unsupported_flag: False},
+    )
+    for requested in ("default", "memory", "none"):
+        ack = effective_cache_policy(
+            engine, CachePolicy(images=requested)
+        )
+        assert ack.images == "disabled"
+
+
+@pytest.mark.asyncio
+async def test_markitdown_chat_acknowledges_disabled_caches(monkeypatch):
+    response = Response(content="{}")
+    handler = AsyncMock(return_value=response)
+    monkeypatch.setattr(srv, "is_markitdown_model", lambda model: True)
+    monkeypatch.setattr(srv, "_create_markitdown_chat_completion", handler)
+
+    request = ChatCompletionRequest(
+        model="markitdown", messages=[{"role": "user", "content": "hello"}]
+    )
+    result = await srv.create_chat_completion(request, _http_request(), True)
+
+    assert result is response
+    assert handler.await_args.kwargs["policy_headers"] == {
+        "X-oMLX-KV-Cache": "disabled",
+        "X-oMLX-Image-Cache": "disabled",
+    }
+
+
+@pytest.mark.parametrize(
     "path,body",
     [
         ("/v1/completions", {"model": "m", "prompt": "p"}),
