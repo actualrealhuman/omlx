@@ -1634,7 +1634,13 @@ class BlockAwarePrefixCache(CacheManager):
                     )
                     if saved:
                         if split_gdn_layout and cache_mode == "memory":
-                            checkpoint_committed = bool(
+                            # Exact split chains need recurrent state only at
+                            # their terminal boundary. Earlier blocks carry
+                            # structural placeholders and are never exposed to
+                            # ordinary prefix matching.
+                            checkpoint_committed = (
+                                is_exact_split_block and not is_exact_terminal
+                            ) or bool(
                                 self._embedded_gdn_checkpoint_payloads(
                                     block_kv_data, layer_cache_types, block_meta
                                 )
@@ -1825,6 +1831,7 @@ class BlockAwarePrefixCache(CacheManager):
         tokens: list[int],
         cache_data: list[Any],
         model_cache_config: ModelCacheConfig | None = None,
+        cache_mode: CacheMode = "default",
     ) -> BlockTable | None:
         """Persist a complete prefix, including its exact terminal boundary.
 
@@ -1834,7 +1841,8 @@ class BlockAwarePrefixCache(CacheManager):
         chain and store one recurrent sidecar at the exact terminal; preceding
         blocks contain only KV slices and structural recurrent placeholders.
         """
-        if not tokens or self.paged_ssd_cache is None:
+        cache_mode = coerce_cache_policy({"kv": cache_mode}).kv
+        if cache_mode == "none" or not tokens or self.paged_ssd_cache is None:
             return None
 
         # Exact-prefix storage has no prefill-boundary provider. Split-GDN
@@ -1859,8 +1867,10 @@ class BlockAwarePrefixCache(CacheManager):
                 )
                 for layer_state in cache_data
             ]
-        if self._gdn_split_layout_supported(exact_layer_cache_types) and not callable(
-            self._exact_gdn_checkpoint_writer
+        if (
+            cache_mode != "memory"
+            and self._gdn_split_layout_supported(exact_layer_cache_types)
+            and not callable(self._exact_gdn_checkpoint_writer)
         ):
             logger.info(
                 "Skipping exact-prefix store for %s: split-GDN terminal "
@@ -1877,6 +1887,7 @@ class BlockAwarePrefixCache(CacheManager):
             model_cache_config=model_cache_config,
             hot_cache_write_back=False,
             _store_exact_terminal=True,
+            cache_mode=cache_mode,
         )
         if block_table is None or block_table.num_tokens != len(tokens):
             self.paged_cache.delete_block_table(request_id)
@@ -1979,8 +1990,13 @@ class BlockAwarePrefixCache(CacheManager):
         tokens: list[int],
         *,
         promote_to_hot_cache: bool,
+        cache_mode: CacheMode = "default",
     ) -> list[Any] | None:
         """Reconstruct a complete exact prefix and release temporary block refs."""
+        cache_mode = coerce_cache_policy({"kv": cache_mode}).kv
+        if cache_mode == "none":
+            return None
+        promote_to_hot_cache = promote_to_hot_cache and cache_mode == "default"
         block_table = self.fetch_exact_prefix(request_id, tokens)
         if block_table is None:
             self._exact_prefix_misses += 1
@@ -1994,6 +2010,7 @@ class BlockAwarePrefixCache(CacheManager):
             restored_cache = self.reconstruct_cache(
                 block_table,
                 promote_to_hot_cache=promote_to_hot_cache,
+                cache_mode=cache_mode,
             )
             if restored_cache is None or block_table.num_tokens != len(tokens):
                 self._exact_prefix_misses += 1
@@ -2003,6 +2020,31 @@ class BlockAwarePrefixCache(CacheManager):
             return restored_cache
         finally:
             self.release_cache(request_id)
+
+    def grant_exact_prefix_persistence(self, tokens: list[int]) -> int:
+        """Grant persistence to an exact prefix after its caller adopts it.
+
+        The caller must invoke this only after successful target-cache
+        reconstruction and adoption. Exact-prefix restore intentionally does
+        not grant persistence itself because the consumer may reject the
+        returned cache after reconstruction.
+        """
+        if not tokens or self.paged_ssd_cache is None:
+            return 0
+        grant = getattr(self.paged_ssd_cache, "grant_persistence", None)
+        if not callable(grant):
+            return 0
+        granted = 0
+        for block_hash, _token_count in self._exact_prefix_hashes(tokens):
+            try:
+                granted += bool(grant(block_hash))
+            except Exception as e:
+                logger.debug(
+                    "Failed to grant exact-prefix persistence for %s: %s",
+                    block_hash.hex()[:16],
+                    e,
+                )
+        return granted
 
     @staticmethod
     def _block_token_count_matches_slices(

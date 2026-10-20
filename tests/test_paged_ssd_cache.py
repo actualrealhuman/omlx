@@ -5161,6 +5161,35 @@ class TestRequestCachePersistencePolicy:
         assert not manager._get_file_path(unrelated).exists()
         assert len(list(cache_dir.rglob("*.safetensors"))) == 1
 
+    def test_default_grant_honors_configured_write_through(self, tmp_path):
+        mx = pytest.importorskip("mlx.core")
+        cache_dir = tmp_path / "grant-write-through"
+        manager = PagedSSDCacheManager(
+            cache_dir=cache_dir,
+            max_size_bytes=1024**2,
+            hot_cache_max_bytes=1024**2,
+            hot_cache_write_through=True,
+        )
+        block_hash = b"granted-memory-write-through"
+        try:
+            assert manager.save_block(
+                block_hash,
+                self._cache_data(mx),
+                32,
+                layer_cache_types=["KVCache"],
+                cache_mode="memory",
+            )
+            assert not manager._get_file_path(block_hash).exists()
+            assert manager.grant_persistence(block_hash)
+            self._wait_for_writes(manager)
+            entry = manager._hot_cache_get(block_hash)
+            assert entry is not None
+            assert entry["persist_allowed"] is True
+            assert entry["dirty"] is False
+            assert manager._get_file_path(block_hash).exists()
+        finally:
+            manager.close()
+
     def test_sink_rejects_ungranted_artifact_before_staging(self, tmp_path):
         manager = PagedSSDCacheManager(
             cache_dir=tmp_path / "sink",

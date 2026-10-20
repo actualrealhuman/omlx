@@ -3385,17 +3385,42 @@ class PagedSSDCacheManager(CacheManager):
                 entry["dirty"] = False
 
     def grant_persistence(self, block_hash: bytes) -> bool:
-        """Grant persistence to one exact artifact after validated adoption."""
+        """Grant persistence to one exact artifact after validated adoption.
+
+        When write-through is configured, immediately enqueue a newly granted
+        dirty hot entry. The enqueue happens after releasing the hot-cache
+        lock; concurrent eviction/clear uses the same idempotent pending-write
+        buffer path.
+        """
+        entry = None
+        enqueue = False
         with self._hot_cache_lock:
             entry = self._hot_cache.get(block_hash)
             if entry is not None:
                 entry["persist_allowed"] = True
-                return True
+                enqueue = (
+                    self._hot_cache_write_through
+                    and not self._hot_cache_only
+                    and entry.get("dirty", True)
+                )
+        if entry is not None:
+            if enqueue:
+                self._enqueue_ssd_write(block_hash, entry)
+            return True
+
         with self._pending_write_hashes_lock:
             entry = self._pending_write_buffers.get(block_hash)
             if entry is not None:
                 entry["persist_allowed"] = True
-                return True
+                enqueue = (
+                    self._hot_cache_write_through
+                    and not self._hot_cache_only
+                    and entry.get("dirty", True)
+                )
+        if entry is not None:
+            if enqueue:
+                self._enqueue_ssd_write(block_hash, entry)
+            return True
         return self._index.contains(block_hash)
 
     def _writer_loop(self) -> None:

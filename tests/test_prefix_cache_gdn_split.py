@@ -767,6 +767,63 @@ def test_split_exact_prefix_fails_closed_without_checkpoint_writer(tmp_path):
         ssd.close()
 
 
+def test_split_exact_prefix_memory_embeds_terminal_without_writer(tmp_path):
+    cache_dir = tmp_path / "memory-exact-prefix"
+    paged = PagedCacheManager(
+        block_size=BLOCK_SIZE,
+        max_blocks=100,
+        model_name="hybrid-model",
+        initial_blocks=100,
+    )
+    ssd = PagedSSDCacheManager(
+        cache_dir=cache_dir,
+        max_size_bytes=100 * 1024**2,
+        hot_cache_max_bytes=10 * 1024**2,
+        expected_model_name="hybrid-model",
+        expected_num_layers=2,
+        expected_block_size=BLOCK_SIZE,
+        expected_layer_cache_types=LAYER_TYPES,
+        gdn_ssd_split_enabled=True,
+    )
+    prefix = BlockAwarePrefixCache(
+        model=_HybridModel(),
+        paged_cache_manager=paged,
+        paged_ssd_cache_manager=ssd,
+        gdn_ssd_split_enabled=True,
+    )
+    tokens = list(range(BLOCK_SIZE * 2 + 1))
+    try:
+        stored = prefix.store_exact_prefix(
+            "memory-split-exact",
+            tokens,
+            _hybrid_extracted(len(tokens), float(len(tokens))),
+            cache_mode="memory",
+        )
+        assert stored is not None and stored.num_tokens == len(tokens)
+        assert ssd._gdn_sidecar_index.count == 0
+        assert list(cache_dir.rglob("*.safetensors")) == []
+
+        restored = prefix.restore_exact_prefix(
+            "memory-split-exact-restore",
+            tokens,
+            promote_to_hot_cache=True,
+            cache_mode="memory",
+        )
+        assert restored is not None
+        assert restored[0].keys_and_values()[0].shape[2] == len(tokens)
+        assert float(restored[1].cache[0][0, 0, 0]) == pytest.approx(float(len(tokens)))
+        assert ssd._gdn_sidecar_index.count == 0
+
+        assert prefix.grant_exact_prefix_persistence(tokens) == 3
+        ssd.clear_hot_cache()
+        assert ssd.wait_for_pending_writes(5.0)
+    finally:
+        ssd.close()
+
+    assert len(list(cache_dir.rglob("*.safetensors"))) == 3
+    assert list(cache_dir.rglob("*.gdn.safetensors")) == []
+
+
 def test_split_exact_prefix_commits_terminal_sidecar_and_restores(tmp_path):
     cache_dir = tmp_path / "cache"
     paged = PagedCacheManager(

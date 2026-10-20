@@ -359,6 +359,95 @@ class TestBlockAwarePrefixCache:
         finally:
             restarted_ssd_manager.close()
 
+    def test_exact_prefix_memory_mode_is_bounded_and_grants_after_adoption(
+        self, tmp_path
+    ):
+        import mlx.core as mx
+
+        cache_directory = tmp_path / "exact-prefix-memory"
+        prefix_cache, _, ssd_manager = self._make_ssd_prefix_cache(
+            cache_directory,
+            hot_cache_max_bytes=10 * 1024**2,
+        )
+        tokens = list(range(7))
+        keys = mx.arange(7, dtype=mx.float32).reshape(1, 1, 7, 1)
+        extracted_cache = [
+            {
+                "state": (keys, keys + 1),
+                "meta_state": (7,),
+                "class_name": "KVCache",
+                "cache_type": "KVCache",
+            }
+        ]
+
+        try:
+            stored = prefix_cache.store_exact_prefix(
+                "memory-static-prefix", tokens, extracted_cache, cache_mode="memory"
+            )
+            assert stored is not None and stored.num_tokens == len(tokens)
+            assert ssd_manager.get_stats().hot_cache_entries > 0
+            assert list(cache_directory.rglob("*.safetensors")) == []
+
+            entries_before_restore = ssd_manager.get_stats().hot_cache_entries
+            restored = prefix_cache.restore_exact_prefix(
+                "memory-static-restore",
+                tokens,
+                promote_to_hot_cache=True,
+                cache_mode="memory",
+            )
+            assert restored is not None
+            assert restored[0].keys_and_values()[0].shape[2] == len(tokens)
+            assert ssd_manager.get_stats().hot_cache_entries == entries_before_restore
+
+            # The consumer calls this only after it has accepted the restored
+            # exact prefix. The grant covers this chain, not unrelated entries.
+            assert prefix_cache.grant_exact_prefix_persistence(tokens) == 2
+            ssd_manager.clear_hot_cache()
+            assert ssd_manager.wait_for_pending_writes(5.0)
+        finally:
+            ssd_manager.close()
+
+        assert len(list(cache_directory.rglob("*.safetensors"))) == 2
+
+    def test_exact_prefix_none_mode_skips_store_and_restore(self, tmp_path):
+        import mlx.core as mx
+
+        cache_directory = tmp_path / "exact-prefix-none"
+        prefix_cache, _, ssd_manager = self._make_ssd_prefix_cache(
+            cache_directory,
+            hot_cache_max_bytes=10 * 1024**2,
+        )
+        tokens = list(range(7))
+        keys = mx.ones((1, 1, 7, 1))
+        extracted_cache = [
+            {
+                "state": (keys, keys),
+                "meta_state": (7,),
+                "class_name": "KVCache",
+                "cache_type": "KVCache",
+            }
+        ]
+        try:
+            assert (
+                prefix_cache.store_exact_prefix(
+                    "none-static-prefix", tokens, extracted_cache, cache_mode="none"
+                )
+                is None
+            )
+            assert (
+                prefix_cache.restore_exact_prefix(
+                    "none-static-restore",
+                    tokens,
+                    promote_to_hot_cache=True,
+                    cache_mode="none",
+                )
+                is None
+            )
+            assert ssd_manager.get_stats().hot_cache_entries == 0
+            assert list(cache_directory.rglob("*.safetensors")) == []
+        finally:
+            ssd_manager.close()
+
     def test_aligned_exact_prefix_does_not_reuse_placeholder_terminal(self, tmp_path):
         """An aligned static tip must not collide with an ordinary chain block."""
         import mlx.core as mx
