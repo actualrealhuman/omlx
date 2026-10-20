@@ -4473,7 +4473,6 @@ async def create_completion(
     cache_policy, explicit_cache_components = resolve_request_cache_policy(
         request.cache_policy,
         http_request,
-        body_present="cache_policy" in request.model_fields_set,
     )
     if _server_state.oq_manager and _server_state.oq_manager.is_quantizing:
         raise HTTPException(
@@ -4488,7 +4487,7 @@ async def create_completion(
         resolved_model = _serving_model_id(lease, request.model)
         ensure_cache_policy_supported(engine, cache_policy, explicit_cache_components)
         policy_headers = cache_policy_response_headers(
-            effective_cache_policy(engine, cache_policy, _server_state.global_settings)
+            effective_cache_policy(engine, cache_policy)
         )
 
         # Handle single prompt or list of prompts
@@ -4918,7 +4917,6 @@ async def create_chat_completion(
     cache_policy, explicit_cache_components = resolve_request_cache_policy(
         request.cache_policy,
         http_request,
-        body_present="cache_policy" in request.model_fields_set,
     )
     # Log incoming request summary at debug, message content at trace
     logger.debug(
@@ -4956,7 +4954,7 @@ async def create_chat_completion(
         model_load_duration = time.perf_counter() - load_start
         ensure_cache_policy_supported(engine, cache_policy, explicit_cache_components)
         policy_headers = cache_policy_response_headers(
-            effective_cache_policy(engine, cache_policy, _server_state.global_settings)
+            effective_cache_policy(engine, cache_policy)
         )
 
         request = await _preprocess_markitdown_files_for_llm(request)
@@ -7561,7 +7559,6 @@ async def create_anthropic_message(
     cache_policy, explicit_cache_components = resolve_request_cache_policy(
         request.cache_policy,
         http_request,
-        body_present="cache_policy" in request.model_fields_set,
     )
     logger.debug(
         f"Anthropic Messages request: model={request.model}, "
@@ -7580,7 +7577,7 @@ async def create_anthropic_message(
         engine = await get_engine_for_model(request.model, lease=lease)
         ensure_cache_policy_supported(engine, cache_policy, explicit_cache_components)
         policy_headers = cache_policy_response_headers(
-            effective_cache_policy(engine, cache_policy, _server_state.global_settings)
+            effective_cache_policy(engine, cache_policy)
         )
 
         # Use the exact model selected by the pool, including fallback.
@@ -8305,7 +8302,6 @@ async def create_response(
     cache_policy, explicit_cache_components = resolve_request_cache_policy(
         request.cache_policy,
         http_request,
-        body_present="cache_policy" in request.model_fields_set,
     )
     if _server_state.oq_manager and _server_state.oq_manager.is_quantizing:
         raise HTTPException(
@@ -8326,7 +8322,7 @@ async def create_response(
         resolved_model = _serving_model_id(lease, request.model)
         ensure_cache_policy_supported(engine, cache_policy, explicit_cache_components)
         policy_headers = cache_policy_response_headers(
-            effective_cache_policy(engine, cache_policy, _server_state.global_settings)
+            effective_cache_policy(engine, cache_policy)
         )
 
         # Images in function_call_output lists survive only for engines that
