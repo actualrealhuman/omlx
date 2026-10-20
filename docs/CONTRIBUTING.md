@@ -7,8 +7,8 @@ feature revision, your target revision, the problem, and the checks you ran;
 keep each change focused. See the [feature index](FORK_FEATURES.md) and
 [integration guide](INTEGRATING_FEATURES.md). Review and support are best effort;
 this source-sharing fork does not provide binaries, promise releases, or assume
-product maintenance obligations. Planned entries are not requests to adopt or
-evidence of a completed, tested publication.
+product maintenance obligations. The feature index distinguishes prepared
+candidates from published sources and reports their validation status.
 
 The remaining guidance describes contributions to
 [upstream oMLX](https://github.com/jundot/omlx). Its maintainer policies, CI,

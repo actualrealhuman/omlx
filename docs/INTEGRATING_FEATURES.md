@@ -42,12 +42,15 @@ and extract only the relevant changes. Merging `personal/main` brings unrelated
 additions with it. A feature manifest records build identity; changing feature
 labels does not select code.
 
-The planned combined inference-controls source is being prepared against
-upstream `73322ed1`. Its branch reference is not yet a fixed, published
-snapshot. Once its index entry has a final commit, inspect that snapshot and
-its accompanying feature guide; do not use a moving branch tip as a substitute
-for the fixed revision. The older Inference Throttle topic branch remains a
-separate published source and is not superseded by this planned combination.
+The combined inference-controls candidate is fixed at
+[`60b0e91a`](https://github.com/actualrealhuman/omlx/tree/60b0e91ae46977266b73fbf9c2b612c5c4a11b25),
+based on upstream `73322ed1`. It is not yet published and awaits runtime
+qualification. Its [user guide](https://github.com/actualrealhuman/omlx/blob/60b0e91ae46977266b73fbf9c2b612c5c4a11b25/docs/inference-controls.md)
+describes behavior; its [testing notes](https://github.com/actualrealhuman/omlx/blob/60b0e91ae46977266b73fbf9c2b612c5c4a11b25/docs/TESTING.md#inference-controls)
+identify candidate checks, none of which are claimed as run for runtime
+qualification here. Do not substitute a moving branch tip for this revision. The
+older Inference Throttle topic branch remains a separate published source and is
+not superseded by this candidate.
 
 Resolve dependencies explicitly. Chat persistence changes share browser state
 and transaction rules; battery control and throttle code share inference
@@ -68,12 +71,13 @@ and supported engine paths. Real-model checks and controlled measurements are
 needed for performance claims. Building the native app requires its own
 toolchain and checks.
 
-For cooperative scheduling changes, inspect local batched text and VLM
-coverage, allowance composition, persisted bypass behavior, and handoff between
-interactive and background work. A strict interactive priority may leave
-background work waiting while interactive demand continues. Percentages describe
-configured allowances and activity, not watts; avoid general performance claims
-without measurements on the relevant workload and hardware.
+For cooperative scheduling changes, inspect supported local batched text and
+VLM coverage, allowance composition, persisted bypass behavior, and handoff
+between interactive and background work. A strict interactive priority may
+leave background work waiting while interactive demand continues. Percentages
+describe configured allowances, not observed utilization or watts; runtime
+status is separate. Avoid general performance claims without measurements on
+the relevant workload and hardware.
 
 Coordinate resource-intensive tests with whoever is using the machine. Follow
 the target repository's approval rules for installs, launches, publishing, and

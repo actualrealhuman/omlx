@@ -16,10 +16,11 @@ known dependencies, and validation pointers, plus a reusable integration guide.
 Describe older topic branches and combined-build sources honestly. Publication
 of an index is not evidence that every addition works on every upstream version.
 
-Combined inference controls may be documented as a planned source while a
-candidate is under review. Give readers a fixed commit only after the candidate
-tip and its validation scope are settled. Keep the already-published Inference
-Throttle entry distinct: the combined work does not replace that source.
+Combined inference controls may be documented as a prepared candidate before
+publication, with a fixed commit and explicit validation status. Update those
+references if source changes after qualification. Keep the already-published
+Inference Throttle entry distinct: the combined work does not replace that
+source.
 
 Prebuilt binaries, a release schedule, and general compatibility or support
 commitments are outside this scope. The personal build's upstream integration

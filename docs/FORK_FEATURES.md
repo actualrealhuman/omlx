@@ -12,21 +12,22 @@ declared there, not a claim that the ancestor is a release tag. Validation
 pointers tell you what to rerun after adapting a change, not that this guide
 has retested every source snapshot.
 
-## Combined inference controls (planned)
+## Combined inference controls (awaiting runtime qualification)
 
-| Addition | Planned source | Baseline | Scope and integration notes |
+| Addition | Candidate source | Baseline | Scope and integration notes |
 | --- | --- | --- | --- |
-| Combined inference controls | [feature/inference-controls][inference-controls-branch] (planned; fixed commit pending final candidate review) | Current upstream snapshot [73322ed1][base-inference-controls] | Intended to combine Inference Throttle, battery protection, model-turn scheduling, hierarchical global/class/model allowances, the persisted master bypass, and the accepted dashboard chart and model selection. This source is being prepared; the branch link is not yet a published snapshot. See the separate, already-published [Inference Throttle source][throttle]. |
+| Combined inference controls | [feature/inference-controls][inference-controls-branch], candidate [60b0e91a][inference-controls-candidate] | Current upstream snapshot [73322ed1][base-inference-controls] | Combines Inference Throttle, battery protection, model-turn scheduling, hierarchical global/class/model allowances, the persisted master bypass, and accepted dashboard chart and model selection. The candidate is not yet published and awaits runtime qualification. Read its [user guide][inference-controls-guide] and [validation notes][inference-controls-tests]. The separate, already-published [Inference Throttle source][throttle] remains available and is not superseded. |
 
-The combined scheduler is cooperative and covers local batched text and VLM
-workloads. Configured percentages describe relative allowances and observed
-activity; they do not measure watts or GPU utilization. Strict interactive
-priority can starve background work while interactive demand continues. Results
-depend on the model, workload, machine, and surrounding load; no universal
-performance improvement is promised. The code branch will carry the detailed
-user guide and exact integration/validation notes. Replace the pending fixed
-commit reference above after the candidate tip is finalized, before publishing
-this index.
+The combined scheduler is cooperative and covers supported local batched text
+and VLM work. Percentages are configured relative allowances, not observed
+utilization, watts, or GPU utilization; runtime status is reported separately.
+Strict interactive priority can starve background work while interactive demand
+continues. Results depend on the model, workload, machine, and surrounding load;
+no universal performance improvement is promised. Static source/history review
+and cached web generation passed. Runtime qualification remains unrun, including
+behavioral tests, native compilation, and model work. If the candidate code
+changes after qualification, update the fixed source and document links here to
+the newly reviewed commit.
 
 ## Published topic branches
 
@@ -69,7 +70,7 @@ needed for your integration.
 | Topic source | Checks to inspect and adapt |
 | --- | --- |
 | Inference Throttle | `tests/test_inference_pacing.py`, `test_admin_inference_throttle_ui.py`, `test_mlx_lm_mtp_patch.py`, engine/core, settings, and prefill regression tests. Read [the source testing notes][throttle-tests]. Check cancellation, multiple engines, 100% bypass, and MTP timing on the target. |
-| Combined inference controls (planned) | Candidate-specific scheduler, battery, allowance, settings/API, dashboard, text/VLM, and migration tests will be listed with the fixed source snapshot. No validation result is claimed here while the branch and final tip are pending. |
+| Combined inference controls (awaiting runtime qualification) | Candidate-specific scheduler, battery, allowance, settings/API, dashboard, text/VLM, and migration checks are described in the candidate's [validation notes][inference-controls-tests]. They have not been run for runtime qualification. |
 | Original battery controls | `tests/test_power_sources.py`, `test_power_management.py`, `test_engine_core.py`, `test_decode_fairness.py`, and settings tests. Inspect the governor's assumptions before real battery/power-transition checks. |
 | Cache inspection | `tests/test_inspection.py`, `test_inspection_files.py`, `test_cache_inspection_integration.py`, settings and VLM tests. Check disabled behavior, creation, eviction, and cache restoration. |
 | Live context | Request, engine/core, batched/VLM/DFlash, context-window, and active-model visibility tests changed by the source commit. |
@@ -88,6 +89,9 @@ someone else's checkout. See the [source-sharing scope](decisions/fork-source-sh
 [throttle-scope]: https://github.com/actualrealhuman/omlx/blob/ee978a1c466323aa366f82bb831e99fe423583ea/docs/decisions/inference-throttle.md
 [throttle-tests]: https://github.com/actualrealhuman/omlx/blob/ee978a1c466323aa366f82bb831e99fe423583ea/docs/TESTING.md
 [inference-controls-branch]: https://github.com/actualrealhuman/omlx/tree/feature/inference-controls
+[inference-controls-candidate]: https://github.com/actualrealhuman/omlx/tree/60b0e91ae46977266b73fbf9c2b612c5c4a11b25
+[inference-controls-guide]: https://github.com/actualrealhuman/omlx/blob/60b0e91ae46977266b73fbf9c2b612c5c4a11b25/docs/inference-controls.md
+[inference-controls-tests]: https://github.com/actualrealhuman/omlx/blob/60b0e91ae46977266b73fbf9c2b612c5c4a11b25/docs/TESTING.md#inference-controls
 [base-inference-controls]: https://github.com/actualrealhuman/omlx/commit/73322ed188a25b9ce2e490d3137d810f7d50128d
 [battery-branch]: https://github.com/actualrealhuman/omlx/tree/feature/battery-power-management
 [battery]: https://github.com/actualrealhuman/omlx/tree/3073fc3f773b0ccfdd4bf39c3c5f1adaf94bb186
