@@ -18,8 +18,8 @@ This documentation branch provides the index and upstream source baseline.
 The additions live on the branches and revisions linked in the index; cloning
 this branch does not enable them all. `main` is kept as an upstream mirror,
 while `personal/main` contains a combined snapshot and may lag local work.
-The combined inference-controls candidate is listed separately at a fixed
-revision. It is not yet published and awaits runtime qualification.
+The combined inference-controls source is listed separately at a fixed
+revision, with dated validation details in the feature index.
 
 ## Upstream oMLX documentation
 

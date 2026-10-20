@@ -42,15 +42,18 @@ and extract only the relevant changes. Merging `personal/main` brings unrelated
 additions with it. A feature manifest records build identity; changing feature
 labels does not select code.
 
-The combined inference-controls candidate is fixed at
-[`60b0e91a`](https://github.com/actualrealhuman/omlx/tree/60b0e91ae46977266b73fbf9c2b612c5c4a11b25),
-based on upstream `73322ed1`. It is not yet published and awaits runtime
-qualification. Its [user guide](https://github.com/actualrealhuman/omlx/blob/60b0e91ae46977266b73fbf9c2b612c5c4a11b25/docs/inference-controls.md)
-describes behavior; its [testing notes](https://github.com/actualrealhuman/omlx/blob/60b0e91ae46977266b73fbf9c2b612c5c4a11b25/docs/TESTING.md#inference-controls)
-identify candidate checks, none of which are claimed as run for runtime
-qualification here. Do not substitute a moving branch tip for this revision. The
-older Inference Throttle topic branch remains a separate published source and is
-not superseded by this candidate.
+The combined inference-controls source snapshot is fixed at
+[`bd850747`](https://github.com/actualrealhuman/omlx/tree/bd850747e6336ee59e6fc9242a865eda5257d061),
+based on upstream `73322ed1`. Its [user guide](https://github.com/actualrealhuman/omlx/blob/bd850747e6336ee59e6fc9242a865eda5257d061/docs/inference-controls.md)
+describes behavior; its [testing notes](https://github.com/actualrealhuman/omlx/blob/bd850747e6336ee59e6fc9242a865eda5257d061/docs/TESTING.md#inference-controls)
+identify checks performed on 2026-10-20. See the [feature index](FORK_FEATURES.md)
+for exact counts and scope: its default-suite run includes five failures that
+match the pristine upstream baseline, while its bounded two-model check passed
+functionally, including overlapping interactive/background requests under the
+coordinator. These results do not establish a performance or energy gain,
+broader model/hardware coverage, or PR readiness. Do not substitute a moving
+branch tip for this revision. The older Inference Throttle topic branch remains
+distinct and is not superseded by this source snapshot.
 
 Resolve dependencies explicitly. Chat persistence changes share browser state
 and transaction rules; battery control and throttle code share inference

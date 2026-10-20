@@ -12,22 +12,33 @@ declared there, not a claim that the ancestor is a release tag. Validation
 pointers tell you what to rerun after adapting a change, not that this guide
 has retested every source snapshot.
 
-## Combined inference controls (awaiting runtime qualification)
+## Combined inference controls
 
-| Addition | Candidate source | Baseline | Scope and integration notes |
+| Addition | Source snapshot | Baseline | Scope and integration notes |
 | --- | --- | --- | --- |
-| Combined inference controls | [feature/inference-controls][inference-controls-branch], candidate [60b0e91a][inference-controls-candidate] | Current upstream snapshot [73322ed1][base-inference-controls] | Combines Inference Throttle, battery protection, model-turn scheduling, hierarchical global/class/model allowances, the persisted master bypass, and accepted dashboard chart and model selection. The candidate is not yet published and awaits runtime qualification. Read its [user guide][inference-controls-guide] and [validation notes][inference-controls-tests]. The separate, already-published [Inference Throttle source][throttle] remains available and is not superseded. |
+| Combined inference controls | [feature/inference-controls][inference-controls-branch], source snapshot [bd850747][inference-controls-candidate] | Current upstream snapshot [73322ed1][base-inference-controls] | Combines Inference Throttle, battery protection, model-turn scheduling, hierarchical global/class/model allowances, the persisted master bypass, and accepted dashboard chart and model selection. Read its [user guide][inference-controls-guide] and [validation notes][inference-controls-tests]. The separate [Inference Throttle source][throttle] remains available and is not superseded. |
 
 The combined scheduler is cooperative and covers supported local batched text
 and VLM work. Percentages are configured relative allowances, not observed
 utilization, watts, or GPU utilization; runtime status is reported separately.
 Strict interactive priority can starve background work while interactive demand
 continues. Results depend on the model, workload, machine, and surrounding load;
-no universal performance improvement is promised. Static source/history review
-and cached web generation passed. Runtime qualification remains unrun, including
-behavioral tests, native compilation, and model work. If the candidate code
-changes after qualification, update the fixed source and document links here to
-the newly reviewed commit.
+no universal performance improvement is promised.
+
+**Local validation on 2026-10-20** for source snapshot `bd850747`:
+
+| Check | Result |
+| --- | --- |
+| Static review and web assets | Source/history review and cached web generation passed. Native extensions and Metal libraries compiled and imported successfully; native sources are unchanged at this snapshot. |
+| Focused suites | Python: 1,293 passed in 22.36 seconds. Node tests passed. |
+| Default suite | 18,662 passed, 5 failed, 239 skipped, 85 deselected, 36 warnings in 412.08 seconds. All five failure IDs match the pristine upstream baseline; no additional failures were found. The suite is not green. |
+| API-only fallback | With `apps/` absent, `omlx_web` was undiscoverable. 18,469 of 18,551 tests were selected (82 deselected); `server-main` passed 11 tests in 3.28 seconds. No actual HTTP health-server check was included. |
+| Two-model functional check | Bounded Qwen3.5 0.8B and 9B VLM batched-engine check passed: both models remained resident; overlapping interactive/background requests completed under the coordinator; cancellation and resume produced valid outputs with clean handoff and cleanup. This is not a performance or energy benchmark. |
+
+These results do not establish broad model/hardware coverage, performance or
+energy outcomes, an HTTP health check without app packages, or PR readiness. If
+the source changes, review and update the fixed source links and validation
+record for the new revision.
 
 ## Published topic branches
 
@@ -70,7 +81,7 @@ needed for your integration.
 | Topic source | Checks to inspect and adapt |
 | --- | --- |
 | Inference Throttle | `tests/test_inference_pacing.py`, `test_admin_inference_throttle_ui.py`, `test_mlx_lm_mtp_patch.py`, engine/core, settings, and prefill regression tests. Read [the source testing notes][throttle-tests]. Check cancellation, multiple engines, 100% bypass, and MTP timing on the target. |
-| Combined inference controls (awaiting runtime qualification) | Candidate-specific scheduler, battery, allowance, settings/API, dashboard, text/VLM, and migration checks are described in the candidate's [validation notes][inference-controls-tests]. They have not been run for runtime qualification. |
+| Combined inference controls | Scheduler, battery, allowance, settings/API, dashboard, text/VLM, and migration checks are described in the source snapshot's [validation notes][inference-controls-tests]. See the dated validation summary above; it includes five default-suite failures matching the pristine upstream baseline and a bounded two-model functional check. No broad performance or energy result is claimed. |
 | Original battery controls | `tests/test_power_sources.py`, `test_power_management.py`, `test_engine_core.py`, `test_decode_fairness.py`, and settings tests. Inspect the governor's assumptions before real battery/power-transition checks. |
 | Cache inspection | `tests/test_inspection.py`, `test_inspection_files.py`, `test_cache_inspection_integration.py`, settings and VLM tests. Check disabled behavior, creation, eviction, and cache restoration. |
 | Live context | Request, engine/core, batched/VLM/DFlash, context-window, and active-model visibility tests changed by the source commit. |
@@ -89,9 +100,9 @@ someone else's checkout. See the [source-sharing scope](decisions/fork-source-sh
 [throttle-scope]: https://github.com/actualrealhuman/omlx/blob/ee978a1c466323aa366f82bb831e99fe423583ea/docs/decisions/inference-throttle.md
 [throttle-tests]: https://github.com/actualrealhuman/omlx/blob/ee978a1c466323aa366f82bb831e99fe423583ea/docs/TESTING.md
 [inference-controls-branch]: https://github.com/actualrealhuman/omlx/tree/feature/inference-controls
-[inference-controls-candidate]: https://github.com/actualrealhuman/omlx/tree/60b0e91ae46977266b73fbf9c2b612c5c4a11b25
-[inference-controls-guide]: https://github.com/actualrealhuman/omlx/blob/60b0e91ae46977266b73fbf9c2b612c5c4a11b25/docs/inference-controls.md
-[inference-controls-tests]: https://github.com/actualrealhuman/omlx/blob/60b0e91ae46977266b73fbf9c2b612c5c4a11b25/docs/TESTING.md#inference-controls
+[inference-controls-candidate]: https://github.com/actualrealhuman/omlx/tree/bd850747e6336ee59e6fc9242a865eda5257d061
+[inference-controls-guide]: https://github.com/actualrealhuman/omlx/blob/bd850747e6336ee59e6fc9242a865eda5257d061/docs/inference-controls.md
+[inference-controls-tests]: https://github.com/actualrealhuman/omlx/blob/bd850747e6336ee59e6fc9242a865eda5257d061/docs/TESTING.md#inference-controls
 [base-inference-controls]: https://github.com/actualrealhuman/omlx/commit/73322ed188a25b9ce2e490d3137d810f7d50128d
 [battery-branch]: https://github.com/actualrealhuman/omlx/tree/feature/battery-power-management
 [battery]: https://github.com/actualrealhuman/omlx/tree/3073fc3f773b0ccfdd4bf39c3c5f1adaf94bb186
