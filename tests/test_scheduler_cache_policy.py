@@ -69,6 +69,16 @@ def test_memory_snapshot_budget_is_shared_by_live_requests():
     assert 8 in scheduler._boundary_cache_snapshots["s"]
 
 
+def test_memory_snapshot_budget_accounts_for_retained_hot_entries():
+    scheduler = _snapshot_scheduler("memory", budget=16)
+    scheduler.paged_ssd_cache_manager = SimpleNamespace(
+        get_stats=lambda: SimpleNamespace(hot_cache_size_bytes=12)
+    )
+    scheduler._on_prefill_boundary_snapshot("r", [{"state": mx.ones((2,))}], 4)
+    assert not scheduler._boundary_cache_snapshots["r"]
+    scheduler._boundary_snapshot_store.save.assert_not_called()
+
+
 @pytest.mark.parametrize("mode", ["memory", "none"])
 def test_restrictive_request_cannot_use_live_ssd_requeue(mode):
     scheduler = Scheduler.__new__(Scheduler)
@@ -110,6 +120,35 @@ def test_async_none_store_skips_payload_and_releases_request_table():
     scheduler.block_aware_cache.store_cache.assert_not_called()
     scheduler.block_aware_cache.clear_request_entry.assert_called_once_with("r")
     scheduler.paged_cache_manager.release_for_eviction.assert_called_once_with([1])
+
+
+@pytest.mark.parametrize("mode", ["default", "memory", "none"])
+def test_mtp_prefix_history_respects_no_retention(
+    mock_model, mock_tokenizer, monkeypatch, mode
+):
+    from omlx.patches.mlx_lm_mtp import prompt_priming
+    from omlx.request import Request, SamplingParams
+
+    scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+    scheduler.block_aware_cache = MagicMock()
+    scheduler._model_has_unreconstructible_cache = lambda: True
+    scheduler._log_prefix_divergence = MagicMock()
+    scheduler._try_specprefill_scoring = MagicMock()
+    prepare = MagicMock()
+    monkeypatch.setattr(prompt_priming, "prepare_prefix_context", prepare)
+    request = Request(
+        request_id="mtp-policy",
+        prompt=[1, 2, 3],
+        sampling_params=SamplingParams(),
+        prompt_token_ids=[1, 2, 3],
+        cache_policy=CachePolicy(kv=mode),
+    )
+    try:
+        scheduler._prepare_prefix_cache_for_request(request)
+        expected = None if mode == "none" else scheduler.block_aware_cache
+        assert prepare.call_args.kwargs["prefix_cache"] is expected
+    finally:
+        scheduler.shutdown()
 
 
 @pytest.mark.parametrize("split", [False, True])

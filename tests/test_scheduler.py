@@ -5237,8 +5237,9 @@ class TestSchedulerSSDLayerSignature:
 class TestSpecPrefillCaches:
     """Regression coverage for target-prefix reuse and draft-cache isolation."""
 
+    @pytest.mark.parametrize("cache_mode", ["default", "memory", "none"])
     def test_target_prefill_replaces_request_owned_ordinary_cache(
-        self, mock_model, mock_tokenizer
+        self, mock_model, mock_tokenizer, cache_mode
     ):
         scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
         old_cache = [object()]
@@ -5255,6 +5256,7 @@ class TestSpecPrefillCaches:
             specprefill_indices=mx.array([0]),
             specprefill_position_offset=1,
             specprefill_system_end=3,
+            cache_policy={"kv": cache_mode},
         )
         request._specprefill_system_tokens = 1
         scheduler.waiting.append(request)
@@ -5285,9 +5287,10 @@ class TestSpecPrefillCaches:
             with patch(
                 "omlx.specprefill.target.run_specprefill_target_prefill",
                 return_value=target_result,
-            ):
+            ) as target_prefill:
                 scheduled, rejected = scheduler._schedule_waiting()
 
+            assert target_prefill.call_args.kwargs["cache_mode"] == cache_mode
             assert rejected == []
             assert scheduled == [request]
             assert request.prompt_cache is None

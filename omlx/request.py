@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
-from .cache.policy import CachePolicy
+from .cache.policy import CachePolicy, coerce_cache_policy
 
 if TYPE_CHECKING:
     from .cache.paged_cache import BlockTable
@@ -272,6 +272,9 @@ class Request:
     # Normalized per-request reusable-cache policy. Kept last to preserve the
     # positional constructor order of existing Request fields.
     cache_policy: CachePolicy = field(default_factory=CachePolicy)
+
+    def __post_init__(self) -> None:
+        self.cache_policy = coerce_cache_policy(self.cache_policy)
 
     @property
     def num_output_tokens(self) -> int:

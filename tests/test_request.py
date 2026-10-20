@@ -22,6 +22,15 @@ def test_request_has_independent_default_cache_policy():
     assert first.cache_policy is not second.cache_policy
 
 
+def test_request_normalizes_policy_and_rejects_invalid_components():
+    request = Request(
+        "one", "prompt", SamplingParams(), cache_policy={"kv": "memory"}
+    )
+    assert request.cache_policy == CachePolicy(kv="memory")
+    with pytest.raises(ValueError):
+        Request("two", "prompt", SamplingParams(), cache_policy={"kv": "ssd"})
+
+
 class TestRequestStatus:
     """Test cases for RequestStatus enum."""
 

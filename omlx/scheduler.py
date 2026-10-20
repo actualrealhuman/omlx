@@ -2895,7 +2895,11 @@ class Scheduler:
                     extra_key_ranges=extra_key_ranges,
                     hot_cache_write_back=hot_cache_write_back,
                     _store_tail_terminal=store_tail_terminal,
-                    **({"cache_mode": cache_mode} if cache_mode != "default" else {}),
+                    **(
+                        {"cache_mode": cache_mode}
+                        if cache_mode != "default"
+                        else {}
+                    ),
                 )
             if block_table is None and self.paged_cache_manager is not None:
                 block_table = self.paged_cache_manager.get_block_table(request_id)
@@ -8448,7 +8452,9 @@ class Scheduler:
         snapshot_block_size: int | None = None,
     ) -> None:
         """Record a prefill boundary or a verified terminal response snapshot."""
-        cache_mode = _request_kv_cache_mode(self.requests.get(request_id))
+        cache_mode = _request_kv_cache_mode(
+            getattr(self, "requests", {}).get(request_id)
+        )
         if cache_mode == "none":
             return
         if self._model_has_unreconstructible_cache():
@@ -8600,6 +8606,8 @@ class Scheduler:
         shared = getattr(self.config, "hot_cache_budget", None)
         if shared is not None:
             limit = min(limit, max(0, int(shared.remaining_bytes)))
+        else:
+            limit = max(0, limit - self._hot_cache_cpu_bytes())
 
         def size(value: Any) -> int:
             if isinstance(value, dict):
@@ -9026,7 +9034,9 @@ class Scheduler:
 
         if cache_mode == "memory":
             self._trim_memory_boundary_snapshots()
-            if total_tokens not in self._boundary_cache_snapshots.get(request.request_id, {}):
+            if total_tokens not in self._boundary_cache_snapshots.get(
+                request.request_id, {}
+            ):
                 return
         self._boundary_snapshot_diagnostics.record(
             "capture_success",
@@ -9456,7 +9466,10 @@ class Scheduler:
 
         Only an aligned end qualifies; a prefill tail below it does not block it.
         """
-        if getattr(request, "skip_cache_store", False) or _request_kv_cache_mode(request) == "none":
+        if (
+            getattr(request, "skip_cache_store", False)
+            or _request_kv_cache_mode(request) == "none"
+        ):
             return
         token_count = (
             request.num_tokens
@@ -10492,8 +10505,11 @@ class Scheduler:
                         request.vlm_extra_key_token_start_for_cache
                     ),
                     extra_key_ranges=request.vlm_extra_key_ranges_for_cache,
-                    **({"cache_mode": _request_kv_cache_mode(request)}
-                       if _request_kv_cache_mode(request) != "default" else {}),
+                    **(
+                        {"cache_mode": _request_kv_cache_mode(request)}
+                        if _request_kv_cache_mode(request) != "default"
+                        else {}
+                    ),
                 )
             fetch_ms = (time.perf_counter() - fetch_started) * 1000.0
             # A split GDN sidecar represents state at a full block boundary.
@@ -10554,8 +10570,11 @@ class Scheduler:
                     reconstructed = self.block_aware_cache.reconstruct_cache(
                         block_table,
                         promote_to_hot_cache=not bypass_hot_cache,
-                        **({"cache_mode": _request_kv_cache_mode(request)}
-                           if _request_kv_cache_mode(request) != "default" else {}),
+                        **(
+                            {"cache_mode": _request_kv_cache_mode(request)}
+                            if _request_kv_cache_mode(request) != "default"
+                            else {}
+                        ),
                     )
                 reconstruct_ms = (time.perf_counter() - reconstruct_started) * 1000.0
                 if block_table.num_tokens < minimum_prefix:
@@ -10695,7 +10714,11 @@ class Scheduler:
                 request_id=request.request_id,
                 prompt_tokens=request.prompt_token_ids,
                 cached_tokens=request.cached_tokens,
-                prefix_cache=self.block_aware_cache,
+                prefix_cache=(
+                    self.block_aware_cache
+                    if _request_kv_cache_mode(request) != "none"
+                    else None
+                ),
                 extra_keys=request.vlm_extra_keys_for_cache,
                 extra_key_token_start=request.vlm_extra_key_token_start_for_cache,
                 extra_key_ranges=request.vlm_extra_key_ranges_for_cache,
@@ -11383,8 +11406,11 @@ class Scheduler:
             sync_and_clear_cache=lambda: Scheduler._clear_cache(self),
             log=logger,
             use_hot_cache=not self._bypass_hot_cache_under_pressure(),
-            **({"cache_mode": _request_kv_cache_mode(request)}
-               if _request_kv_cache_mode(request) != "default" else {}),
+            **(
+                {"cache_mode": _request_kv_cache_mode(request)}
+                if _request_kv_cache_mode(request) != "default"
+                else {}
+            ),
         )
 
     def _cleanup_specprefill(self, request_id: str) -> None:
@@ -13100,6 +13126,7 @@ class Scheduler:
                             not self._bypass_hot_cache_under_pressure()
                         ),
                         prepare_prompt_cache=self._prepare_affine_prefill_cache,
+                        cache_mode=_request_kv_cache_mode(request),
                     )
 
                     # An exact static-prefix restore can supersede a shorter
@@ -13940,9 +13967,11 @@ class Scheduler:
             finished_drafter = _block_drafter_for(self.model)
             if finished_drafter is not None:
                 # The token list keeps the drafter context for prefix hits.
-                keep = request is not None and not getattr(
-                    request, "vlm_extra_keys_for_cache", None
-                ) and _request_kv_cache_mode(request) != "none"
+                keep = (
+                    request is not None
+                    and not getattr(request, "vlm_extra_keys_for_cache", None)
+                    and _request_kv_cache_mode(request) != "none"
+                )
                 finished_drafter.release_request(
                     request_id,
                     (
