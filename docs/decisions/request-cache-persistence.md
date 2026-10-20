@@ -1,6 +1,7 @@
 # Per-request KV and image-feature cache retention
 
-Status: Proposed; API names and shared-cache rules are a draft for review.
+Status: Implemented for local batched text and VLM engines. Representative-model
+and packaged-build qualification remains before release.
 Date: 2026-10-20
 
 ## Problem and objective
@@ -19,7 +20,7 @@ that omit the option. This is a retention and write-volume control, not a
 retention deadline, memory reservation, secure-erasure feature or privacy
 boundary.
 
-## Proposed client contract
+## Client contract
 
 Add this optional oMLX extension to generation requests:
 
@@ -175,7 +176,7 @@ that grant. Touching an index during a rejected or unused lookup is insufficient
 For example, A creates a memory-only 4,096-token prefix. B later uses the first
 2,048 tokens under `default`. Only the exact adopted prefix blocks and their
 required checkpoints may become eligible; A's unused remainder stays RAM-only.
-This proposal explicitly permits that sharing to preserve cache reuse and reduce
+This contract explicitly permits that sharing to preserve cache reuse and reduce
 duplicate storage. Strict isolation from other requests would be a different
 feature.
 
@@ -254,9 +255,10 @@ cache hit whose required recurrent state was discarded. Associate a checkpoint's
 permission with its restorable block dependency. If the complete artifact cannot
 fit, retain a shorter valid prefix or report a miss. Account retained checkpoint
 bytes against the existing cache budget; do not create an unbounded side buffer.
-The first implementation milestone must establish whether existing embedded
-state can serve this without changing compatibility keys, or whether an
-explicit in-memory checkpoint representation is required.
+The implementation embeds recurrent state in RAM-resident blocks while keeping
+the existing split-GDN compatibility keys. Reconstruction can use that embedded
+endpoint when no durable sidecar exists. If a later default request adopts the
+artifact, the complete embedded payload can follow normal persistence rules.
 
 The current pressure-requeue mechanism spills a whole live batch to SSD. A
 KV `memory` or `none` member must block that spill plan unless a separately
@@ -318,7 +320,7 @@ cache-directory payload writes, retained memory and time to first token under
 equivalent conditions. Record exact revisions and configurations. Do not claim
 a performance improvement or SSD-lifespan change from unit tests alone.
 
-## Delivery sequence and unresolved choices
+## Delivery and qualification
 
 1. Review the two-component contract, particularly header/body naming, shared
    artifact grants and permitted disk reads. Image-feature retention control is
@@ -334,8 +336,15 @@ a performance improvement or SSD-lifespan change from unit tests alone.
 5. Integrate a qualified implementation into downstream builds and prepare a
    focused upstream contribution independent of unrelated features.
 
-The field/header spellings and the precise RAM checkpoint representation remain
-proposals. A future retention TTL, prefix pinning/priority, per-block client
+The field/header spellings and embedded RAM checkpoint representation above are
+implemented. Automated coverage includes an initialized small hybrid model,
+warm-prefix logit parity, cache persistence sinks, API propagation, lifecycle
+cleanup, auxiliary caches, and VLM feature preparation. This does not establish
+performance or write-volume results for representative downloaded text and VLM
+models, nor qualify a packaged application. Those checks remain release work;
+do not infer SSD wear reduction measurements from the automated tests.
+
+A future retention TTL, prefix pinning/priority, per-block client
 breakpoints, API-key defaults, automatic client proxy and strict privacy mode
 are outside v1. Existing cache budgets and default server behavior remain the
 starting point.
