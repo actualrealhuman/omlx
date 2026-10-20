@@ -98,6 +98,10 @@ Run `python -m pytest -q tests/test_prefill_transient_tracker.py tests/test_pref
 
 Run `python -m pytest -q tests/test_scheduler.py tests/test_scheduler_boundary_completion.py tests/test_prefix_cache_gdn_split.py` to check cache-freshness admission and completed boundary recovery. The completion tests use a small initialized Qwen3.5 hybrid model and the real BatchGenerator, then compare restored-prefix logits with a fresh forward pass. They cover embedded snapshots, GDN sidecars, exact SpecPrefill static-prefix sidecars, off-boundary completion, and unknown or inconsistent cache positions.
 
+# Per-request cache policy API tests
+
+Run `python -m pytest -q tests/test_cache_policy_api.py tests/test_openai_models.py tests/test_anthropic_models.py tests/test_responses.py tests/test_anthropic_adapter.py`. These focused API tests cover body/header resolution, invalid and conflicting choices, cache capability rejection before preprocessing, policy propagation through streaming and non-streaming generation endpoints, response acknowledgements, and CORS exposure. Endpoint tests use mocked engines and do not load model checkpoints.
+
 # Batch KV capacity tests
 
 Run `python -m pytest -q tests/test_vlm_batch_kv_capacity.py` after changing `omlx/patches/vlm_batch_kv_capacity.py` or bumping the mlx-lm or mlx-vlm pin. The tests load the installed, unpatched cache module next to the patched one and compare cache state and attention output bit for bit through random appends, trims, rollbacks, merges, joins, filters and restores. They cover the mlx-vlm class, the mlx-lm class that prefix restore builds, and a batch that mixes both.

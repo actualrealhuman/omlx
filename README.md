@@ -184,6 +184,9 @@ Block-based KV cache management inspired by vLLM, with prefix sharing and Copy-o
 
 Optional [Affine4](docs/affine4.md) and [Affine8](docs/affine8.md) KV compression add signed 4-bit and 8-bit cache formats with Metal TensorOps decode attention and a portable fallback. Select either under **Model settings → Memory Saving → KV cache compression**.
 
+Generation requests can also select RAM-only or no-new-retention behavior for
+KV and image-feature caches independently. See the [per-request cache policy guide](docs/cache-policy.md) for request syntax, response acknowledgements, and limits.
+
 <p align="center">
   <img src="docs/images/omlx_hot_cold_cache.png" alt="oMLX Hot & Cold Cache" width="720">
 </p>
