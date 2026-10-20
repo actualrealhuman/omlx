@@ -253,8 +253,10 @@ class VisionFeatureSSDCache:
             if features is not None and resident is not features:
                 return False
             grid = self._memory_grid.get(key)
-        self._enqueue_ssd_write(key, image_hash, model_name, resident, grid)
-        return True
+            # Keep replacement/eviction from changing the keyed artifact until
+            # its exact tensor payload has been captured for the writer queue.
+            self._enqueue_ssd_write(key, image_hash, model_name, resident, grid)
+            return True
 
     def close(self) -> None:
         """Shut down the background writer and flush pending writes."""

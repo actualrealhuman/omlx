@@ -21,6 +21,7 @@ from unittest.mock import MagicMock, patch
 import mlx.core as mx
 import pytest
 
+from omlx.cache.policy import CachePolicy
 import omlx.engine_core as engine_core
 from omlx.custom_kernels.quant_matmul import fast as quant_fast
 from omlx.engine_core import (
@@ -328,6 +329,62 @@ class TestEngineCoreAddRequest:
             finally:
                 await engine.stop()
                 engine.close()
+
+    @pytest.mark.asyncio
+    async def test_async_request_constructor_keeps_normalized_cache_policy(
+        self, mock_model, mock_tokenizer
+    ):
+        with patch("omlx.engine_core.get_registry") as mock_registry:
+            mock_registry.return_value.acquire.return_value = True
+            engine = EngineCore(model=mock_model, tokenizer=mock_tokenizer)
+            captured = []
+            add_request = engine.scheduler.add_request
+
+            def capture(request):
+                captured.append(request)
+                return add_request(request)
+
+            engine.scheduler.add_request = capture
+            try:
+                await engine.start()
+                await engine.add_request(
+                    prompt="Hello",
+                    request_id="cache-policy-request",
+                    cache_policy={"kv": "memory", "images": "none"},
+                )
+                assert captured[0].cache_policy == CachePolicy(
+                    kv="memory", images="none"
+                )
+                assert isinstance(captured[0].cache_policy, CachePolicy)
+            finally:
+                await engine.stop()
+                engine.close()
+
+    def test_sync_batch_request_constructor_keeps_cache_policy(
+        self, mock_model, mock_tokenizer
+    ):
+        engine = EngineCore(model=mock_model, tokenizer=mock_tokenizer)
+        captured = []
+        engine.scheduler.add_request = lambda request: captured.append(request)
+        engine.scheduler.has_requests = MagicMock(side_effect=[True, False])
+        engine.scheduler.step = MagicMock(
+            side_effect=lambda: SimpleNamespace(
+                outputs=[
+                    RequestOutput(request_id=captured[0].request_id, finished=True)
+                ]
+            )
+        )
+        engine.scheduler.remove_finished_request = MagicMock()
+
+        policy = CachePolicy(kv="none", images="memory")
+        try:
+            result = engine.generate_batch_sync(
+                ["Hello"], cache_policy=policy
+            )
+            assert result[0].request_id == captured[0].request_id
+            assert captured[0].cache_policy is policy
+        finally:
+            engine.close()
 
     @pytest.mark.asyncio
     async def test_add_request_with_custom_id(self, mock_model, mock_tokenizer):

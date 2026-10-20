@@ -721,3 +721,19 @@ class TestMemoryByteLRU:
             assert _wait_until(path.exists)
         finally:
             cache.close()
+
+    def test_persistence_grant_rejects_replaced_ram_feature(self, tmp_cache_dir):
+        cache = VisionFeatureSSDCache(cache_dir=tmp_cache_dir, max_memory_entries=3)
+        try:
+            adopted = mx.ones((4, 8))
+            replacement = mx.full((4, 8), 2.0)
+            mx.eval(adopted, replacement)
+            cache.put("same-hash", "model", adopted, cache_mode="memory")
+            cache.put("same-hash", "model", replacement, cache_mode="memory")
+
+            assert not cache.grant_persistence(
+                "same-hash", "model", features=adopted
+            )
+            assert not list(tmp_cache_dir.rglob("*.safetensors"))
+        finally:
+            cache.close()

@@ -127,7 +127,6 @@ class Request:
     request_id: str
     prompt: Union[str, List[int]]
     sampling_params: SamplingParams
-    cache_policy: CachePolicy = field(default_factory=CachePolicy)
     arrival_time: float = field(default_factory=time.monotonic)
     priority: int = 0  # Lower is higher priority
 
@@ -269,6 +268,10 @@ class Request:
 
     # Request-scoped tool schemas used by protocol output parsers.
     tools: list[dict[str, Any]] | None = None
+
+    # Normalized per-request reusable-cache policy. Kept last to preserve the
+    # positional constructor order of existing Request fields.
+    cache_policy: CachePolicy = field(default_factory=CachePolicy)
 
     @property
     def num_output_tokens(self) -> int:

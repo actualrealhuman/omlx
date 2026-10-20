@@ -23,10 +23,15 @@ class DraftPrefixCache(Protocol):
         self, request_id: str, tokens: Sequence[int], cache_mode: str = ...
     ) -> tuple[Any, list[int]]: ...
 
-    def preload_blocks(self, block_table: Any) -> int: ...
+    def preload_blocks(
+        self, block_table: Any, cache_mode: str = ...
+    ) -> int: ...
 
     def reconstruct_cache(
-        self, block_table: Any, promote_to_hot_cache: bool = ...
+        self,
+        block_table: Any,
+        promote_to_hot_cache: bool = ...,
+        cache_mode: str = ...,
     ) -> Any: ...
 
     def store_cache(
@@ -128,11 +133,24 @@ def run_specprefill_draft_scoring(
                 )
                 if block_table and block_table.num_tokens > 0:
                     if use_hot_cache and cache_mode != "none":
-                        draft_prefix_cache.preload_blocks(block_table)
+                        preload_kwargs = (
+                            {"cache_mode": cache_mode}
+                            if cache_mode != "default"
+                            else {}
+                        )
+                        draft_prefix_cache.preload_blocks(
+                            block_table, **preload_kwargs
+                        )
                     # Avoid an alias that would retain restored KV through sync_and_clear_cache().
+                    reconstruct_kwargs = (
+                        {"cache_mode": cache_mode}
+                        if cache_mode != "default"
+                        else {}
+                    )
                     draft_cache = draft_prefix_cache.reconstruct_cache(
                         block_table,
                         promote_to_hot_cache=(use_hot_cache and cache_mode != "none"),
+                        **reconstruct_kwargs,
                     )
                     if draft_cache:
                         draft_cached_tokens = block_table.num_tokens

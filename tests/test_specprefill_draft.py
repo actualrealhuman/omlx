@@ -83,22 +83,31 @@ class _DraftCache:
         self.reconstructions: list[Any] = []
         self.stores: list[tuple[str, list[int], list[Any], Any]] = []
         self.hot_cache_flags: list[tuple[str, bool]] = []
+        self.cache_modes: list[tuple[str, str]] = []
 
     def fetch_cache(
         self, request_id: str, tokens: list[int], cache_mode: str = "default"
     ) -> tuple[Any, list[int]]:
+        self.cache_modes.append(("fetch", cache_mode))
         self.fetches.append((request_id, list(tokens)))
         if self.fetch_error is not None:
             raise self.fetch_error
         return self.block_table, []
 
-    def preload_blocks(self, block_table: Any) -> int:
+    def preload_blocks(
+        self, block_table: Any, cache_mode: str = "default"
+    ) -> int:
+        self.cache_modes.append(("preload", cache_mode))
         self.preloads.append(block_table)
         return block_table.num_tokens
 
     def reconstruct_cache(
-        self, block_table: Any, promote_to_hot_cache: bool = True
+        self,
+        block_table: Any,
+        promote_to_hot_cache: bool = True,
+        cache_mode: str = "default",
     ) -> Any:
+        self.cache_modes.append(("reconstruct", cache_mode))
         self.reconstructions.append(block_table)
         self.hot_cache_flags.append(("reconstruct", promote_to_hot_cache))
         return self.reconstructed_cache
@@ -113,6 +122,7 @@ class _DraftCache:
         hot_cache_write_back: bool = True,
         cache_mode: str = "default",
     ) -> None:
+        self.cache_modes.append(("store", cache_mode))
         self.stores.append((request_id, list(tokens), cache_data, model_cache_config))
         self.hot_cache_flags.append(("store", hot_cache_write_back))
 
@@ -288,6 +298,30 @@ def test_none_policy_borrows_draft_cache_without_promotion_or_store():
     assert draft_cache.preloads == []
     assert draft_cache.hot_cache_flags == [("reconstruct", False)]
     assert draft_cache.stores == []
+    assert draft_cache.cache_modes == [
+        ("fetch", "none"),
+        ("reconstruct", "none"),
+    ]
+
+
+def test_memory_policy_reaches_draft_fetch_reconstruction_and_store():
+    request, plan = _request_and_plan()
+    draft_cache = _DraftCache(SimpleNamespace(num_tokens=3), ["reconstructed"])
+
+    _run(
+        request,
+        plan,
+        draft_cache=draft_cache,
+        extract_cache_states=lambda cache: ([{"state": "value"}], None),
+        cache_mode="memory",
+    )
+
+    assert draft_cache.cache_modes == [
+        ("fetch", "memory"),
+        ("preload", "memory"),
+        ("reconstruct", "memory"),
+        ("store", "memory"),
+    ]
 
 
 def test_cache_fetch_error_falls_back_to_uncached_scoring():

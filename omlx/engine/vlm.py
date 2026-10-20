@@ -3672,15 +3672,15 @@ class VLMBatchedEngine(BaseEngine):
             return None
 
     def _grant_vision_feature_persistence(
-        self, cache_mode: str, image_hashes: list[str]
+        self, cache_mode: str, adopted_features: list[tuple[str, Any]]
     ) -> None:
         """Grant persistence only for cache entries adopted by default work."""
         if cache_mode != "default" or self._vision_cache is None:
             return
         grant = getattr(self._vision_cache, "grant_persistence", None)
         if callable(grant):
-            for image_hash in image_hashes:
-                grant(image_hash, self._model_name)
+            for image_hash, features in adopted_features:
+                grant(image_hash, self._model_name, features=features)
 
     def _try_build_cached_vision_inputs(
         self,
@@ -3752,6 +3752,11 @@ class VLMBatchedEngine(BaseEngine):
                 else:
                     feats.append(None)
                     grids.append(None)
+            adopted_features = [
+                (h, feature)
+                for h, feature in zip(per_hashes, feats)
+                if feature is not None
+            ]
             miss_idx = [i for i, f in enumerate(feats) if f is None]
             if len(miss_idx) == len(images):
                 return None  # Nothing cached; the full path costs the same.
@@ -3812,11 +3817,6 @@ class VLMBatchedEngine(BaseEngine):
             pad_total = sum(1 for t in token_ids if t == it_id)
             if pad_total != combined.shape[0]:
                 return None
-            self._grant_vision_feature_persistence(
-                cache_mode,
-                [h for h, feature in zip(per_hashes, feats) if feature is not None],
-            )
-
             pixel_values = (
                 miss_pv if miss_idx else mx.zeros((0, 1), dtype=mx.float32)
             )
@@ -3831,6 +3831,7 @@ class VLMBatchedEngine(BaseEngine):
                     [[1 if t == it_id else 0 for t in token_ids]]
                 ),
                 "cached_image_features": combined,
+                "_cache_grants": adopted_features,
             }
         except Exception:
             logger.debug(
@@ -3992,8 +3993,12 @@ class VLMBatchedEngine(BaseEngine):
             return None
 
     def _cached_video_features(
-        self, video_identity: str, input_ids: Any, extra_model_inputs: dict,
+        self,
+        video_identity: str,
+        input_ids: Any,
+        extra_model_inputs: dict,
         cache_mode: str = "default",
+        grant_candidates: list[tuple[str, Any]] | None = None,
     ) -> mx.array | None:
         """Vision features of a request's clips, through the vision feature cache.
 
@@ -4010,7 +4015,8 @@ class VLMBatchedEngine(BaseEngine):
         if features is not None and self._vision_features_match_image_tokens(
             features, token_count
         ):
-            self._grant_vision_feature_persistence(cache_mode, [video_identity])
+            if grant_candidates is not None:
+                grant_candidates.append((video_identity, features))
             return features
         try:
             # The vision tower encodes a video grid exactly like an image grid.
@@ -4280,6 +4286,7 @@ class VLMBatchedEngine(BaseEngine):
 
         # Images with cached features and grids skip the image processor.
         fast_cached_features = None
+        cache_features_to_grant: list[tuple[str, Any]] = []
         inputs = None
         if num_audios == 0 and num_videos == 0:
             fast = self._try_build_cached_vision_inputs(
@@ -4287,6 +4294,7 @@ class VLMBatchedEngine(BaseEngine):
             )
             if fast is not None:
                 fast_cached_features = fast.pop("cached_image_features", None)
+                cache_features_to_grant = fast.pop("_cache_grants", [])
                 inputs = fast
         if inputs is None:
             prompts = [prompt] if isinstance(prompt, str) else prompt
@@ -4474,8 +4482,11 @@ class VLMBatchedEngine(BaseEngine):
                     image_cache_key_start = 0
                     image_hash = self._video_cache_identity(video_hashes or [])
                 video_features = self._cached_video_features(
-                    image_hash, input_ids, extra_model_inputs,
+                    image_hash,
+                    input_ids,
+                    extra_model_inputs,
                     cache_mode=cache_mode,
+                    grant_candidates=cache_features_to_grant,
                 )
                 if video_features is not None:
                     call_kwargs["cached_image_features"] = video_features
@@ -4527,8 +4538,10 @@ class VLMBatchedEngine(BaseEngine):
                     ):
                         call_kwargs["cached_image_features"] = combined
                         used_cached_features = True
-                        self._grant_vision_feature_persistence(
-                            cache_mode, per_hashes
+                        cache_features_to_grant.extend(
+                            (h, feature)
+                            for h, feature in zip(per_hashes, cached_per_image)
+                            if feature is not None
                         )
                         logger.debug(
                             "Vision feature cache hit (per-image): all %d images cached",
@@ -4540,9 +4553,7 @@ class VLMBatchedEngine(BaseEngine):
                     ):
                         call_kwargs["cached_image_features"] = cached_whole
                         used_cached_features = True
-                        self._grant_vision_feature_persistence(
-                            cache_mode, [image_hash]
-                        )
+                        cache_features_to_grant.append((image_hash, cached_whole))
                         logger.debug(
                             "Vision feature cache hit (whole-request): %s",
                             image_hash[:16],
@@ -4562,10 +4573,10 @@ class VLMBatchedEngine(BaseEngine):
                     if partial is not None:
                         call_kwargs["cached_image_features"] = partial
                         used_cached_features = True
-                        self._grant_vision_feature_persistence(
-                            cache_mode,
-                            [h for h, feature in zip(per_hashes, cached_per_image)
-                             if feature is not None],
+                        cache_features_to_grant.extend(
+                            (h, feature)
+                            for h, feature in zip(per_hashes, cached_per_image)
+                            if feature is not None
                         )
 
                 if not used_cached_features:
@@ -4632,21 +4643,26 @@ class VLMBatchedEngine(BaseEngine):
                     input_ids, pixel_values, mask=attention_mask, **call_kwargs
                 )
             except TypeError:
-                # cached_image_features kwarg not supported — disable and retry
+                # cached_image_features is unsupported for this call. Keep the
+                # shared cache-enabled setting untouched so concurrent requests
+                # retain their own policy and capability path.
                 if "cached_image_features" in call_kwargs:
-                    logger.warning(
+                    logger.debug(
                         "cached_image_features not supported by %s, "
-                        "disabling vision feature cache",
+                        "retrying without cached features",
                         self.model_type,
                     )
-                    self._vision_cache_enabled = False
                     call_kwargs.pop("cached_image_features")
+                    cache_features_to_grant = []
                     embed_features = self._vlm_model.get_input_embeddings(
                         input_ids, pixel_values, mask=attention_mask, **call_kwargs
                     )
                 else:
                     raise
             mx.eval(embed_features.inputs_embeds)
+            self._grant_vision_feature_persistence(
+                cache_mode, cache_features_to_grant
+            )
 
             # Convert InputEmbeddingsFeatures to dict for extra kwargs
             extra_kwargs = {}

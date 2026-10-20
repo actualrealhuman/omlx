@@ -1802,8 +1802,9 @@ class TestPrepareVisionInputs:
     def test_per_image_cache_used_when_shapes_agree(self, mock_act, mock_prepare):
         """Two entries of equal shape still combine and serve from cache."""
         images = self._two_images()
-        engine, _ = self._vision_cache_engine(
-            images, {0: mx.zeros((1, 4, 8)), 1: mx.ones((1, 4, 8))}
+        cached_entries = {0: mx.zeros((1, 4, 8)), 1: mx.ones((1, 4, 8))}
+        engine, cache = self._vision_cache_engine(
+            images, cached_entries
         )
         mock_act.return_value = [{"role": "user", "content": "formatted"}]
         mock_prepare.return_value = {
@@ -1819,6 +1820,52 @@ class TestPrepareVisionInputs:
         ]
         assert used.shape == (2, 4, 8)
         engine._compute_vision_features.assert_not_called()
+        from omlx.utils.image import compute_per_image_hashes
+
+        hashes = compute_per_image_hashes(images)
+        assert [call.args[:2] for call in cache.grant_persistence.call_args_list] == [
+            (hashes[0], engine._model_name),
+            (hashes[1], engine._model_name),
+        ]
+        assert (
+            cache.grant_persistence.call_args_list[0].kwargs["features"]
+            is cached_entries[0]
+        )
+        assert (
+            cache.grant_persistence.call_args_list[1].kwargs["features"]
+            is cached_entries[1]
+        )
+
+    @pytest.mark.skipif(not HAS_MLX, reason="MLX not available")
+    @patch("mlx_vlm.utils.prepare_inputs")
+    @patch("mlx_vlm.prompt_utils.apply_chat_template")
+    def test_rejected_cached_features_do_not_grant_persistence(
+        self, mock_act, mock_prepare
+    ):
+        images = self._two_images()
+        engine, cache = self._vision_cache_engine(
+            images, {0: mx.zeros((1, 4, 8)), 1: mx.ones((1, 4, 8))}
+        )
+        mock_act.return_value = [{"role": "user", "content": "formatted"}]
+        mock_prepare.return_value = {
+            "input_ids": mx.array([[1, 2, 3]]),
+            "pixel_values": mx.zeros((2, 3, 8, 8)),
+        }
+        embed = MagicMock()
+        embed.inputs_embeds = mx.zeros((1, 3, 8))
+        embed.to_dict.return_value = {"inputs_embeds": embed.inputs_embeds}
+        engine._vlm_model.get_input_embeddings.side_effect = [
+            TypeError("cached_image_features is unsupported"),
+            embed,
+        ]
+
+        engine._prepare_vision_inputs(
+            [{"role": "user", "content": "Describe"}], images
+        )
+
+        cache.grant_persistence.assert_not_called()
+        assert engine._vision_cache_enabled is True
+        assert engine._vlm_model.get_input_embeddings.call_count == 2
 
     @pytest.mark.skipif(not HAS_MLX, reason="MLX not available")
     @patch("mlx_vlm.utils.prepare_inputs")
