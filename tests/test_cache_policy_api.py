@@ -253,6 +253,17 @@ async def test_markitdown_chat_acknowledges_disabled_caches(monkeypatch):
     ],
 )
 def test_endpoint_conflict_rejected_before_engine_lookup(monkeypatch, path, body):
+    from omlx.admin import routes as admin_routes
+
+    admin_getters = {
+        name: getattr(admin_routes, name)
+        for name in (
+            "_get_server_state",
+            "_get_engine_pool",
+            "_get_settings_manager",
+            "_get_global_settings",
+        )
+    }
     monkeypatch.setattr(srv._server_state, "api_key", None)
     monkeypatch.setattr(srv._server_state, "global_settings", None)
     monkeypatch.setattr(
@@ -260,14 +271,18 @@ def test_endpoint_conflict_rejected_before_engine_lookup(monkeypatch, path, body
         "get_engine_for_model",
         lambda *a, **kw: pytest.fail("engine lookup must not run"),
     )
-    client = TestClient(srv.app, raise_server_exceptions=False)
-    response = client.post(
-        path,
-        json={**body, "cache_policy": {"kv": "none"}},
-        headers={"X-oMLX-KV-Cache": "memory"},
-    )
-    assert response.status_code == 400
-    assert "conflicts" in response.json()["error"]["message"]
+    try:
+        client = TestClient(srv.app, raise_server_exceptions=False)
+        response = client.post(
+            path,
+            json={**body, "cache_policy": {"kv": "none"}},
+            headers={"X-oMLX-KV-Cache": "memory"},
+        )
+        assert response.status_code == 400
+        assert "conflicts" in response.json()["error"]["message"]
+    finally:
+        for name, getter in admin_getters.items():
+            setattr(admin_routes, name, getter)
 
 
 @pytest.mark.parametrize("endpoint", ["completion", "chat", "messages", "responses"])

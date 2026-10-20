@@ -1,12 +1,23 @@
 # SPDX-License-Identifier: Apache-2.0
 """HTTP request and acknowledgement helpers for per-request cache policy."""
 
-from typing import Literal
+from __future__ import annotations
 
-from fastapi import HTTPException, Request
+from typing import TYPE_CHECKING, Literal
+
 from pydantic import BaseModel, ConfigDict
 
 from omlx.cache.policy import CachePolicy
+
+if TYPE_CHECKING:
+    from fastapi import Request
+
+
+def _bad_request(detail: str):
+    """Construct a 400 response lazily to keep schema imports HTTP-free."""
+    from fastapi import HTTPException
+
+    return HTTPException(status_code=400, detail=detail)
 
 
 class CachePolicyRequest(BaseModel):
@@ -54,23 +65,17 @@ def resolve_request_cache_policy(
         try:
             value = raw_value.decode("ascii").strip(" \t")
         except UnicodeDecodeError as exc:
-            raise HTTPException(
-                status_code=400, detail="cache policy headers must be ASCII"
-            ) from exc
+            raise _bad_request("cache policy headers must be ASCII") from exc
         if value not in _MODES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"{component} cache header must be default, memory or none",
+            raise _bad_request(
+                f"{component} cache header must be default, memory or none"
             )
         previous = header_values.get(component)
         if previous is not None and previous != value:
             header_name = (
                 "X-oMLX-KV-Cache" if component == "kv" else "X-oMLX-Image-Cache"
             )
-            raise HTTPException(
-                status_code=400,
-                detail=f"conflicting duplicate {header_name} headers",
-            )
+            raise _bad_request(f"conflicting duplicate {header_name} headers")
         header_values[component] = value
 
     for component, header_value in header_values.items():
@@ -78,9 +83,8 @@ def resolve_request_cache_policy(
             header_name = (
                 "X-oMLX-KV-Cache" if component == "kv" else "X-oMLX-Image-Cache"
             )
-            raise HTTPException(
-                status_code=400,
-                detail=f"cache_policy.{component} conflicts with {header_name} header",
+            raise _bad_request(
+                f"cache_policy.{component} conflicts with {header_name} header"
             )
 
     merged = dict(body_values)
@@ -97,9 +101,8 @@ def ensure_cache_policy_supported(
         if getattr(policy, component) == "default":
             continue
         if not callable(supports) or not supports(component):
-            raise HTTPException(
-                status_code=400,
-                detail=f"{component} cache policy is not supported by this engine",
+            raise _bad_request(
+                f"{component} cache policy is not supported by this engine"
             )
 
 
