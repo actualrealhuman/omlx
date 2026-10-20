@@ -55,6 +55,13 @@ def _ready_engine(handler, **engine_kwargs) -> DistributedBatchedEngine:
     return engine
 
 
+def test_distributed_engine_rejects_request_scoped_cache_restrictions():
+    engine = DistributedBatchedEngine(_deployment())
+
+    assert not engine.supports_cache_policy_component("kv")
+    assert not engine.supports_cache_policy_component("images")
+
+
 @pytest.mark.asyncio
 async def test_acknowledged_cancel_all_does_not_widen_later_targeted_cancel(tmp_path):
     engine = _ready_engine(lambda request: httpx.Response(200, json={}))

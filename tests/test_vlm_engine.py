@@ -1865,7 +1865,83 @@ class TestPrepareVisionInputs:
 
         cache.grant_persistence.assert_not_called()
         assert engine._vision_cache_enabled is True
+        assert engine._vision_feature_cache_supported is False
         assert engine._vlm_model.get_input_embeddings.call_count == 2
+
+    @pytest.mark.skipif(not HAS_MLX, reason="MLX not available")
+    @patch("mlx_vlm.utils.prepare_inputs")
+    @patch("mlx_vlm.prompt_utils.apply_chat_template")
+    def test_none_policy_skips_encoder_cache_for_explicitly_unsupported_model(
+        self, mock_act, mock_prepare
+    ):
+        from types import MethodType, SimpleNamespace
+
+        images = self._two_images()[:1]
+        engine = self._setup_engine_for_vision(model_type="gemma4")
+        engine._vision_cache = MagicMock()
+        engine._vision_cache_enabled = True
+        engine._image_token_count = MagicMock(return_value=None)
+        mock_act.return_value = [{"role": "user", "content": "formatted"}]
+        mock_prepare.return_value = {
+            "input_ids": mx.array([[1, 2, 3]]),
+            "pixel_values": mx.zeros((1, 3, 8, 8)),
+        }
+        embed = SimpleNamespace(
+            inputs_embeds=mx.zeros((1, 3, 8)),
+            to_dict=lambda: {},
+        )
+        calls = []
+
+        # This signature definitively cannot accept cached_image_features.
+        def get_input_embeddings(self, input_ids, pixel_values, mask=None):
+            calls.append((input_ids, pixel_values, mask))
+            return embed
+
+        engine._vlm_model.get_input_embeddings = MethodType(
+            get_input_embeddings, engine._vlm_model
+        )
+        engine._compute_vision_features = MagicMock(
+            side_effect=AssertionError("standalone cached-feature encode ran")
+        )
+
+        engine._prepare_vision_inputs(
+            [{"role": "user", "content": "Describe"}],
+            images,
+            cache_mode="none",
+        )
+
+        assert len(calls) == 1
+        engine._compute_vision_features.assert_not_called()
+        engine._vision_cache.get.assert_not_called()
+        assert engine._vision_cache_enabled is True
+        assert engine._vision_feature_cache_supported is False
+
+    @pytest.mark.skipif(not HAS_MLX, reason="MLX not available")
+    @patch("mlx_vlm.utils.prepare_inputs")
+    @patch("mlx_vlm.prompt_utils.apply_chat_template")
+    def test_none_policy_does_not_disable_supported_feature_cache_capability(
+        self, mock_act, mock_prepare
+    ):
+        images = self._two_images()[:1]
+        cached_entry = mx.zeros((1, 4, 8))
+        engine, cache = self._vision_cache_engine(images, {0: cached_entry})
+        mock_act.return_value = [{"role": "user", "content": "formatted"}]
+        mock_prepare.return_value = {
+            "input_ids": mx.array([[1, 2, 3]]),
+            "pixel_values": mx.zeros((1, 3, 8, 8)),
+        }
+
+        engine._prepare_vision_inputs(
+            [{"role": "user", "content": "Describe"}],
+            images,
+            cache_mode="none",
+        )
+
+        assert engine._vision_feature_cache_supported is True
+        assert engine._vision_cache_enabled is True
+        assert cache.get.call_args.kwargs["cache_mode"] == "none"
+        cache.put.assert_not_called()
+        cache.grant_persistence.assert_not_called()
 
     @pytest.mark.skipif(not HAS_MLX, reason="MLX not available")
     @patch("mlx_vlm.utils.prepare_inputs")

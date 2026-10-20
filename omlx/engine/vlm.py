@@ -1891,6 +1891,9 @@ class VLMBatchedEngine(BaseEngine):
         self._grammar_compiler_init_attempted = False
         self._vision_cache = None
         self._vision_cache_enabled = True
+        # Capability of this model's embedding call, independent of request
+        # policy. ``None`` means inspect the signature on first multimodal use.
+        self._vision_feature_cache_supported: bool | None = None
         # Holds the loaded gemma4_assistant drafter when vlm_mtp_enabled.
         # Phase 2A: attached but not yet wired into the decode path.
         self._vlm_mtp_drafter: Any | None = None
@@ -1906,6 +1909,33 @@ class VLMBatchedEngine(BaseEngine):
         if self.is_diffusion_model:
             return False
         return component in {"kv", "images"}
+
+    def _supports_cached_vision_features(self) -> bool:
+        """Whether get_input_embeddings can consume precomputed features.
+
+        Checking explicit signatures avoids running a second vision encoder on
+        models that definitively reject ``cached_image_features``. A runtime
+        TypeError can still reveal an indirect wrapper limitation; in that
+        case the model-wide capability is disabled for later requests.
+        """
+        if self._vision_feature_cache_supported is not None:
+            return self._vision_feature_cache_supported
+        method = getattr(self._vlm_model, "get_input_embeddings", None)
+        if not callable(method):
+            self._vision_feature_cache_supported = False
+            return False
+        try:
+            parameters = inspect.signature(method).parameters.values()
+        except (TypeError, ValueError):
+            # Opaque extension methods get one runtime capability probe.
+            self._vision_feature_cache_supported = True
+            return True
+        self._vision_feature_cache_supported = any(
+            parameter.name == "cached_image_features"
+            or parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters
+        )
+        return self._vision_feature_cache_supported
 
     async def _preflight_or_raise_with_eviction(
         self,
@@ -3699,6 +3729,7 @@ class VLMBatchedEngine(BaseEngine):
             model_type not in _CACHED_INPUT_FAST_PREPARE_MODEL_TYPES
             or self._vision_cache is None
             or not self._vision_cache_enabled
+            or not self._supports_cached_vision_features()
             or not images
             or not isinstance(prompt, str)
             or hasattr(self._vlm_model, "encode_image")
@@ -4006,7 +4037,11 @@ class VLMBatchedEngine(BaseEngine):
         tower re-encodes every sampled frame on each turn, even when the prefix
         cache already covers the whole prompt.
         """
-        if self._vision_cache is None or not self._vision_cache_enabled:
+        if (
+            self._vision_cache is None
+            or not self._vision_cache_enabled
+            or not self._supports_cached_vision_features()
+        ):
             return None
         token_count = self._image_token_count(input_ids, "video_token_id")
         features = self._vision_cache.get(
@@ -4495,6 +4530,7 @@ class VLMBatchedEngine(BaseEngine):
                 num_images > 0
                 and self._vision_cache is not None
                 and self._vision_cache_enabled
+                and self._supports_cached_vision_features()
                 # Fast path already assembled the combined features.
                 and fast_cached_features is None
             ):
@@ -4654,6 +4690,9 @@ class VLMBatchedEngine(BaseEngine):
                     )
                     call_kwargs.pop("cached_image_features")
                     cache_features_to_grant = []
+                    # This is model capability discovery, not request policy:
+                    # later requests skip the redundant standalone encoder.
+                    self._vision_feature_cache_supported = False
                     embed_features = self._vlm_model.get_input_embeddings(
                         input_ids, pixel_values, mask=attention_mask, **call_kwargs
                     )

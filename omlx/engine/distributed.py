@@ -178,6 +178,12 @@ class DistributedBatchedEngine(BatchedEngine):
     # topology as a broken wrapper chain.
     _prefill_memory_guard_managed_externally = True
 
+    def supports_cache_policy_component(self, component: str) -> bool:
+        # The coordinator's remote runtime does not currently expose a
+        # verifiable per-request cache-policy contract. Reject restrictions
+        # until the rank-side path can confirm enforcement.
+        return False
+
     def __init__(
         self,
         deployment: ClusterDeployment,

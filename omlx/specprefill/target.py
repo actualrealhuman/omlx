@@ -34,6 +34,7 @@ class ExactPrefixCache(Protocol):
         tokens: list[int],
         *,
         promote_to_hot_cache: bool,
+        cache_mode: str = ...,
     ) -> list[Any] | None: ...
 
     def store_exact_prefix(
@@ -42,7 +43,10 @@ class ExactPrefixCache(Protocol):
         tokens: list[int],
         cache_data: list[dict[str, Any]],
         model_cache_config: Any = ...,
+        cache_mode: str = ...,
     ) -> Any: ...
+
+    def grant_exact_prefix_persistence(self, tokens: list[int]) -> int: ...
 
 
 CheckAbort = Callable[[int], None]
@@ -77,6 +81,7 @@ def run_specprefill_target_prefill(
     static_prefix_tokens: Sequence[int] | None = None,
     promote_static_prefix_to_hot_cache: bool = True,
     prepare_prompt_cache: PreparePromptCache | None = None,
+    cache_mode: str = "default",
 ) -> SpecPrefillTargetPrefillResult:
     """Prefill system and selected conversation tokens for one request."""
     prompt_cache = None
@@ -116,12 +121,23 @@ def run_specprefill_target_prefill(
         # ``draft_prefix_cache.fetch_cache``/``reconstruct_cache`` to reuse the
         # draft-model prefix instead of re-scoring from scratch.
         static_prefix_cached_tokens = 0
-        if exact_prefix_cache is not None and static_prefix_tokens:
+        restored_static_prefix = False
+        if (
+            cache_mode != "none"
+            and exact_prefix_cache is not None
+            and static_prefix_tokens
+        ):
             full_static_prefix_tokens = list(static_prefix_tokens)
+            restore_kwargs = (
+                {"cache_mode": cache_mode} if cache_mode != "default" else {}
+            )
             restored_cache = exact_prefix_cache.restore_exact_prefix(
                 f"{request.request_id}:specprefill-static-restore",
                 full_static_prefix_tokens,
-                promote_to_hot_cache=promote_static_prefix_to_hot_cache,
+                promote_to_hot_cache=(
+                    promote_static_prefix_to_hot_cache and cache_mode == "default"
+                ),
+                **restore_kwargs,
             )
             if restored_cache is not None:
                 restore_cache = getattr(target_model, "restore_cache", None)
@@ -131,6 +147,7 @@ def run_specprefill_target_prefill(
                     else restored_cache
                 )
                 static_prefix_cached_tokens = len(full_static_prefix_tokens)
+                restored_static_prefix = True
                 report_system_progress(system_token_count, system_token_count)
                 log.info(
                     f"SpecPrefill: restored {static_prefix_cached_tokens} "
@@ -140,6 +157,21 @@ def run_specprefill_target_prefill(
             prompt_cache = make_prompt_cache(target_model)
         if prepare_prompt_cache is not None:
             prepare_prompt_cache(prompt_cache)
+        if restored_static_prefix and cache_mode == "default":
+            # Grant only after the exact restored cache has passed the target
+            # model's restore hook and cache preparation, so a rejected
+            # candidate cannot make an untouched prefix persistent.
+            grant = getattr(
+                exact_prefix_cache, "grant_exact_prefix_persistence", None
+            )
+            if callable(grant):
+                try:
+                    grant(list(static_prefix_tokens or ()))
+                except Exception as error:
+                    log.debug(
+                        "SpecPrefill: exact-prefix persistence grant failed: %s",
+                        error,
+                    )
 
         if system_token_count > 0 and static_prefix_cached_tokens == 0:
             sys_arr = mx.array(all_tokens[:system_token_count])
@@ -179,6 +211,7 @@ def run_specprefill_target_prefill(
                 exact_prefix_cache is not None
                 and static_prefix_tokens
                 and extract_cache_states
+                and cache_mode != "none"
             ):
                 try:
                     extracted_states, model_cache_config = extract_cache_states(
@@ -190,6 +223,11 @@ def run_specprefill_target_prefill(
                             list(static_prefix_tokens),
                             extracted_states,
                             model_cache_config=model_cache_config,
+                            **(
+                                {"cache_mode": cache_mode}
+                                if cache_mode != "default"
+                                else {}
+                            ),
                         )
                 except Exception as error:
                     log.debug(

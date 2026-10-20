@@ -64,6 +64,8 @@ class _TieredExactPrefixCache:
         self.tokens: list[int] | None = None
         self.layer_states: list[dict[str, Any]] | None = None
         self.restore_promotions: list[bool] = []
+        self.cache_modes: list[tuple[str, str]] = []
+        self.persistence_grants: list[list[int]] = []
 
     def restore_exact_prefix(
         self,
@@ -71,9 +73,11 @@ class _TieredExactPrefixCache:
         tokens: list[int],
         *,
         promote_to_hot_cache: bool,
+        cache_mode: str = "default",
     ) -> list[Any] | None:
         del request_id
         self.restore_promotions.append(promote_to_hot_cache)
+        self.cache_modes.append(("restore", cache_mode))
         if tokens != self.tokens or self.layer_states is None:
             return None
         restored_layers = [_CacheLayer() for _ in self.layer_states]
@@ -89,11 +93,17 @@ class _TieredExactPrefixCache:
         tokens: list[int],
         cache_data: list[dict[str, Any]],
         model_cache_config: Any = None,
+        cache_mode: str = "default",
     ) -> object:
         del request_id, model_cache_config
+        self.cache_modes.append(("store", cache_mode))
         self.tokens = list(tokens)
         self.layer_states = cache_data
         return object()
+
+    def grant_exact_prefix_persistence(self, tokens: list[int]) -> int:
+        self.persistence_grants.append(list(tokens))
+        return len(tokens)
 
 
 def _extract_cache_states(
@@ -136,6 +146,7 @@ def _run(
     static_prefix_tokens: list[int] | None = None,
     promote_static_prefix_to_hot_cache: bool = True,
     prepare_prompt_cache: target_workflow.PreparePromptCache | None = None,
+    cache_mode: str = "default",
 ) -> tuple[Any, _Logger, dict[str, Any]]:
     all_tokens = _all_tokens(
         system_token_count,
@@ -246,6 +257,7 @@ def _run(
             static_prefix_tokens=static_prefix_tokens,
             promote_static_prefix_to_hot_cache=promote_static_prefix_to_hot_cache,
             prepare_prompt_cache=prepare_prompt_cache,
+            cache_mode=cache_mode,
         )
     trace.update(
         {
@@ -400,6 +412,35 @@ def test_target_prefill_prepares_restored_static_prefix_before_sparse_forward():
     assert trace["sparse_calls"][0]["cache"] is result.prompt_cache
 
 
+def test_rejected_static_prefix_is_not_granted_persistence():
+    exact_prefix_cache = _TieredExactPrefixCache()
+    static_prefix_tokens = list(range(5))
+    _run(
+        system_token_count=5,
+        conversation_token_count=8,
+        selected_indices=[0, 2, 6],
+        exact_prefix_cache=exact_prefix_cache,
+        static_prefix_tokens=static_prefix_tokens,
+        extract_cache_states=_extract_cache_states,
+    )
+
+    def reject(_cache):
+        raise ValueError("target cache preparation rejected the restore")
+
+    with pytest.raises(ValueError, match="rejected the restore"):
+        _run(
+            system_token_count=5,
+            conversation_token_count=8,
+            selected_indices=[0, 2, 6],
+            conversation_start=2_000,
+            exact_prefix_cache=exact_prefix_cache,
+            static_prefix_tokens=static_prefix_tokens,
+            prepare_prompt_cache=reject,
+        )
+
+    assert exact_prefix_cache.persistence_grants == []
+
+
 def test_github_2177_restores_static_prefix_from_tiered_cache():
     exact_prefix_cache = _TieredExactPrefixCache()
     static_prefix_tokens = list(range(5))
@@ -424,6 +465,60 @@ def test_github_2177_restores_static_prefix_from_tiered_cache():
     assert warm_result.static_prefix_cached_tokens == len(static_prefix_tokens)
     assert exact_prefix_cache.restore_promotions == [True, False]
     assert "system 5 static-cached" in warm_logger.info_messages[-1]
+    assert exact_prefix_cache.persistence_grants == [static_prefix_tokens]
+
+
+def test_none_policy_skips_exact_static_prefix_lookup_and_store():
+    exact_prefix_cache = _TieredExactPrefixCache()
+    static_prefix_tokens = list(range(5))
+
+    _run(
+        system_token_count=5,
+        conversation_token_count=8,
+        selected_indices=[0, 2, 6],
+        exact_prefix_cache=exact_prefix_cache,
+        static_prefix_tokens=static_prefix_tokens,
+        extract_cache_states=_extract_cache_states,
+        cache_mode="none",
+    )
+
+    assert exact_prefix_cache.cache_modes == []
+    assert exact_prefix_cache.persistence_grants == []
+    assert exact_prefix_cache.tokens is None
+
+
+def test_memory_policy_uses_exact_prefix_without_hot_promotion_or_ssd_grant():
+    exact_prefix_cache = _TieredExactPrefixCache()
+    static_prefix_tokens = list(range(5))
+
+    _run(
+        system_token_count=5,
+        conversation_token_count=8,
+        selected_indices=[0, 2, 6],
+        exact_prefix_cache=exact_prefix_cache,
+        static_prefix_tokens=static_prefix_tokens,
+        extract_cache_states=_extract_cache_states,
+        cache_mode="memory",
+    )
+    _, _, trace = _run(
+        system_token_count=5,
+        conversation_token_count=8,
+        selected_indices=[0, 2, 6],
+        conversation_start=2_000,
+        exact_prefix_cache=exact_prefix_cache,
+        static_prefix_tokens=static_prefix_tokens,
+        extract_cache_states=_extract_cache_states,
+        cache_mode="memory",
+    )
+
+    assert exact_prefix_cache.cache_modes == [
+        ("restore", "memory"),
+        ("store", "memory"),
+        ("restore", "memory"),
+    ]
+    assert exact_prefix_cache.restore_promotions == [False, False]
+    assert exact_prefix_cache.persistence_grants == []
+    assert trace["model"].calls == []
 
 
 def test_static_prefix_hit_supersedes_a_shorter_block_cache_hit():
