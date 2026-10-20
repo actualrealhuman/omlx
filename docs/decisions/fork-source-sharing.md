@@ -16,6 +16,11 @@ known dependencies, and validation pointers, plus a reusable integration guide.
 Describe older topic branches and combined-build sources honestly. Publication
 of an index is not evidence that every addition works on every upstream version.
 
+Combined inference controls may be documented as a planned source while a
+candidate is under review. Give readers a fixed commit only after the candidate
+tip and its validation scope are settled. Keep the already-published Inference
+Throttle entry distinct: the combined work does not replace that source.
+
 Prebuilt binaries, a release schedule, and general compatibility or support
 commitments are outside this scope. The personal build's upstream integration
 and local packaging policy is a separate concern.
@@ -27,6 +32,9 @@ The documentation branch can serve as the fork's entry point while `main`
 remains an upstream mirror and feature branches retain their own histories.
 Keep the guide useful by updating source references when publishing a feature
 or a relevant fix, without creating an automatic publication or build service.
+Document scheduling percentages as relative allowances and activity, not power
+measurements. State coverage and starvation tradeoffs without implying a
+universal performance result or ongoing maintenance commitment.
 
 See the [feature index](../FORK_FEATURES.md) and
 [integration guide](../INTEGRATING_FEATURES.md).
