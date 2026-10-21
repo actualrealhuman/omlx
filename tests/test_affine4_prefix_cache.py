@@ -150,6 +150,150 @@ def test_prefix_reuse_keeps_packed_state_and_independent_dimensions(
         assert mx.array_equal(a, b).item()
 
 
+@pytest.mark.parametrize("cache_cls", [Affine4KVCache, Affine8KVCache])
+@pytest.mark.parametrize("cache_mode", ["default", "memory", "none"])
+def test_packed_affine_request_retention_policy_round_trips_ram(
+    manager_factory, cache_cls, cache_mode
+):
+    """Packed Affine state follows per-request KV retention in the shared cache."""
+    manager = manager_factory(types=(cache_cls.__name__,), hot=True)
+    manager.set_expected_layer_signature(
+        [cache_cls.__name__], turboquant_kv_bits=cache_cls.bits
+    )
+    prefix, _ = _prefix(manager)
+    cache = _cache(length=4, cls=cache_cls)
+    tokens = [10, 11, 12, 13]
+    queued_writes = []
+    write_block_file = manager._write_block_file
+
+    def record_file_write(*args, **kwargs):
+        queued_writes.append(("file", args[0]))
+        return write_block_file(*args, **kwargs)
+
+    manager._write_block_file = record_file_write
+    queue_put = manager._write_queue.put
+
+    def record_queue_put(item, *args, **kwargs):
+        if item is not None:
+            queued_writes.append(("queue", item))
+        return queue_put(item, *args, **kwargs)
+
+    manager._write_queue.put = record_queue_put
+
+    table = prefix.store_cache(
+        "affine-policy-store",
+        tokens,
+        [_data(cache)],
+        model_cache_config=ModelCacheConfig.from_cache_list([cache]),
+        cache_mode=cache_mode,
+    )
+    if cache_mode == "none":
+        assert table is None
+        assert not manager._hot_cache
+        assert queued_writes == []
+        return
+
+    assert table is not None
+    block = prefix.paged_cache.allocated_blocks[table.block_ids[0]]
+    entry = manager._hot_cache_get(block.block_hash)
+    assert entry is not None
+    assert entry["persist_allowed"] is (cache_mode == "default")
+
+    reused, remaining = prefix.fetch_cache(
+        "affine-policy-reuse", tokens + [99], cache_mode=cache_mode
+    )
+    assert reused is not None and remaining == [99]
+    restored = prefix.reconstruct_cache(reused)
+    assert restored is not None and type(restored[0]) is cache_cls
+    _assert_state_equal(_state(cache), _state(restored[0]))
+
+    if cache_mode == "memory":
+        # A pressure write-through hint cannot grant persistence or evict an
+        # existing memory-only block; packed state remains reconstructible.
+        pressured = prefix.store_cache(
+            "affine-policy-pressure",
+            tokens,
+            [_data(cache)],
+            model_cache_config=ModelCacheConfig.from_cache_list([cache]),
+            hot_cache_write_back=False,
+            cache_mode="memory",
+        )
+        assert pressured is not None
+        assert manager._hot_cache_get(block.block_hash)["persist_allowed"] is False
+        assert queued_writes == []
+
+        prefix.paged_cache.release_for_eviction(pressured.block_ids)
+        manager.shrink_hot_cache_to(0)
+        assert queued_writes == []
+
+        # Exercise clear and graceful shutdown with separate live dirty entries
+        # so each cleanup path has an opportunity to enqueue a forbidden write.
+        cleared = prefix.store_cache(
+            "affine-policy-clear",
+            [20, 21, 22, 23],
+            [_data(cache)],
+            model_cache_config=ModelCacheConfig.from_cache_list([cache]),
+            cache_mode="memory",
+        )
+        assert cleared is not None
+        manager.clear_hot_cache()
+        assert queued_writes == []
+
+        shutdown = prefix.store_cache(
+            "affine-policy-shutdown",
+            [30, 31, 32, 33],
+            [_data(cache)],
+            model_cache_config=ModelCacheConfig.from_cache_list([cache]),
+            cache_mode="memory",
+        )
+        assert shutdown is not None
+        manager.close()
+        assert queued_writes == []
+
+
+@pytest.mark.parametrize("cache_cls", [Affine4KVCache, Affine8KVCache])
+def test_packed_affine_default_grant_is_limited_to_adopted_blocks(
+    manager_factory, cache_cls
+):
+    manager = manager_factory(types=(cache_cls.__name__,), hot=True)
+    manager.set_expected_layer_signature(
+        [cache_cls.__name__], turboquant_kv_bits=cache_cls.bits
+    )
+    prefix, _ = _prefix(manager)
+    cache = _cache(length=4, cls=cache_cls)
+    config = ModelCacheConfig.from_cache_list([cache])
+    adopted = prefix.store_cache(
+        "affine-memory-adopted",
+        [1, 2, 3, 4],
+        [_data(cache)],
+        model_cache_config=config,
+        cache_mode="memory",
+    )
+    sibling = prefix.store_cache(
+        "affine-memory-sibling",
+        [5, 6, 7, 8],
+        [_data(cache)],
+        model_cache_config=config,
+        cache_mode="memory",
+    )
+    assert adopted is not None and sibling is not None
+    adopted_hash = prefix.paged_cache.allocated_blocks[adopted.block_ids[0]].block_hash
+    sibling_hash = prefix.paged_cache.allocated_blocks[sibling.block_ids[0]].block_hash
+    assert manager._hot_cache_get(adopted_hash)["persist_allowed"] is False
+    assert manager._hot_cache_get(sibling_hash)["persist_allowed"] is False
+
+    # Once a compatible packed block has been adopted, only that exact table
+    # receives the default request's persistence grant.
+    assert prefix.grant_persistence(adopted) == 1
+    assert manager._hot_cache_get(adopted_hash)["persist_allowed"] is True
+    assert manager._hot_cache_get(sibling_hash)["persist_allowed"] is False
+    manager.clear_hot_cache()
+    assert manager.wait_for_pending_writes(5.0)
+    manager.close()
+    assert manager._get_file_path(adopted_hash).exists()
+    assert not manager._get_file_path(sibling_hash).exists()
+
+
 def test_affine_and_dense_layers_roundtrip_together(manager_factory):
     manager = manager_factory(types=["Affine4KVCache", "KVCache"])
     prefix, _ = _prefix(manager, num_layers=2)
