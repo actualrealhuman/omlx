@@ -23,7 +23,7 @@ Default remains sticky.
 
 - Availability: focused topic branch; public branch publication is pending.
 - Source branch: `feature/custom-css-overrides`.
-- Feature source boundary: `4b30b06e5361e71176bdebe1e31178eab4cfd1bf`
+- Feature source boundary: `abf991f4938f0c772775f312bd4340a25c2f580c`
   (the complete branch history through that commit).
 - Baseline: oMLX v0.7.1, commit
   `bd1e9b112474862ebed550a9c83b4316038a1d74`.
@@ -54,7 +54,7 @@ selection, final cascade order, safe-mode suppression without deletion,
 and True Black scoping. The readability tests check the adjacent cascade feature.
 
 Validation on 2026-10-21 at source revision
-`4b30b06e5361e71176bdebe1e31178eab4cfd1bf`:
+`abf991f4938f0c772775f312bd4340a25c2f580c`:
 
 - JavaScript runtime tests: 6 passed.
 - Focused and adjacent Python tests: 21 passed, 3 deselected.
