@@ -37,7 +37,9 @@ def test_stylesheet_cascade_order():
 
 
 def test_app_default_is_inert_and_custom_css_uses_text_content():
-    assert "data-style-preset" not in BASE.split("<body", 1)[0].split("true-black.css", 1)[0]
+    html_tag = re.search(r"<html[^>]*>", BASE)
+    assert html_tag is not None
+    assert "data-style-preset" not in html_tag.group(0)
     assert "style.textContent = state.enabled ? state.css : ''" in SCRIPT
     assert "innerHTML" not in SCRIPT
     assert "MAX_CSS_BYTES = 64 * 1024" in SCRIPT
@@ -50,7 +52,7 @@ def test_recovery_mode_suppresses_without_deleting_saved_css():
     assert "data-style-preset" in safe_branch
     assert "style.textContent = ''" in safe_branch
     assert "storageRemove(CSS_KEY)" not in safe_branch
-    assert "?custom_css=off" in DIALOG
+    assert "style_overrides.safe_mode_help" in DIALOG
 
 
 def test_true_black_preset_is_scoped_and_high_contrast():
@@ -75,6 +77,7 @@ def test_shared_editor_is_reachable_from_dashboard_and_chat():
     assert 'id="omlx-custom-css-input"' in DIALOG
     assert 'value="default"' in DIALOG
     assert 'value="true-black"' in DIALOG
+    assert "input.addEventListener('change', saveSelectedPreset)" in SCRIPT
 
 
 def test_all_locales_have_complete_style_override_strings():

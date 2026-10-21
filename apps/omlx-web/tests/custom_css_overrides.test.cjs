@@ -97,3 +97,16 @@ test('unknown preset values fail closed to the app default', () => {
     assert.equal(harness.api.read().preset, 'default');
     assert.equal(harness.attrs.has('data-style-preset'), false);
 });
+
+test('oversized stored CSS remains saved but is not applied', () => {
+    const css = 'x'.repeat((64 * 1024) + 1);
+    const harness = createHarness({
+        values: {
+            'omlx-custom-css-enabled': 'on',
+            'omlx-custom-css': css,
+        },
+    });
+    assert.equal(harness.api.read().enabled, false);
+    assert.equal(harness.style.textContent, '');
+    assert.equal(harness.saved.get('omlx-custom-css'), css);
+});
