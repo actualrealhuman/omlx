@@ -26,6 +26,9 @@
     <!-- Tailwind CSS (pre-compiled) -->
     <link rel="stylesheet" href="{{ static('css/tailwind.css') }}">
 
+    <!-- Shared editor for optional built-in and user-authored style overrides. -->
+    <link rel="stylesheet" href="{{ static('css/custom_css_overrides.css') }}">
+
     <!-- Alpine.js -->
     <script defer src="/admin/static/js/alpine.min.js"></script>
 
@@ -168,6 +171,10 @@
 
     {% block head %}{% endblock %}
 
+    <!-- Optional preset: always fetched, but inert unless the early boot script
+         restores data-style-preset="true-black" on the root element. -->
+    <link rel="stylesheet" href="{{ static('css/true-black.css') }}">
+
     <!-- Enhanced Readability: global overrides. Loaded AFTER the head block so it
          wins over theme variable declarations defined inside that block (cascade fix). -->
     <style>
@@ -239,9 +246,17 @@
         }
     </style>
 
+    <!-- User CSS is the final author stylesheet. Assign through textContent so
+         pasted CSS is never interpreted as HTML. The synchronous script applies
+         saved state before body rendering and avoids a wrong-style flash. -->
+    <style id="omlx-custom-css"></style>
+    <script src="{{ static('js/custom_css_overrides.js') }}"></script>
+
 </head>
 <body class="font-sans bg-white text-neutral-900 antialiased selection:bg-neutral-900 selection:text-white">
     {% block content %}{% endblock %}
+
+    {% include "_style_overrides_dialog.html" %}
 
     <script>
         // Lucide icon processor — bypasses createIcons() which has Safari issues.

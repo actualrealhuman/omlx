@@ -1,0 +1,93 @@
+<dialog id="omlx-custom-css-dialog" class="custom-css-dialog"
+        data-true-black-url="{{ static('css/true-black.css') }}"
+        aria-labelledby="omlx-custom-css-title">
+    <div class="custom-css-panel">
+        <header class="custom-css-header">
+            <div>
+                <h2 id="omlx-custom-css-title" class="custom-css-title">{{ t('style_overrides.title') }}</h2>
+                <p class="custom-css-description">{{ t('style_overrides.description') }}</p>
+            </div>
+            <button id="omlx-custom-css-close" type="button" class="custom-css-close"
+                    aria-label="{{ t('style_overrides.close') }}">&#10005;</button>
+        </header>
+
+        <div class="custom-css-body">
+            <div id="omlx-custom-css-safe-notice" class="custom-css-safe-notice" hidden>
+                {{ t('style_overrides.safe_mode') }}
+            </div>
+
+            <section class="custom-css-section">
+                <span class="custom-css-label">{{ t('style_overrides.preset') }}</span>
+                <div class="custom-css-presets">
+                    <label class="custom-css-preset">
+                        <input type="radio" name="omlx-style-preset" value="default">
+                        <span>
+                            <strong>{{ t('style_overrides.preset.default') }}</strong>
+                            <span>{{ t('style_overrides.preset.default_desc') }}</span>
+                        </span>
+                    </label>
+                    <label class="custom-css-preset">
+                        <input type="radio" name="omlx-style-preset" value="true-black">
+                        <span>
+                            <strong>{{ t('style_overrides.preset.true_black') }}</strong>
+                            <span>{{ t('style_overrides.preset.true_black_desc') }}</span>
+                        </span>
+                    </label>
+                </div>
+            </section>
+
+            <section class="custom-css-section">
+                <div class="custom-css-toggle-row">
+                    <div>
+                        <span class="custom-css-label">{{ t('style_overrides.custom') }}</span>
+                        <span class="custom-css-help">{{ t('style_overrides.custom_desc') }}</span>
+                    </div>
+                    <label>
+                        <input id="omlx-custom-css-enabled" type="checkbox">
+                        {{ t('style_overrides.enable') }}
+                    </label>
+                </div>
+                <textarea id="omlx-custom-css-input" class="custom-css-editor"
+                          spellcheck="false" autocapitalize="off" autocomplete="off"
+                          placeholder="{{ t('style_overrides.placeholder') }}"></textarea>
+                <div class="custom-css-meta">
+                    <span id="omlx-custom-css-status" class="custom-css-status" role="status" aria-live="polite"></span>
+                    <span id="omlx-custom-css-count" class="custom-css-count"></span>
+                </div>
+                <div class="custom-css-tools">
+                    <button id="omlx-custom-css-load-preset" type="button" class="custom-css-button">
+                        {{ t('style_overrides.load_preset') }}
+                    </button>
+                    <button id="omlx-custom-css-import" type="button" class="custom-css-button">
+                        {{ t('style_overrides.import') }}
+                    </button>
+                    <button id="omlx-custom-css-export" type="button" class="custom-css-button">
+                        {{ t('style_overrides.export') }}
+                    </button>
+                    <input id="omlx-custom-css-file" type="file" accept="text/css,.css" hidden>
+                </div>
+                <p class="custom-css-warning">{{ t('style_overrides.warning') }}</p>
+                <p class="custom-css-help">{{ t('style_overrides.safe_mode_help') }}</p>
+            </section>
+        </div>
+
+        <footer class="custom-css-footer">
+            <div class="custom-css-actions">
+                <button id="omlx-custom-css-reset" type="button" class="custom-css-button danger">
+                    {{ t('style_overrides.reset') }}
+                </button>
+                <button id="omlx-custom-css-restore" type="button" class="custom-css-button">
+                    {{ t('style_overrides.restore') }}
+                </button>
+            </div>
+            <div class="custom-css-actions">
+                <button id="omlx-custom-css-cancel" type="button" class="custom-css-button">
+                    {{ t('style_overrides.close') }}
+                </button>
+                <button id="omlx-custom-css-save" type="button" class="custom-css-button primary">
+                    {{ t('style_overrides.save') }}
+                </button>
+            </div>
+        </footer>
+    </div>
+</dialog>

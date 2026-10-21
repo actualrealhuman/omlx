@@ -1,0 +1,149 @@
+/*
+ * True Black preset for oMLX. This file is deliberately separate from the
+ * application theme: selecting the preset adds data-style-preset="true-black"
+ * to the root element, while the unmodified application remains the default.
+ */
+:root[data-style-preset="true-black"][data-theme="dark"] {
+    --palette-night-50: 255 255 255;
+    --palette-night-700: 23 23 23;
+    --palette-night-800: 10 10 10;
+    --palette-night-850: 0 0 0;
+    --palette-night-900: 10 10 10;
+    --palette-night-950: 0 0 0;
+    --bg-primary: #000000;
+    --bg-secondary: #0a0a0a;
+    --bg-tertiary: #171717;
+    --text-primary: #ffffff;
+    --text-secondary: #f5f5f5;
+    --text-tertiary: #e5e5e5;
+    --text-muted: #d4d4d4;
+    --border-faint: #404040;
+    --border-normal: #737373;
+    --code-bg: #0a0a0a;
+    --btn-primary: #ffffff;
+    --btn-primary-hover: #e5e5e5;
+    --btn-primary-text: #000000;
+    --focus-ring-color: #ffffff;
+}
+
+:root[data-style-preset="true-black"][data-theme="dark"] .bg-white\/80 {
+    background-color: rgb(0 0 0 / 0.8) !important;
+}
+
+:root[data-style-preset="true-black"][data-theme="dark"] .bg-neutral-50\/50 {
+    background-color: rgb(10 10 10 / 0.5) !important;
+}
+
+:root[data-style-preset="true-black"][data-theme="dark"] [data-cluster-v2-active] .text-neutral-600,
+:root[data-style-preset="true-black"][data-theme="dark"] [data-cluster-v2-active] .text-neutral-500 {
+    color: #f5f5f5 !important;
+}
+
+:root[data-style-preset="true-black"][data-theme="dark"] [data-cluster-v2-active] .text-neutral-400 {
+    color: #d4d4d4 !important;
+}
+
+:root[data-style-preset="true-black"][data-theme="dark"] .gauge-track {
+    background-color: #404040 !important;
+}
+
+:root[data-style-preset="true-black"][data-theme="dark"] .border-neutral-700 {
+    border-color: #404040 !important;
+}
+
+:root[data-style-preset="true-black"][data-theme="dark"] .border-neutral-200,
+:root[data-style-preset="true-black"][data-theme="dark"] input:not([type="range"]),
+:root[data-style-preset="true-black"][data-theme="dark"] select,
+:root[data-style-preset="true-black"][data-theme="dark"] textarea:not(.bg-neutral-900) {
+    border-color: #404040 !important;
+}
+
+:root[data-style-preset="true-black"][data-theme="dark"] button.bg-neutral-900,
+:root[data-style-preset="true-black"][data-theme="dark"] a.bg-neutral-900,
+:root[data-style-preset="true-black"][data-theme="dark"] span.bg-neutral-900 {
+    background-color: #ffffff !important;
+    color: #000000 !important;
+}
+
+:root[data-style-preset="true-black"][data-theme="dark"] button.hover\:bg-neutral-800:hover,
+:root[data-style-preset="true-black"][data-theme="dark"] a.hover\:bg-neutral-800:hover {
+    background-color: #e5e5e5 !important;
+}
+
+:root[data-style-preset="true-black"][data-theme="dark"] button.bg-neutral-900 .text-white,
+:root[data-style-preset="true-black"][data-theme="dark"] button.bg-neutral-900 span,
+:root[data-style-preset="true-black"][data-theme="dark"] button.bg-neutral-900 svg,
+:root[data-style-preset="true-black"][data-theme="dark"] span.bg-neutral-900 span {
+    color: #000000 !important;
+}
+
+:root[data-style-preset="true-black"][data-theme="dark"] span.bg-neutral-900 span.bg-white,
+:root[data-style-preset="true-black"][data-theme="dark"] button.bg-black span.bg-white {
+    background-color: #000000 !important;
+}
+
+:root[data-style-preset="true-black"][data-theme="dark"] button.bg-neutral-900 svg.animate-spin circle { stroke: #000000; }
+:root[data-style-preset="true-black"][data-theme="dark"] button.bg-neutral-900 svg.animate-spin path { fill: #000000; }
+
+:root[data-style-preset="true-black"][data-theme="dark"] [data-cluster-v2-strategy-picker]
+    button[data-selected="true"] {
+    border-color: #737373 !important;
+    color: #ffffff !important;
+    background: #171717 !important;
+    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.16);
+    text-shadow: none;
+    -webkit-font-smoothing: antialiased;
+}
+
+:root[data-style-preset="true-black"][data-theme="dark"] [data-cluster-v2-strategy-picker]
+    button[data-selected="true"] > span:first-child {
+    color: #ffffff !important;
+}
+
+:root[data-style-preset="true-black"][data-theme="dark"] [data-cluster-v2-strategy-picker]
+    button[data-selected="true"] [data-cluster-v2-strategy-recommended] {
+    border-color: rgb(74 222 128 / 0.45) !important;
+    color: #86efac !important;
+    background: rgb(20 83 45 / 0.52) !important;
+}
+
+:root[data-style-preset="true-black"][data-theme="dark"] div.bg-neutral-900,
+:root[data-style-preset="true-black"][data-theme="dark"] textarea.bg-neutral-900 {
+    background-color: #000000 !important;
+}
+
+:root[data-style-preset="true-black"][data-theme="dark"] .bg-neutral-800 { background-color: #0a0a0a !important; }
+
+:root[data-style-preset="true-black"][data-theme="dark"] button.bg-black,
+:root[data-style-preset="true-black"][data-theme="dark"] button.bg-black.border-black {
+    background-color: #ffffff !important;
+    border-color: #ffffff !important;
+}
+
+:root[data-style-preset="true-black"][data-theme="dark"] input[type="range"]::-webkit-slider-thumb {
+    background-color: #ffffff !important;
+}
+
+:root[data-style-preset="true-black"][data-theme="dark"] input[type="range"]::-moz-range-thumb {
+    background-color: #ffffff !important;
+}
+
+:root[data-style-preset="true-black"][data-theme="dark"] .text-neutral-500 { color: #e5e5e5 !important; }
+:root[data-style-preset="true-black"][data-theme="dark"] .text-neutral-400 { color: #d4d4d4 !important; }
+:root[data-style-preset="true-black"][data-theme="dark"] .text-neutral-700 { color: #f5f5f5 !important; }
+:root[data-style-preset="true-black"][data-theme="dark"] .placeholder-neutral-400::placeholder { color: #d4d4d4 !important; }
+
+:root[data-style-preset="true-black"][data-theme="dark"] input[type="checkbox"] {
+    background-color: #0a0a0a !important;
+    border-color: #737373 !important;
+}
+
+:root[data-style-preset="true-black"][data-theme="dark"] input[type="checkbox"]:checked {
+    background-color: #ffffff !important;
+    border-color: #ffffff !important;
+}
+
+:root[data-style-preset="true-black"][data-theme="dark"] ::selection {
+    background-color: #1d4ed8;
+    color: #ffffff;
+}

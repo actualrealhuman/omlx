@@ -19,7 +19,31 @@ Where to use what:
 | Stylesheets | Semantic tokens, or palette entries for one-off marks |
 | Styles built in JS | `rgb(var(--palette-x) / alpha)` |
 
-Do not write hex or `rgb()` literals outside `theme.css`. The one exception is the Enhanced Readability block in `base.html`: its `[style*="color: #..."]` selectors match inline style text, so they keep the literal hex.
+Do not write hex or `rgb()` literals outside `theme.css`. The exceptions are:
+
+- the Enhanced Readability block in `base.html`, whose `[style*="color: #..."]` selectors match inline style text;
+- optional preset stylesheets such as `static/css/true-black.css`, which are isolated user-facing alternatives rather than application colors;
+- browser-local custom CSS entered through the style override editor.
+
+## Optional style overrides
+
+`base.html` defines a stable three-stage override cascade after ordinary page
+styles: an optional built-in preset, Enhanced Readability, and browser-local
+custom CSS. Custom CSS is deliberately last because it is the user's final
+author-level override. Do not move page styles below `#omlx-custom-css`.
+
+The default preset is inert and must leave the application appearance unchanged.
+Built-in presets are scoped by a root attribute such as
+`data-style-preset="true-black"`; never make their selectors global. The shared
+loader and editor live in `static/js/custom_css_overrides.js` and
+`templates/_style_overrides_dialog.html`. Dashboard and chat should only provide
+buttons that open that shared editor rather than implement their own storage or
+injection paths.
+
+Saved overrides are browser-local. `?custom_css=off` is the recovery contract:
+when present, the loader must suppress both the selected preset and custom CSS
+without deleting either. See [`custom-css.md`](custom-css.md) for user behavior,
+security boundaries and limitations.
 
 Families outside Tailwind's palette:
 
