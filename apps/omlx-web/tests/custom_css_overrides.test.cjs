@@ -12,8 +12,8 @@ const SOURCE = fs.readFileSync(
     'utf8',
 );
 
-function createHarness({ search = '', values = {} } = {}) {
-    const attrs = new Map();
+function createHarness({ search = '', values = {}, rootAttributes = {} } = {}) {
+    const attrs = new Map(Object.entries(rootAttributes));
     const style = { textContent: '' };
     const events = [];
     const saved = new Map(Object.entries(values));
@@ -24,6 +24,7 @@ function createHarness({ search = '', values = {} } = {}) {
         removeItem(key) { saved.delete(key); },
     };
     const documentElement = {
+        getAttribute(name) { return attrs.has(name) ? attrs.get(name) : null; },
         setAttribute(name, value) { attrs.set(name, String(value)); },
         removeAttribute(name) { attrs.delete(name); },
     };
@@ -61,6 +62,21 @@ test('default state leaves the upstream appearance unchanged', () => {
         JSON.stringify(harness.api.read()),
         JSON.stringify({ preset: 'default', enabled: false, css: '' }),
     );
+});
+
+test('an adopter can configure the initial preset without changing saved choices', () => {
+    const configured = createHarness({
+        rootAttributes: { 'data-default-style-preset': 'true-black' },
+    });
+    assert.equal(configured.api.read().preset, 'true-black');
+    assert.equal(configured.attrs.get('data-style-preset'), 'true-black');
+
+    const savedChoice = createHarness({
+        rootAttributes: { 'data-default-style-preset': 'true-black' },
+        values: { 'omlx-style-preset': 'default' },
+    });
+    assert.equal(savedChoice.api.read().preset, 'default');
+    assert.equal(savedChoice.attrs.has('data-style-preset'), false);
 });
 
 test('restores the True Black preset and custom CSS before body rendering', () => {

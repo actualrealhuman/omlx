@@ -47,10 +47,16 @@
         return VALID_PRESETS[value] ? value : 'default';
     }
 
+    function defaultPreset() {
+        return normalizePreset(
+            document.documentElement.getAttribute('data-default-style-preset') || 'default'
+        );
+    }
+
     function readState() {
         var css = storageGet(CSS_KEY, '');
         return {
-            preset: normalizePreset(storageGet(PRESET_KEY, 'default')),
+            preset: normalizePreset(storageGet(PRESET_KEY, defaultPreset())),
             enabled: storageGet(ENABLED_KEY, 'off') === 'on' && byteLength(css) <= MAX_CSS_BYTES,
             css: css,
         };
