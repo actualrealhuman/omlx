@@ -48,9 +48,8 @@
     }
 
     function defaultPreset() {
-        return normalizePreset(
-            document.documentElement.getAttribute('data-default-style-preset') || 'default'
-        );
+        var setting = document.querySelector('meta[name="omlx-default-style-preset"]');
+        return normalizePreset(setting ? setting.getAttribute('content') : 'default');
     }
 
     function readState() {

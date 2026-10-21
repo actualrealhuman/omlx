@@ -12,8 +12,8 @@ const SOURCE = fs.readFileSync(
     'utf8',
 );
 
-function createHarness({ search = '', values = {}, rootAttributes = {} } = {}) {
-    const attrs = new Map(Object.entries(rootAttributes));
+function createHarness({ search = '', values = {}, defaultPreset = null } = {}) {
+    const attrs = new Map();
     const style = { textContent: '' };
     const events = [];
     const saved = new Map(Object.entries(values));
@@ -33,6 +33,14 @@ function createHarness({ search = '', values = {}, rootAttributes = {} } = {}) {
         readyState: 'loading',
         addEventListener() {},
         getElementById(id) { return id === 'omlx-custom-css' ? style : null; },
+        querySelector(selector) {
+            if (selector !== 'meta[name="omlx-default-style-preset"]' || defaultPreset === null) {
+                return null;
+            }
+            return {
+                getAttribute(name) { return name === 'content' ? defaultPreset : null; },
+            };
+        },
     };
     const window = {
         document,
@@ -66,13 +74,13 @@ test('default state leaves the upstream appearance unchanged', () => {
 
 test('an adopter can configure the initial preset without changing saved choices', () => {
     const configured = createHarness({
-        rootAttributes: { 'data-default-style-preset': 'true-black' },
+        defaultPreset: 'true-black',
     });
     assert.equal(configured.api.read().preset, 'true-black');
     assert.equal(configured.attrs.get('data-style-preset'), 'true-black');
 
     const savedChoice = createHarness({
-        rootAttributes: { 'data-default-style-preset': 'true-black' },
+        defaultPreset: 'true-black',
         values: { 'omlx-style-preset': 'default' },
     });
     assert.equal(savedChoice.api.read().preset, 'default');

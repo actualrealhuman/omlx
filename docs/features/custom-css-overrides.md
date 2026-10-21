@@ -15,8 +15,9 @@ restored before body rendering. Adding `?custom_css=off` to a page URL suppresse
 saved styling for recovery without deleting it.
 
 Downstream adopters that intentionally want a different initial preset may add
-`data-default-style-preset="true-black"` to the document root. This only affects
-browsers without a saved preset choice; selecting App Default remains sticky.
+`<meta name="omlx-default-style-preset" content="true-black">` to the document
+head. This only affects browsers without a saved preset choice; selecting App
+Default remains sticky.
 
 ## Source and adoption boundary
 

@@ -33,9 +33,11 @@ These settings use browser `localStorage`. They do not change server settings,
 sync to other browsers or devices, or survive clearing site data. A different
 host name or port has separate browser storage.
 
-Packagers may set `data-default-style-preset="true-black"` on the document root
-to make True Black the initial choice for new browser profiles. The upstream
-default remains App Default, and any user selection takes precedence thereafter.
+Packagers may add
+`<meta name="omlx-default-style-preset" content="true-black">` to the document
+head to make True Black the initial choice for new browser profiles. The
+upstream default remains App Default, and any user selection takes precedence
+thereafter.
 
 ## Recovery and trust boundary
 
