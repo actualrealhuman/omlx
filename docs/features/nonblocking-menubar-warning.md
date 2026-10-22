@@ -19,14 +19,17 @@ status item, button, or window is treated as hidden.
 
 ## Source and adoption boundary
 
-- Availability: local focused branch; public availability of the implementation
-  commit has not been verified.
+- Availability: local focused branch; this implementation tip was not publicly
+  available from the verified fork as of 2026-10-21.
 - Source: `feature/nonblocking-menubar-warning`, commit
   `546ac1cf29b6ce8474c5c413e5d9214cad2f4e88`.
-- Baseline: `bd1e9b112474862ebed550a9c83b4316038a1d74` (the pinned stable
-  `v0.7.1` release). The implementation commit's parent is
-  `328edc756010693e61f8bd4e47f00996e0758176`, an ancestor of that baseline.
-  The patch is one focused commit with no unrelated feature commits.
+- Source baseline: `328edc756010693e61f8bd4e47f00996e0758176`, the exact parent
+  of the one-commit implementation. The patch is focused and has no unrelated
+  feature commits.
+- Suggested target: `bd1e9b112474862ebed550a9c83b4316038a1d74` (pinned stable
+  `v0.7.1`). It is newer than the source baseline; port the feature commit onto
+  it and qualify the port rather than diffing the entire source branch against
+  this target.
 - Required changes: apply the complete commit: `MenubarVisibilityWatcher.swift`,
   `MenubarVisibilityRecoveryTests.swift`, its source/test registration in
   `oMLX.xcodeproj/project.pbxproj`, and the testing note in `docs/TESTING.md`.
