@@ -228,6 +228,8 @@ async def upload_intelligence_result(
 
 
 async def _do_upload(ctx: dict, result_data: dict) -> dict:
+    from ..settings import automatic_benchmark_upload_allowed
+
     trimmed, truncated = trim_question_results(result_data.get("question_results"))
     raw_bytes = b""
     raw_gzip = b""
@@ -275,6 +277,11 @@ async def _do_upload(ctx: dict, result_data: dict) -> dict:
     if ctx.get("owner_hash_full"):
         payload["owner_hash"] = ctx["owner_hash_full"]
 
+    # Recheck at the transport boundary; result preparation can take long
+    # enough for the user to turn automatic uploads off.
+    if not automatic_benchmark_upload_allowed("accuracy"):
+        return {"skipped": "disabled"}
+
     resp = await asyncio.to_thread(
         requests.post, OMLX_AI_INTEL_API_URL, json=payload, timeout=15
     )
@@ -301,6 +308,12 @@ async def _do_upload(ctx: dict, result_data: dict) -> dict:
             f"{OMLX_AI_INTEL_API_URL}/{outcome['id']}/raw"
             f"?owner_hash={owner_display}"
         )
+        if not automatic_benchmark_upload_allowed("accuracy"):
+            # The summary is already accepted and cannot be withdrawn, but
+            # respect opt-out before sending the separate question-level raw.
+            outcome["raw_uploaded"] = False
+            outcome["raw_skipped"] = "disabled"
+            return outcome
         try:
             resp2 = await asyncio.to_thread(
                 requests.put,

@@ -1658,7 +1658,7 @@ async def _upload_to_omlx_ai(run: BenchmarkRun, engine_pool: Any) -> None:
             f"measurable generation throughput"
         )
 
-    for result in uploadable_single_results:
+    for result_index, result in enumerate(uploadable_single_results):
         context_length = result["pp"]
         peak_mem_gb = None
         if result.get("peak_memory_bytes") and result["peak_memory_bytes"] > 0:
@@ -1698,6 +1698,14 @@ async def _upload_to_omlx_ai(run: BenchmarkRun, engine_pool: Any) -> None:
         # Attach batching_results only to the first submission (lowest context_length)
         if context_length == uploadable_single_results[0]["pp"] and batching_results:
             payload["batching_results"] = batching_results
+
+        # Settings may change while the first submission is in flight. Check
+        # again at each request boundary so later rows stay local after opt-out.
+        if not automatic_benchmark_upload_allowed("throughput"):
+            remaining = len(uploadable_single_results) - result_index
+            skipped_count += remaining
+            run.upload_state["skipped_reason"] = "disabled"
+            break
 
         try:
             resp = await asyncio.to_thread(
@@ -1800,6 +1808,7 @@ async def _upload_to_omlx_ai(run: BenchmarkRun, engine_pool: Any) -> None:
                 "success": success_count,
                 "failed": failed_count,
                 "skipped": skipped_count,
+                "skipped_reason": run.upload_state.get("skipped_reason"),
                 # Also on the event so SSE-only consumers (the HTML dashboard) get
                 # the flags without polling /results.
                 "feature_flags": run.feature_flags,

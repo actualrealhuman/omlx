@@ -388,6 +388,9 @@
                                                class="text-neutral-400 hover:text-neutral-700 underline break-all" x-text="r.upload.url"></a>
                                         </span>
                                     </template>
+                                    <template x-if="r.upload && r.upload.url && r.upload.raw_skipped === 'disabled'">
+                                        <span class="text-neutral-500">Summary uploaded; question-level data stayed on this Mac because uploads were disabled in Settings.</span>
+                                    </template>
                                     <template x-if="r.upload && r.upload.error">
                                         <span class="inline-flex items-center gap-1.5 text-red-600 flex-wrap">
                                             <i data-lucide="x-circle" class="w-3.5 h-3.5 flex-shrink-0"></i>

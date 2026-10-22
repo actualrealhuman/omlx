@@ -451,6 +451,10 @@
                                     <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
                                 </a>
                             </div>
+                            <p x-show="benchUploadDone?.skipped_reason === 'disabled'" x-cloak
+                               class="pt-2 text-xs text-neutral-500">
+                                Automatic uploads were disabled in Settings; remaining results stayed on this Mac.
+                            </p>
                         </div>
                     </div>
 

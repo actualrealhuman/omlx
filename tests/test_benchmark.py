@@ -1507,6 +1507,57 @@ class TestUploadToOmlxAi:
         assert [event["type"] for event in run.events] == ["upload_skipped"]
 
     @pytest.mark.asyncio
+    async def test_policy_disabled_during_first_post_skips_remaining_rows(
+        self, monkeypatch
+    ):
+        from omlx.admin.benchmark import _upload_to_omlx_ai
+
+        allowed = True
+        monkeypatch.setattr(
+            "omlx.settings.automatic_benchmark_upload_allowed",
+            lambda kind: kind == "throughput" and allowed,
+        )
+        run = BenchmarkRun(
+            bench_id="test-bench-opt-out",
+            request=BenchmarkRequest(
+                model_id="Qwen3-30B-4bit", prompt_lengths=[1024, 2048]
+            ),
+        )
+        run.results = [
+            {
+                "test_type": "single", "pp": context, "tg": 128,
+                "processing_tps": 500.0, "gen_tps": 50.0,
+                "ttft_ms": 100.0, "peak_memory_bytes": 0,
+            }
+            for context in (1024, 2048)
+        ]
+        mock_entry = MagicMock()
+        mock_entry.model_path = "/models/Qwen3-30B-4bit"
+        mock_pool = MagicMock()
+        mock_pool.get_entry.return_value = mock_entry
+        response = MagicMock(status_code=201)
+        response.json.return_value = {"id": "first", "url": "https://omlx.ai/b/first"}
+
+        async def post_then_disable(*args, **kwargs):
+            nonlocal allowed
+            allowed = False
+            return response
+
+        transport = AsyncMock(side_effect=post_then_disable)
+        with patch("asyncio.to_thread", transport):
+            await _upload_to_omlx_ai(run, mock_pool)
+
+        transport.assert_awaited_once()
+        done = next(
+            event["data"] for event in run.events if event["type"] == "upload_done"
+        )
+        assert done["success"] == 1
+        assert done["failed"] == 0
+        assert done["skipped"] == 1
+        assert done["skipped_reason"] == "disabled"
+        assert run.upload_state["results"][0]["id"] == "first"
+
+    @pytest.mark.asyncio
     async def test_upload_success(self):
         """Test successful upload sends correct SSE events."""
         from omlx.admin.benchmark import _upload_to_omlx_ai

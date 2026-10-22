@@ -36,4 +36,6 @@ def test_dashboard_explains_policy_skips_for_both_benchmark_kinds():
     accuracy = ACCURACY_TEMPLATE.read_text(encoding="utf-8")
 
     assert "Automatic throughput uploads are disabled in Settings" in throughput
+    assert "remaining results stayed on this Mac" in throughput
     assert "Not uploaded (disabled in Settings)" in accuracy
+    assert "question-level data stayed on this Mac" in accuracy

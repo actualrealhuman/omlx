@@ -299,6 +299,40 @@ class TestUploadIntelligenceResult:
         assert put_call.kwargs["headers"] == {"Content-Type": "application/gzip"}
 
     @pytest.mark.asyncio
+    async def test_policy_disabled_after_summary_skips_raw_upload(self, monkeypatch):
+        allowed = True
+        monkeypatch.setattr(
+            "omlx.settings.automatic_benchmark_upload_allowed",
+            lambda kind: kind == "accuracy" and allowed,
+        )
+        post_resp = _response(
+            201,
+            {
+                "id": "accepted-summary",
+                "url": "https://omlx.ai/benchmarks/intelligence/accepted-summary",
+            },
+        )
+
+        async def post_then_disable(*args, **kwargs):
+            nonlocal allowed
+            allowed = False
+            return post_resp
+
+        transport = AsyncMock(side_effect=post_then_disable)
+        with patch("asyncio.to_thread", transport):
+            outcome = await upload_intelligence_result(
+                MagicMock(), _ctx(), _result_data()
+            )
+
+        transport.assert_awaited_once()
+        assert outcome == {
+            "id": "accepted-summary",
+            "url": "https://omlx.ai/benchmarks/intelligence/accepted-summary",
+            "raw_uploaded": False,
+            "raw_skipped": "disabled",
+        }
+
+    @pytest.mark.asyncio
     async def test_duplicate_409_is_success_and_skips_raw(self):
         post_resp = _response(409, {
             "existing_id": "dup00001",
