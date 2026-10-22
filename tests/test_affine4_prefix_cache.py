@@ -203,7 +203,7 @@ def test_packed_affine_request_retention_policy_round_trips_ram(
         "affine-policy-reuse", tokens + [99], cache_mode=cache_mode
     )
     assert reused is not None and remaining == [99]
-    restored = prefix.reconstruct_cache(reused)
+    restored = prefix.reconstruct_cache(reused, cache_mode=cache_mode)
     assert restored is not None and type(restored[0]) is cache_cls
     _assert_state_equal(_state(cache), _state(restored[0]))
 

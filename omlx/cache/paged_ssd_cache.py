@@ -2052,6 +2052,10 @@ class PagedSSDCacheManager(CacheManager):
             return bool(new.get("persist_allowed", True))
         if old.get("persist_allowed", True):
             new["persist_allowed"] = True
+            # A queued writer and its pending buffer own this exact metadata
+            # object. Preserve that identity when replacing the same artifact
+            # so completion can mark it durable and clear pending writes.
+            new["block_metadata"] = old["block_metadata"]
         return True
 
     def _handle_hot_cache_eviction(self, block_hash: bytes, entry: dict) -> None:
