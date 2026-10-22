@@ -97,17 +97,17 @@ def test_wheel_listener_is_registered_only_during_scroll_setup():
     assert "addEventListener('wheel'" not in scroll
 
 
-def test_chat_history_is_sorted_before_it_is_trimmed():
+def test_chat_history_is_sorted_before_the_record_is_stored():
     save = _section(
         _template(),
-        "    saveCurrentChat(",
+        "    async saveCurrentChat(",
         "    startRenamingChat(chat)",
     )
 
-    assert save.index("this.sortChatHistory()") < save.index(
-        "this.chatHistory.slice(0, MAX_CHAT_HISTORY_SIZE)"
+    assert save.index("this.sortChatHistory(nextHistory)") < save.index(
+        "this.chatHistory = nextHistory"
     )
-    assert "this.saveChatHistory()" in save
+    assert "this.saveChatRecord(chatData, { action: 'chat' })" in save
 
 
 def test_chat_navigation_preserves_the_previous_chat_timestamp():
@@ -118,11 +118,11 @@ def test_chat_navigation_preserves_the_previous_chat_timestamp():
     load = _section(
         html,
         "    async loadChat(chatId)",
-        "    saveCurrentChat(",
+        "    async saveCurrentChat(",
     )
     save = _section(
         html,
-        "    saveCurrentChat(",
+        "    async saveCurrentChat(",
         "    startRenamingChat(chat)",
     )
 
@@ -489,5 +489,7 @@ def test_composer_remains_single_field_and_pauses_on_storage_failure():
     html = _template()
     fields = re.findall(r"<textarea\b[^>]*x-model=\"inputMessage\"[^>]*>", html, re.S)
     assert len(fields) == 1
-    assert "chatStorageIssue" in fields[0]
-    assert html.index(fields[0]) < html.index("composer-toolbar")
+    send_button = re.search(r'<button\b[^>]*@click="sendMessage\(\)"[^>]*>', html, re.S)
+    assert send_button is not None
+    assert "!!chatStorageIssue" in send_button.group(0)
+    assert html.index(fields[0]) < html.index('<div class="composer-toolbar')

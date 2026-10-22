@@ -2911,6 +2911,11 @@
             chatStorageBackend: null,
             // Last-known revision per chat, used for optimistic concurrency.
             _chatRevs: {},
+            // Queues and tombstones for durable per-chat writes and deletions.
+            _chatWriteChain: {},
+            _deletedChatIds: new Set(),
+            _pendingRemovalIds: [],
+            _pendingRemovalAction: null,
             _tabChannel: null,
             _otherTabsOpen: 0,
             _pendingChatHistory: null,
@@ -4248,6 +4253,52 @@
                     thinking_tokens: stream?._thinkTokens || 0,
                     total_tokens: usage.completion_tokens ?? 0,
                 };
+            },
+
+            commitAccumulatedStream(context, chatSession, stream, requestModel, error = null) {
+                if (stream?._discardWrites) return null;
+                let content = (stream._toolRoundContent || '') + (stream.streamingContent || '');
+                if (!content && !stream.streamingThinking) return null;
+
+                const assistantId = stream.targetMessageId || this.newMessageId();
+                const errorMessage = error
+                    ? String(error.message || error).slice(0, 500)
+                    : null;
+                if (errorMessage) {
+                    content = content
+                        ? `${content}\n\nError: ${errorMessage}`
+                        : `Error: ${errorMessage}`;
+                }
+                const assistantMsg = {
+                    id: assistantId,
+                    role: 'assistant',
+                    content,
+                    reasoning_content: this.hasVisibleThinking(stream.streamingThinking)
+                        ? stream.streamingThinking : null,
+                    model: requestModel,
+                    meta: this.captureGenerationContext(
+                        requestModel,
+                        context.systemPrompt,
+                        context._profile,
+                        context._generationOverride
+                    ),
+                    _perfVisible: false,
+                    _thinkingOpen: false,
+                };
+                this.attachThinkingToAssistantMessage(assistantMsg, stream.streamingThinking);
+                this.attachProfileToAssistantMessage(assistantMsg, context._profile);
+                chatSession.messages.push(assistantMsg);
+                this._setActiveVariant(chatSession, assistantId, context._variantUserIndex);
+                this.saveStreamChat(stream,
+                    context.chatId,
+                    chatSession.messages,
+                    chatSession.model,
+                    context.systemPrompt
+                );
+                if (this.currentChatId === context.chatId) {
+                    this.scheduleEnhanceMessages();
+                }
+                return assistantMsg;
             },
 
             cancelStreamTransport(stream) {
@@ -7681,21 +7732,34 @@
 
         } catch (error) {
             console.log('[streamResponse] catch error:', error.name, error.message);
+            // Whether the reader was stopped deliberately or the connection
+            // failed, reasoning is no longer actively streaming.
+            if (stream.thinkingState.isInThinking) {
+                stream.thinkingState.isInThinking = false;
+                stream.thinkingState.thinkingStartTime = null;
+            }
             if (error.name === 'AbortError') {
                 console.log('[streamResponse] AbortError caught - stream stopped by user');
-                // Reset thinking state (reasoning now lives in streamingThinking, not streamingContent)
-                if (stream.thinkingState.isInThinking) {
-                    stream.thinkingState.isInThinking = false;
-                    stream.thinkingState.thinkingStartTime = null;
-                }
                 // Stream was stopped by user — push whatever was accumulated,
                 // including response text set aside when tool calls began.
-                if (stream._toolRoundContent || stream.streamingContent || stream.streamingThinking) {
+                this.commitAccumulatedStream(context, chatSession, stream, requestModel);
+            } else {
+                console.error('Streaming error:', error);
+                if (!this.commitAccumulatedStream(
+                    context, chatSession, stream, requestModel, error
+                )) {
+                    // The stream can die with tokens already on screen — a backgrounded
+                    // WebKit tab kills the fetch ("TypeError: Load failed"). Keep that
+                    // text, as the Stop path does, instead of replacing it with the
+                    // error line alone. Appending the error keeps the failure visible.
                     const assistantId = stream.targetMessageId || this.newMessageId();
+                    const partialContent = (stream._toolRoundContent || '') + (stream.streamingContent || '');
                     const assistantMsg = {
                         id: assistantId,
                         role: 'assistant',
-                        content: (stream._toolRoundContent || '') + (stream.streamingContent || ''),
+                        content: partialContent
+                            ? `${partialContent}\n\nError: ${error.message}`
+                            : `Error: ${error.message}`,
                         reasoning_content: this.hasVisibleThinking(stream.streamingThinking)
                             ? stream.streamingThinking : null,
                         model: requestModel,
@@ -7716,40 +7780,6 @@
                     if (this.currentChatId === context.chatId) {
                         this.scheduleEnhanceMessages();
                     }
-                }
-            } else {
-                console.error('Streaming error:', error);
-                // The stream can die with tokens already on screen — a backgrounded
-                // WebKit tab kills the fetch ("TypeError: Load failed"). Keep that
-                // text, as the Stop path does, instead of replacing it with the
-                // error line alone. Appending the error keeps the failure visible.
-                const assistantId = stream.targetMessageId || this.newMessageId();
-                const partialContent = (stream._toolRoundContent || '') + (stream.streamingContent || '');
-                const assistantMsg = {
-                    id: assistantId,
-                    role: 'assistant',
-                    content: partialContent
-                        ? `${partialContent}\n\nError: ${error.message}`
-                        : `Error: ${error.message}`,
-                    reasoning_content: this.hasVisibleThinking(stream.streamingThinking)
-                        ? stream.streamingThinking : null,
-                    model: requestModel,
-                    meta: this.captureGenerationContext(
-                        requestModel,
-                        context.systemPrompt,
-                        context._profile,
-                        context._generationOverride
-                    ),
-                    _perfVisible: false,
-                    _thinkingOpen: false,
-                };
-                this.attachThinkingToAssistantMessage(assistantMsg, stream.streamingThinking);
-                this.attachProfileToAssistantMessage(assistantMsg, context._profile);
-                chatSession.messages.push(assistantMsg);
-                this._setActiveVariant(chatSession, assistantId, context._variantUserIndex);
-                await this.saveStreamChat(stream, context.chatId, chatSession.messages, chatSession.model, context.systemPrompt);
-                if (this.currentChatId === context.chatId) {
-                    this.scheduleEnhanceMessages();
                 }
             }
         } finally {
