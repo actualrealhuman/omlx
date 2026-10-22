@@ -2271,5 +2271,21 @@
   "cluster.v2.join.cleanup_forgotten": "旧清理已在本机被忘记。远程清理未获确认。",
   "cluster.v2.join.forget_cleanup_error": "无法忘记此清理。",
   "cluster.v2.membership.waiting_request": "等待这台 Mac 显示配对码并发送配对请求。",
-  "cluster.v2.membership.add_device": "添加这台 Mac"
+  "cluster.v2.membership.add_device": "添加这台 Mac",
+  "chat.storage_error.title": "聊天记录未保存",
+  "chat.storage_error.quota": "浏览器存储空间已满。在您下载备份并释放空间之前，新的聊天操作已暂停。",
+  "chat.storage_error.corrupt": "存储的聊天记录已损坏或无法读取。数据已保留以便恢复，不会被覆盖。",
+  "chat.storage_error.serialization": "无法编码待保存的聊天记录。为确保现有记录安全，新的聊天操作已暂停。",
+  "chat.storage_error.unavailable": "无法使用浏览器存储。为确保现有记录安全，新的聊天操作已暂停。",
+  "chat.storage_error.incomplete": "部分聊天无法转换为新的存储格式，因此转换已停止。没有内容被覆盖或删除，您的原始历史记录已保留以供下载。",
+  "chat.storage_error.no_data_deleted": "未删除任何现有聊天。",
+  "chat.storage_error.download_pending": "下载未保存的聊天",
+  "chat.storage_error.download_raw": "下载恢复数据",
+  "chat.storage_error.retry": "重试保存",
+  "chat.storage_error.manage": "管理聊天",
+  "chat.storage_error.conflict": "此聊天在另一个标签页或窗口中被修改。您的版本已保留为未保存，以免丢失任何内容。",
+  "chat.storage_error.index": "无法更新聊天索引。您的聊天仍然已保存。",
+  "chat.storage_error.load_newer": "加载较新版本",
+  "chat.storage_error.keep_mine": "保留我的版本",
+  "chat.multi_tab_notice": "聊天已在另一个标签页中打开。同时操作可能导致冲突。"
 }

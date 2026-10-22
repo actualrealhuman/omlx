@@ -24,6 +24,22 @@ NEW_I18N_KEYS = {
     "chat.max_tool_rounds",
     "chat.max_tool_rounds_hint",
     "chat.error.max_tool_rounds",
+    "chat.storage_error.title",
+    "chat.storage_error.quota",
+    "chat.storage_error.corrupt",
+    "chat.storage_error.serialization",
+    "chat.storage_error.unavailable",
+    "chat.storage_error.incomplete",
+    "chat.storage_error.no_data_deleted",
+    "chat.storage_error.download_pending",
+    "chat.storage_error.download_raw",
+    "chat.storage_error.retry",
+    "chat.storage_error.manage",
+    "chat.storage_error.conflict",
+    "chat.storage_error.index",
+    "chat.storage_error.load_newer",
+    "chat.storage_error.keep_mine",
+    "chat.multi_tab_notice",
 }
 
 
@@ -431,3 +447,47 @@ const pick = async (meta) => {
         "named": "Work",
         "legacy": "Work",
     }
+
+
+def test_chat_storage_modules_and_recovery_controls_are_wired():
+    html = _template()
+    for module in (
+        "chat_history_storage.js",
+        "chat_record_store.js",
+        "chat_media_store.js",
+        "chat_indexeddb_store.js",
+        "chat_history_migration.js",
+    ):
+        assert f"/admin/static/js/{module}" in html
+    assert "chatStorageIssueMessage()" in html
+    assert "downloadPendingChatHistory()" in html
+    assert "retryChatHistorySave()" in html
+    assert ':inert="!!chatStorageIssue"' in html
+
+
+def test_chat_storage_writes_are_serialized_and_deletion_retires_streams():
+    html = _template()
+    save = _section(html, "    async saveChatHistory(", "    async saveChatRecord(")
+    record = _section(html, "    async saveChatRecord(", "    async saveStreamChat(")
+    delete = _section(html, "    async deleteChat(", "    async clearAllHistory(")
+    clear = _section(html, "    async clearAllHistory(", "    escapeHtml(")
+    assert "this.serializeChatWrite(chat.id" in save
+    assert "this.serializeChatWrite(chat.id" in record
+    assert "removedIds: [chatId]" in delete
+    assert "this.retireRemovedChats([chatId])" in delete
+    assert "this.retireRemovedChats([...affectedIds])" in clear
+
+
+def test_storage_translation_keys_match_every_supported_locale():
+    for path in I18N_DIR.glob("*.json"):
+        translations = json.loads(path.read_text())
+        missing = NEW_I18N_KEYS - translations.keys()
+        assert not missing, f"{path.name} is missing {sorted(missing)}"
+
+
+def test_composer_remains_single_field_and_pauses_on_storage_failure():
+    html = _template()
+    fields = re.findall(r"<textarea\b[^>]*x-model=\"inputMessage\"[^>]*>", html, re.S)
+    assert len(fields) == 1
+    assert "chatStorageIssue" in fields[0]
+    assert html.index(fields[0]) < html.index("composer-toolbar")

@@ -7,6 +7,11 @@
 <script src="/admin/static/js/purify.min.js"></script>
 <script src="/admin/static/js/marked.umd.js"></script>
 <script src="/admin/static/js/marked-highlight.umd.js"></script>
+<script src="/admin/static/js/chat_history_storage.js"></script>
+<script src="/admin/static/js/chat_record_store.js"></script>
+<script src="/admin/static/js/chat_media_store.js"></script>
+<script src="/admin/static/js/chat_indexeddb_store.js"></script>
+<script src="/admin/static/js/chat_history_migration.js"></script>
 
 <!-- Code highlighting -->
 <link rel="stylesheet" id="hljs-light-theme" href="/admin/static/css/hljs-github.min.css">
@@ -1272,8 +1277,8 @@
 
         <!-- New Chat Button -->
         <div class="p-3 flex-shrink-0 space-y-2">
-            <button @click="startNewChat()"
-                class="w-full flex items-center gap-2 px-3 py-2 bg-surface-muted hover:bg-surface-alt rounded-lg text-sm font-medium transition-colors"
+            <button @click="startNewChat()" :disabled="!!chatStorageIssue"
+                class="w-full flex items-center gap-2 px-3 py-2 bg-surface-muted hover:bg-surface-alt rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 style="color: var(--text-primary);">
                 <i data-lucide="plus" class="w-4 h-4"></i>
                 {{ t('chat.new_chat') }}
@@ -1370,6 +1375,50 @@
 
     <!-- Main Content -->
     <div class="flex-1 flex flex-col bg-surface overflow-hidden min-w-0 relative">
+        <!-- Persistent storage failures must stay visible until the data is safe again. -->
+        <div x-show="chatStorageIssue" x-cloak role="alert" aria-live="assertive"
+            class="absolute top-3 left-1/2 -translate-x-1/2 z-[180] w-full max-w-2xl rounded-xl border p-4 shadow-2xl"
+            style="width: calc(100% - 2rem); background: var(--bg-primary); border-color: var(--text-danger); color: var(--text-primary);">
+            <div class="flex items-start gap-3">
+                <i data-lucide="triangle-alert" class="w-5 h-5 flex-shrink-0 text-danger mt-0.5"></i>
+                <div class="min-w-0 flex-1">
+                    <h3 class="text-sm font-bold" x-text="window.t('chat.storage_error.title')"></h3>
+                    <p class="mt-1 text-xs" style="color: var(--text-secondary);"
+                        x-text="chatStorageIssueMessage()"></p>
+                    <p class="mt-1 text-xs font-semibold text-danger"
+                        x-text="window.t('chat.storage_error.no_data_deleted')"></p>
+                    <div class="mt-3 flex flex-wrap gap-2">
+                        <button type="button" @click="downloadPendingChatHistory()"
+                            x-show="chatStorageIssue?.pendingJson || chatStorageIssue?.raw != null"
+                            class="px-3 py-1.5 text-xs font-medium rounded-lg border border-line bg-surface-muted hover:bg-surface-alt"
+                            x-text="chatStorageIssue?.pendingJson ? window.t('chat.storage_error.download_pending') : window.t('chat.storage_error.download_raw')"></button>
+                        <!-- A conflict is resolved by choosing a version, not by retrying:
+                             retrying would collide again. The user decides explicitly. -->
+                        <button type="button" @click="resolveChatConflictLoadNewer()"
+                            x-show="chatStorageIssue?.kind === 'conflict'"
+                            class="px-3 py-1.5 text-xs font-medium rounded-lg bg-accent text-accent-fg hover:bg-accent-hover"
+                            x-text="window.t('chat.storage_error.load_newer')"></button>
+                        <button type="button" @click="resolveChatConflictKeepMine()"
+                            x-show="chatStorageIssue?.kind === 'conflict'"
+                            class="px-3 py-1.5 text-xs font-medium rounded-lg border border-line bg-surface-muted hover:bg-surface-alt"
+                            x-text="window.t('chat.storage_error.keep_mine')"></button>
+                        <button type="button" @click="retryChatHistorySave()"
+                            x-show="chatStorageIssue?.kind !== 'conflict'"
+                            class="px-3 py-1.5 text-xs font-medium rounded-lg bg-accent text-accent-fg hover:bg-accent-hover"
+                            x-text="window.t('chat.storage_error.retry')"></button>
+                        <button type="button" @click="showChatSettingsModal = true"
+                            class="px-3 py-1.5 text-xs font-medium rounded-lg border border-line bg-surface-muted hover:bg-surface-alt"
+                            x-text="window.t('chat.storage_error.manage')"></button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- Advisory only: the revision check on write is what prevents loss. -->
+        <div x-show="_otherTabsOpen > 0 && !chatStorageIssue" x-cloak role="status" aria-live="polite"
+            class="absolute top-3 left-1/2 -translate-x-1/2 z-[170] rounded-lg border px-3 py-2 text-xs shadow-lg"
+            style="background: var(--bg-primary); border-color: var(--line-strong); color: var(--text-secondary);">
+            <span x-text="window.t('chat.multi_tab_notice')"></span>
+        </div>
         <!-- Floating Sidebar Toggles -->
         <button @click="sidebarOpen = true"
             class="absolute p-1.5 bg-surface hover:bg-surface-muted rounded-lg border border-line z-[100] shadow-sm"
@@ -2247,7 +2296,7 @@
 
                         <div class="relative flex-shrink-0">
                             <button x-show="!isCurrentChatStreaming()" @click="sendMessage()"
-                                :disabled="(hasAsrSupport() ? (!uploadAudio || micActive()) : (!inputMessage.trim() && uploadImages.length === 0 && uploadDocuments.length === 0)) || hasPendingUploads() || !apiKeySet || !currentModel"
+                                :disabled="(hasAsrSupport() ? (!uploadAudio || micActive()) : (!inputMessage.trim() && uploadImages.length === 0 && uploadDocuments.length === 0)) || hasPendingUploads() || !apiKeySet || !currentModel || !!chatStorageIssue"
                                 class="w-9 h-9 ml-1 bg-accent hover:bg-accent-hover disabled:bg-surface-muted rounded-full transition-colors flex items-center justify-center">
                                 <i data-lucide="arrow-up" class="w-4 h-4 text-accent-fg"></i>
                             </button>
@@ -2348,7 +2397,8 @@
         </div>
 
         <!-- Tab Content: Scrollable area -->
-        <div class="flex-1 overflow-y-auto custom-scrollbar">
+        <div class="flex-1 overflow-y-auto custom-scrollbar"
+            :inert="!!chatStorageIssue" :aria-disabled="!!chatStorageIssue">
 
             <!-- ==================== PROFILE TAB ==================== -->
             <div x-show="rightSidebarTab === 'profile'" class="px-4 py-3 space-y-3">
@@ -2779,8 +2829,11 @@
     }
 
     const CHAT_UNTITLED_I18N_KEY = 'chat.untitled_title';
-    const MAX_CHAT_HISTORY_SIZE = 100;
     const CHAT_HISTORY_STORAGE_KEY = 'omlx_chat_history';
+    const CHAT_RECORD_PREFIX = 'omlx_chat_v2:';
+    const CHAT_RECORD_INDEX_KEY = 'omlx_chat_v2_index';
+    const CHAT_RECORD_META_KEY = 'omlx_chat_v2_meta';
+    const CHAT_TAB_CHANNEL = 'omlx-chat-storage';
     const API_KEY_STORAGE_KEY = 'omlx_chat_api_key';
     const THEME_STORAGE_KEY = 'omlx-chat-theme';
     const ALLOW_SVG_STORAGE_KEY = 'omlx-chat-allow-svg';
@@ -2850,6 +2903,17 @@
             // Chat State
             currentChatId: null,
             chatHistory: [],
+            chatStorageIssue: null,
+            _chatHistoryStore: null,
+            _chatRecordStore: null,
+            _localRecordStore: null,
+            _chatStorageReady: false,
+            chatStorageBackend: null,
+            // Last-known revision per chat, used for optimistic concurrency.
+            _chatRevs: {},
+            _tabChannel: null,
+            _otherTabsOpen: 0,
+            _pendingChatHistory: null,
             _thinkingDomSeq: 0,
             _adminModelsList: null,
             _adminModelsListPromise: null,
@@ -3204,29 +3268,31 @@
                 }
             },
 
-            persistChatSettingsToHistory(chatId = this.currentChatId) {
+            async persistChatSettingsToHistory(chatId = this.currentChatId) {
                 const session = this.getChatSession(chatId, false);
                 if (!session || !chatId) return;
+                if (!this.chatMutationAllowed()) return;
                 if (chatId === this.currentChatId) {
                     this.syncSessionModelSettingsFromUi(session);
                 }
                 const existingIndex = this.chatHistory.findIndex(c => c.id === chatId);
                 if (existingIndex < 0) {
-                    this.saveCurrentChat(chatId);
+                    await this.saveCurrentChat(chatId);
                     return;
                 }
                 const snap = this.captureSessionModelSettings();
-                this.chatHistory[existingIndex] = {
-                    ...this.chatHistory[existingIndex],
-                    model: session.model ?? this.chatHistory[existingIndex].model,
-                    systemPrompt: session.systemPrompt ?? this.chatHistory[existingIndex].systemPrompt,
-                    activeProfile: session.activeProfile ?? this.chatHistory[existingIndex].activeProfile,
+                const nextHistory = [...this.chatHistory];
+                nextHistory[existingIndex] = {
+                    ...nextHistory[existingIndex],
+                    model: session.model ?? nextHistory[existingIndex].model,
+                    systemPrompt: session.systemPrompt ?? nextHistory[existingIndex].systemPrompt,
+                    activeProfile: session.activeProfile ?? nextHistory[existingIndex].activeProfile,
                     modelSettings: snap.modelSettings,
                     speculativeEngine: snap.speculativeEngine,
                     speculativeDraftModel: snap.speculativeDraftModel,
                     modelSettingsByModel: this.cloneData(session.modelSettingsByModel || {}),
                 };
-                this.saveChatHistory();
+                await this.saveChatHistory(nextHistory, { action: 'settings' });
             },
 
             emptyStats() {
@@ -3581,6 +3647,7 @@
             },
 
             async selectVariant(userIndex, variantId) {
+                if (!this.chatMutationAllowed()) return;
                 const session = this.getChatSession(this.currentChatId, true);
                 if (!session?.messages[userIndex] || session.messages[userIndex].role !== 'user') return;
                 // Picking an earlier variant mid-regeneration shows it again.
@@ -3590,7 +3657,7 @@
                 const variant = session.messages.find(m => m.id === variantId);
                 this.applyVariantStats(variant);
                 await this.applyVariantPanelSnapshot(variant, session);
-                this.saveCurrentChat(this.currentChatId);
+                await this.saveCurrentChat(this.currentChatId);
                 this.scheduleEnhanceMessages();
             },
 
@@ -3681,7 +3748,8 @@
                 }
                 this.syncSessionModelSettingsFromUi(session);
                 this.modelSettingsDirty = false;
-                this.persistChatSettingsToHistory(this.currentChatId);
+                // selectVariant persists this snapshot after the panel state is applied.
+                // A second write here can race its revision check in IndexedDB.
                 if (this.currentModel) {
                     await this.loadModelCapabilities(this.currentModel);
                 }
@@ -4282,6 +4350,9 @@
             localStorage.setItem(API_KEY_STORAGE_KEY, serverApiKey);
         }
 
+        // Resolve the storage backend before any history is read or written.
+        await this.initChatStorage();
+
         const storedKey = localStorage.getItem(API_KEY_STORAGE_KEY);
         if (storedKey) {
             this.apiKeySet = true;
@@ -4289,9 +4360,11 @@
             if (this.currentModel) {
                 await this.loadModelCapabilities(this.currentModel);
             }
-            this.loadChatHistory();
+            await this.loadChatHistory();
             this.fetchMcpTools();
         }
+
+        this.setupChatTabChannel();
 
         this.applyTheme();
         this.checkForUpdate();
@@ -4970,36 +5043,458 @@
         });
     },
 
-    async downloadChats() {
-        // localStorage can hold an older snapshot after a quota failure.
-        const chats = this.chatHistory || [];
-        if (!chats.length) {
-            alert(window.t('chat.no_chats_to_export'));
+    chatHistoryStore() {
+        if (!this._chatHistoryStore) {
+            this._chatHistoryStore = createChatHistoryStorage(
+                localStorage,
+                CHAT_HISTORY_STORAGE_KEY
+            );
+        }
+        return this._chatHistoryStore;
+    },
+
+    // Synchronous accessor. initChatStorage() normally resolves the backend at
+    // startup; if something reads before then it gets the localStorage store
+    // rather than an exception, because that store holds any data the backend
+    // migration has not yet moved.
+    chatRecordStore() {
+        if (this._chatRecordStore) return this._chatRecordStore;
+        return this.localRecordStore();
+    },
+
+    localRecordStore() {
+        if (!this._localRecordStore) {
+            this._localRecordStore = createLocalStorageRecordStore({
+                storage: localStorage,
+                prefix: CHAT_RECORD_PREFIX,
+                indexKey: CHAT_RECORD_INDEX_KEY,
+                metaKey: CHAT_RECORD_META_KEY,
+            });
+        }
+        return this._localRecordStore;
+    },
+
+    // Chooses the backend once, at startup. IndexedDB is preferred for its
+    // capacity and its atomic compare-and-set; when it is unavailable — private
+    // browsing, disabled storage, a blocked upgrade — the app stays on the
+    // localStorage record store instead of failing to start.
+    //
+    // Capability is asked of IndexedDB itself. navigator.storage and
+    // isSecureContext are not consulted: over plain HTTP on a LAN or Tailscale
+    // hostname Chrome reports both as absent/false while IndexedDB works, and
+    // treating either as a precondition would needlessly strand that setup.
+    async initChatStorage() {
+        if (this._chatStorageReady) return this._chatRecordStore;
+
+        const local = this.localRecordStore();
+        const idbApi = (typeof globalThis !== 'undefined' && globalThis.indexedDB)
+            || (typeof window !== 'undefined' ? window.indexedDB : undefined);
+
+        let available = false;
+        try {
+            available = await isIndexedDBAvailable(idbApi);
+        } catch (error) {
+            console.warn('IndexedDB capability probe failed:', error);
+            available = false;
+        }
+
+        if (!available) {
+            this._chatRecordStore = local;
+            this.chatStorageBackend = 'localStorage';
+            this._chatStorageReady = true;
+            return this._chatRecordStore;
+        }
+
+        const idb = createIndexedDBRecordStore({ indexedDB: idbApi });
+        try {
+            await idb.open();
+        } catch (error) {
+            console.warn('IndexedDB open failed; staying on localStorage:', error);
+            this._chatRecordStore = local;
+            this.chatStorageBackend = 'localStorage';
+            this._chatStorageReady = true;
+            return this._chatRecordStore;
+        }
+
+        // Move any localStorage records across before anything reads them.
+        const state = await backendMigrationState(idb);
+        if (!state.migrated) {
+            const moved = await migrateRecordStores({ source: local, target: idb });
+            if (!moved.ok) {
+                // Leave the marker unwritten so the next startup retries the
+                // remainder, and keep serving from the source backend.
+                console.warn('Chat backend migration incomplete:', moved.kind);
+                try { idb.close(); } catch {}
+                this._chatRecordStore = local;
+                this.chatStorageBackend = 'localStorage';
+                this._chatStorageReady = true;
+                return this._chatRecordStore;
+            }
+        }
+
+        this._chatRecordStore = idb;
+        this.chatStorageBackend = 'indexedDB';
+        this._chatStorageReady = true;
+        return this._chatRecordStore;
+    },
+
+    recordRevFor(chatId) {
+        const rev = this._chatRevs[chatId];
+        return Number.isInteger(rev) ? rev : 0;
+    },
+
+    rememberRecordRev(chatId, rev) {
+        if (chatId != null && Number.isInteger(rev)) this._chatRevs[chatId] = rev;
+    },
+
+    forgetRecordRev(chatId) {
+        delete this._chatRevs[chatId];
+    },
+
+    isChatDeleted(chatId) {
+        const key = String(chatId);
+        return this._deletedChatIds.has(key)
+            || this._pendingRemovalIds.some(id => String(id) === key)
+            || (this.chatStorageIssue?.removedIds || []).some(id => String(id) === key);
+    },
+
+    // Runs one write for one chat after every write already queued for that chat.
+    //
+    // The revision guard compares the rev this tab last committed against the rev
+    // on disk. Two saves issued back to back -- a stream finishing and a variant
+    // switch, or a settings persist and a chat persist -- both read the guard before
+    // either commits, and IndexedDB serialises readwrite transactions over a shared
+    // store, so the second is guaranteed to be refused. That refusal is not a
+    // conflict with another tab; nothing else wrote. Serialising locally keeps the
+    // guard meaningful for the writers it was built for.
+    serializeChatWrite(chatId, write) {
+        const key = String(chatId);
+        const prev = this._chatWriteChain[key] || Promise.resolve();
+        const run = () => write();
+        const next = prev.then(run, run);
+        // A refused write must not strand everything behind it, so the chain keeps
+        // a settled copy while the caller still gets the real result.
+        this._chatWriteChain[key] = next.then(() => null, () => null);
+        return next;
+    },
+
+    // Records a storage problem for the recovery banner. `raw` carries the bytes
+    // that are still on disk so the user can back them up.
+    noteChatStorageIssue(issue) {
+        const issueRemovedIds = Array.isArray(issue.removedIds) ? issue.removedIds : [];
+        const removedIds = this._pendingRemovalIds.length
+            ? [...this._pendingRemovalIds]
+            : issueRemovedIds;
+        this.chatStorageIssue = {
+            kind: issue.kind || 'unavailable',
+            action: this._pendingRemovalAction || issue.action || 'save',
+            raw: issue.raw ?? null,
+            pendingJson: issue.pendingJson ?? null,
+            removedIds: [...removedIds],
+            chatId: issue.chatId ?? null,
+            currentRev: issue.currentRev ?? null,
+            expectedRev: issue.expectedRev ?? null,
+        };
+        console.error('Chat storage problem:', this.chatStorageIssue.kind, issue.error || '');
+    },
+
+    // A refused write means the in-memory view and the committed record have
+    // diverged. Keep the candidate in memory so nothing is lost, and let the
+    // banner offer the user a choice rather than silently clobbering.
+    handleRecordWriteFailure(chatId, result, candidate) {
+        if (result.kind === 'conflict') {
+            this.noteChatStorageIssue({
+                kind: 'conflict',
+                action: 'chat',
+                chatId,
+                currentRev: result.currentRev,
+                expectedRev: result.expectedRev,
+                pendingJson: JSON.stringify(candidate ?? null),
+            });
+            return false;
+        }
+        this._pendingChatHistory = null;
+        this.noteChatStorageIssue({
+            kind: result.kind,
+            action: 'chat',
+            chatId,
+            raw: result.raw ?? null,
+            pendingJson: candidate ? JSON.stringify(candidate) : null,
+        });
+        return false;
+    },
+
+    // Advisory-only multi-tab awareness. IndexedDB fires no cross-tab event, so
+    // tabs announce themselves and report commits. Actual protection comes from the
+    // revision check on write, not from this channel.
+    setupChatTabChannel() {
+        if (this._tabChannel || typeof BroadcastChannel === 'undefined') return;
+        try {
+            this._tabChannel = new BroadcastChannel(CHAT_TAB_CHANNEL);
+        } catch {
             return;
         }
+        this._tabChannel.onmessage = (event) => {
+            const data = event?.data || {};
+            if (data.type === 'hello') {
+                this._otherTabsOpen += 1;
+                try { this._tabChannel.postMessage({ type: 'here' }); } catch {}
+                return;
+            }
+            if (data.type === 'here') {
+                this._otherTabsOpen += 1;
+                return;
+            }
+            if (data.type === 'bye') {
+                this._otherTabsOpen = Math.max(0, this._otherTabsOpen - 1);
+                return;
+            }
+            if (data.type === 'chat-updated' && data.chatId) {
+                const known = this.recordRevFor(data.chatId);
+                if (
+                    Number.isInteger(data.rev)
+                    && Number.isInteger(known)
+                    && data.rev !== known
+                    && this.currentChatId === data.chatId
+                ) {
+                    this.noteChatStorageIssue({
+                        kind: 'conflict',
+                        action: 'chat',
+                        chatId: data.chatId,
+                        currentRev: data.rev,
+                        expectedRev: known,
+                    });
+                }
+            }
+        };
+        try { this._tabChannel.postMessage({ type: 'hello' }); } catch {}
+        window.addEventListener('pagehide', () => {
+            try { this._tabChannel?.postMessage({ type: 'bye' }); } catch {}
+        });
+    },
+
+    announceChatUpdate(chatId, rev) {
+        try { this._tabChannel?.postMessage({ type: 'chat-updated', chatId, rev }); } catch {}
+    },
+
+    // The user chose their version: write past the revision check on purpose.
+    async resolveChatConflictKeepMine() {
+        const issue = this.chatStorageIssue;
+        if (issue?.kind !== 'conflict' || !issue.chatId) return false;
+        let candidate = null;
         try {
-            const json = JSON.stringify(chats, null, 2);
-            const blob = new Blob([json], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'omlx-chats.json';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-        } catch (e) {
-            console.error('Failed to download chats:', e);
+            candidate = issue.pendingJson ? JSON.parse(issue.pendingJson) : null;
+        } catch {
+            candidate = null;
+        }
+        if (!candidate || candidate.id !== issue.chatId) {
+            if (this._pendingRemovalIds.length === 0) this.chatStorageIssue = null;
+            return false;
+        }
+        if (this.isChatDeleted(candidate.id)) return false;
+        const put = await this.chatRecordStore().put(candidate);
+        if (!put.ok) return this.handleRecordWriteFailure(candidate.id, put, candidate);
+        this.rememberRecordRev(candidate.id, put.rev);
+        if (this._pendingRemovalIds.length === 0) this.chatStorageIssue = null;
+        this.announceChatUpdate(candidate.id, put.rev);
+        return true;
+    },
+
+    // The user chose the other tab's version: drop the local candidate and reload.
+    async resolveChatConflictLoadNewer() {
+        if (this.chatStorageIssue?.kind !== 'conflict') return false;
+        this.chatStorageIssue = null;
+        this._pendingChatHistory = null;
+        await this.loadChatHistory();
+        return true;
+    },
+
+    _downloadChatData(text, filename, type = 'application/json') {
+        const blob = new Blob([text], { type });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    },
+
+    pendingChatHistory() {
+        if (Array.isArray(this._pendingChatHistory)) return this._pendingChatHistory;
+        const pending = this.chatStorageIssue?.pendingJson;
+        if (!pending) return this.chatHistory;
+        try {
+            const parsed = JSON.parse(pending);
+            if (Array.isArray(parsed)) return parsed;
+            // A refused single-record save stores that one chat, not a history.
+            // Splicing it in keeps the refused version reachable: dropped here it
+            // vanishes from the base of every later save, and the banner's
+            // "download unsaved chats" hands over a file missing that exact chat.
+            if (parsed && typeof parsed === 'object' && parsed.id != null) {
+                const next = [...this.chatHistory];
+                const i = next.findIndex(c => c && c.id === parsed.id);
+                if (i >= 0) next[i] = parsed;
+                else next.unshift(parsed);
+                return next;
+            }
+            return this.chatHistory;
+        } catch {
+            return this.chatHistory;
         }
     },
 
-    importChats(event) {
+    chatStorageIssueMessage() {
+        const kind = this.chatStorageIssue?.kind || 'unavailable';
+        return window.t(`chat.storage_error.${kind}`);
+    },
+
+    chatMutationAllowed() {
+        return !this.chatStorageIssue;
+    },
+
+    async downloadChats() {
+        if (this.chatStorageIssue) {
+            this.downloadPendingChatHistory();
+            return;
+        }
+        // Export the live record store. The legacy whole-history blob is a
+        // snapshot frozen at migration time, so reading it here would produce a
+        // file that silently omits every chat saved or edited since.
+        const store = this.chatRecordStore();
+        const listed = await store.listIndex();
+        if (!listed.ok) {
+            this.chatStorageIssue = {
+                kind: listed.kind || 'unavailable',
+                raw: listed.raw ?? null,
+                pendingJson: null,
+            };
+            if (listed.raw != null) this.downloadPendingChatHistory();
+            return;
+        }
+        const history = [];
+        const unreadable = [];
+        for (const entry of listed.entries) {
+            const got = await store.get(entry.id);
+            if (got.ok && got.record) {
+                history.push(got.record);
+            } else if (got.raw != null) {
+                unreadable.push({ id: entry.id, raw: got.raw });
+            }
+        }
+        if (!history.length && !unreadable.length) {
+            alert(window.t('chat.no_chats_to_export'));
+            return;
+        }
+        this._downloadChatData(JSON.stringify(history, null, 2), 'omlx-chats.json');
+        if (unreadable.length) {
+            // That file is short by unreadable.length chats. Hand over the bytes
+            // still on disk instead of letting an incomplete backup pass as one.
+            this.noteChatStorageIssue({
+                kind: 'corrupt',
+                action: 'export',
+                raw: unreadable[0].raw,
+                chatId: unreadable[0].id ?? null,
+            });
+        }
+    },
+
+    downloadPendingChatHistory() {
+        const pending = this.chatStorageIssue?.pendingJson;
+        if (pending) {
+            // A refused single-record save holds one chat. Import expects a list, so
+            // wrap it: a bare object downloads happily and then fails to import,
+            // which is the worst possible moment to learn the backup was unusable.
+            let pretty = pending;
+            try {
+                const parsed = JSON.parse(pending);
+                pretty = JSON.stringify(Array.isArray(parsed) ? parsed : [parsed], null, 2);
+            } catch { }
+            this._downloadChatData(pretty, 'omlx-chats-unsaved.json');
+            return;
+        }
+        const raw = this.chatStorageIssue?.raw;
+        if (raw != null) {
+            this._downloadChatData(raw, 'omlx-chat-history-recovery.txt', 'text/plain');
+        }
+    },
+
+    async retryChatHistorySave() {
+        let pending = this._pendingChatHistory;
+        const pendingJson = this.chatStorageIssue?.pendingJson;
+        if (!pending && pendingJson) {
+            try { pending = JSON.parse(pendingJson); } catch (error) {
+                console.error('Failed to parse pending chat history:', error);
+                return;
+            }
+        }
+        if (!Array.isArray(pending) && this._pendingRemovalIds.length) {
+            pending = this.chatHistory.filter(chat => !this.isChatDeleted(chat.id));
+        }
+        if (!Array.isArray(pending)) {
+            await this.loadChatHistory();
+            return;
+        }
+        const currentId = this.currentChatId;
+        const issue = this.chatStorageIssue;
+        const removedIds = this._pendingRemovalIds.length
+            ? [...this._pendingRemovalIds]
+            : (issue?.removedIds || []);
+        const retryAction = this._pendingRemovalAction
+            || (issue?.action === 'clear' || issue?.action === 'delete' ? issue.action : 'retry');
+        if (await this.saveChatHistory(pending, { action: retryAction, removedIds })) {
+            this.retireRemovedChats(removedIds);
+            if (retryAction === 'clear') {
+                for (const stream of Object.values(this.streamSessions)) {
+                    stream._discardWrites = true;
+                }
+                this.stopAllStreams();
+                this.chatSessions = {};
+                this.streamSessions = {};
+                await this.startNewChat();
+                return;
+            }
+            await this.resyncChatHistoryState(currentId);
+        }
+    },
+
+    retireRemovedChats(ids) {
+        for (const id of ids) {
+            const key = String(id);
+            this._deletedChatIds.add(key);
+            const stream = this.getStreamSession(id, false);
+            if (stream) stream._discardWrites = true;
+            this.cancelStreamTransport(stream);
+            delete this.streamSessions[id];
+            delete this.chatSessions[id];
+        }
+    },
+
+    async resyncChatHistoryState(preferredChatId = this.currentChatId) {
+        this.chatSessions = {};
+        const targetId = this.chatHistory.some(chat => chat.id === preferredChatId)
+            ? preferredChatId
+            : this.chatHistory[0]?.id;
+        this.currentChatId = null;
+        this.messages = [];
+        if (targetId) {
+            await this.loadChat(targetId);
+            return;
+        }
+        const sysDefault = this.promptProfiles.find(p => p.name === 'System Default');
+        this.systemPrompt = sysDefault ? sysDefault.content : '';
+        this.activePromptProfile = sysDefault ? sysDefault.name : null;
+        this.recentStats = this.emptyStats();
+    },
+
+    async importChats(event) {
         const file = event.target.files?.[0];
         // Reset so selecting the same file again re-fires the change event
         event.target.value = '';
         if (!file) return;
         const reader = new FileReader();
-        reader.onload = (e) => {
+        reader.onload = async (e) => {
             let imported;
             try {
                 imported = JSON.parse(e.target.result);
@@ -5018,23 +5513,23 @@
                 const t = c?.updatedAt ? Date.parse(c.updatedAt) : 0;
                 return Number.isNaN(t) ? 0 : t;
             };
-            const byId = new Map(this.chatHistory.map(c => [c.id, c]));
+            const byId = new Map(this.pendingChatHistory().map(c => [c.id, c]));
             const changed = new Set();
+            const replaced = [];
             for (const entry of valid) {
                 const existing = byId.get(entry.id);
                 if (existing) {
                     // Never overwrite the open or streaming chat; its live state is the truth
                     if (entry.id === this.currentChatId || this.isChatStreaming(entry.id)) continue;
                     if (ts(entry) <= ts(existing)) continue;
-                    delete this.chatSessions[entry.id];
+                    replaced.push(entry.id);
                 }
                 byId.set(entry.id, entry);
                 changed.add(entry.id);
             }
-            this.chatHistory = [...byId.values()]
-                .sort((a, b) => ts(b) - ts(a))
-                .slice(0, MAX_CHAT_HISTORY_SIZE);
-            this.saveChatHistory();
+            const nextHistory = [...byId.values()].sort((a, b) => ts(b) - ts(a));
+            if (!await this.saveChatHistory(nextHistory, { action: 'import' })) return;
+            for (const id of replaced) delete this.chatSessions[id];
             alert(window.t('chat.import_success').replace('{count}', changed.size));
         };
         reader.onerror = () => alert(window.t('chat.error.import_invalid'));
@@ -5054,7 +5549,7 @@
         } catch (e) {
             console.error('Failed to load models after saving API key:', e);
         }
-        this.loadChatHistory();
+        await this.loadChatHistory();
     },
 
     getApiKey() {
@@ -5652,70 +6147,246 @@
         }
     },
 
-    loadChatHistory() {
-        const history = localStorage.getItem(CHAT_HISTORY_STORAGE_KEY);
-        if (history) {
-            try {
-                this.chatHistory = JSON.parse(history);
-                this.sortChatHistory();
-                let migrated = false;
-                for (const chat of this.chatHistory) {
-                    if (chat.title && /^chat\.untitled/.test(String(chat.title))) {
-                        chat.title = this.untitledChatTitle();
-                        migrated = true;
-                    }
-                    const gatewayId = this.resolveGatewayModelId(chat.model);
-                    if (gatewayId && gatewayId !== chat.model) {
-                        if (
-                            chat.modelSettingsByModel?.[chat.model]
-                            && !chat.modelSettingsByModel[gatewayId]
-                        ) {
-                            chat.modelSettingsByModel[gatewayId] =
-                                chat.modelSettingsByModel[chat.model];
-                        }
-                        chat.model = gatewayId;
-                        migrated = true;
-                    }
+    async loadChatHistory() {
+        const store = this.chatRecordStore();
+
+        // Migrate the legacy whole-history value into per-chat records once.
+        // Migration validates before it writes, verifies after, and retains the
+        // legacy value, so a failed run leaves the app on the legacy path.
+        const state = await migrationState(store);
+        if (!state.migrated) {
+            const moved = await migrateLegacyHistory({
+                legacyStorage: localStorage,
+                recordStore: store,
+            });
+            if (!moved.ok) {
+                if (moved.kind === 'incomplete') {
+                    // Legacy entries were refused that cannot become records. The
+                    // records that did migrate are already in the store, so
+                    // listing them would show a short history and the refused
+                    // chats would look like they never existed. Stop before the
+                    // list reaches the UI: the legacy value is retained, offered
+                    // for download, and nothing further is written.
+                    this._pendingChatHistory = null;
+                    let raw = null;
+                    try { raw = localStorage.getItem(CHAT_HISTORY_STORAGE_KEY); } catch { }
+                    this.noteChatStorageIssue({
+                        kind: 'incomplete',
+                        action: 'load',
+                        raw,
+                    });
+                    return false;
                 }
-                if (migrated) {
-                    this.saveChatHistory();
+                if (moved.kind === 'corrupt' || moved.kind === 'unavailable') {
+                    this._pendingChatHistory = null;
+                    this.noteChatStorageIssue({
+                        kind: moved.kind,
+                        action: 'load',
+                        raw: moved.raw ?? null,
+                    });
+                    return false;
                 }
-            } catch (e) {
-                this.chatHistory = [];
+                // Partial migration: keep going with what committed. The marker
+                // stays unwritten so a later load retries the remainder.
+                console.warn('Chat record migration incomplete:', moved.kind);
             }
         }
+
+        let listed = await store.listIndex();
+        if (!listed.ok && listed.kind === 'corrupt') {
+            // The index is derived data. Rebuild it from the records themselves
+            // rather than treating the history as gone.
+            const rebuilt = await store.rebuildIndex();
+            if (rebuilt.ok) listed = await store.listIndex();
+        }
+        if (!listed.ok) {
+            this._pendingChatHistory = null;
+            this.noteChatStorageIssue({
+                kind: listed.kind || 'unavailable',
+                action: 'load',
+                raw: listed.raw ?? null,
+            });
+            return false;
+        }
+
+        const nextHistory = [];
+        const unreadable = [];
+        this._chatRevs = {};
+        for (const entry of listed.entries) {
+            const got = await store.get(entry.id);
+            if (!got.ok) {
+                // A record we cannot read is preserved, not discarded: it is
+                // reported so the user can back it up before anything overwrites it.
+                unreadable.push({ id: entry.id, kind: got.kind, raw: got.raw ?? null });
+                continue;
+            }
+            if (!got.record) continue;
+            this.rememberRecordRev(entry.id, got.record.rev);
+            nextHistory.push(got.record);
+        }
+
+        this.sortChatHistory(nextHistory);
+        let migrated = false;
+        for (const chat of nextHistory) {
+            if (chat.title && /^chat\.untitled/.test(String(chat.title))) {
+                chat.title = this.untitledChatTitle();
+                migrated = true;
+            }
+            const gatewayId = this.resolveGatewayModelId(chat.model);
+            if (gatewayId && gatewayId !== chat.model) {
+                if (
+                    chat.modelSettingsByModel?.[chat.model]
+                    && !chat.modelSettingsByModel[gatewayId]
+                ) {
+                    chat.modelSettingsByModel[gatewayId] =
+                        chat.modelSettingsByModel[chat.model];
+                }
+                chat.model = gatewayId;
+                migrated = true;
+            }
+        }
+
+        if (migrated) {
+            // Only the changed records are rewritten, not the whole corpus.
+            for (const chat of nextHistory) {
+                const put = await store.put(chat, { expectRev: this.recordRevFor(chat.id) });
+                if (put.ok) {
+                    this.rememberRecordRev(chat.id, put.rev);
+                } else {
+                    this.handleRecordWriteFailure(chat.id, put, chat);
+                    this.chatHistory = nextHistory;
+                    return false;
+                }
+            }
+        }
+
+        this.chatHistory = nextHistory;
+        this._pendingChatHistory = null;
+        if (unreadable.length) {
+            this.noteChatStorageIssue({
+                kind: 'corrupt',
+                action: 'load',
+                raw: unreadable[0].raw ?? null,
+                chatId: unreadable[0].id ?? null,
+            });
+            return false;
+        }
+        if (this._pendingRemovalIds.length === 0) this.chatStorageIssue = null;
+        return true;
     },
 
-    saveChatHistory() {
-        const key = CHAT_HISTORY_STORAGE_KEY;
-        // Trim only the stored copy; the sidebar and export keep every chat.
-        const toStore = this.chatHistory.slice();
-        const persist = () => localStorage.setItem(key, JSON.stringify(toStore));
-        try {
-            persist();
-        } catch (e) {
-            if (e?.name !== 'QuotaExceededError' && !/quota/i.test(String(e?.message || ''))) {
-                console.error('Failed to save chat history:', e);
-                return;
+    // Whole-history save, used by import, retry, and clear. It upserts the
+    // records it is given and removes only the ids named explicitly — history is
+    // never deleted as a side effect of a save.
+    async saveChatHistory(nextHistory, { action = 'save', removedIds = [] } = {}) {
+        const store = this.chatRecordStore();
+        const failures = [];
+
+        if (action === 'import' && this._pendingRemovalIds.length) return false;
+
+        if (action === 'import') {
+            for (const chat of nextHistory) {
+                if (chat?.id != null) this._deletedChatIds.delete(String(chat.id));
             }
-            while (toStore.length > 1) {
-                toStore.pop();
-                try {
-                    persist();
-                    console.warn('Chat history trimmed to fit localStorage quota');
-                    return;
-                } catch (retryErr) {
-                    if (retryErr?.name !== 'QuotaExceededError' && !/quota/i.test(String(retryErr?.message || ''))) {
-                        console.error('Failed to save trimmed chat history:', retryErr);
-                        return;
-                    }
+        }
+        const safeHistory = nextHistory.filter(chat => !chat || chat.id == null || !this.isChatDeleted(chat.id));
+
+        for (const chat of safeHistory) {
+            if (!chat || chat.id == null) continue;
+            // Same per-chat queue as the single-record path: a whole-history save
+            // and a chat save must not both read the same revision.
+            if (this.isChatDeleted(chat.id)) continue;
+            const put = await this.serializeChatWrite(chat.id, () => {
+                if (this.isChatDeleted(chat.id)) {
+                    return { ok: true, skipped: true, rev: this.recordRevFor(chat.id) };
+                }
+                return store.put(chat, { expectRev: this.recordRevFor(chat.id) });
+            });
+            if (put.ok) {
+                this.rememberRecordRev(chat.id, put.rev);
+            } else {
+                failures.push({ id: chat.id, ...put });
+            }
+        }
+
+        for (const id of removedIds) {
+            this._deletedChatIds.add(String(id));
+            const removed = await this.serializeChatWrite(id, () => store.remove(id));
+            if (removed.ok) this.forgetRecordRev(id);
+            else failures.push({ id, ...removed });
+        }
+
+        if (failures.length) {
+            const first = failures[0];
+            const pendingHistory = safeHistory.filter(chat => !chat || chat.id == null || !this.isChatDeleted(chat.id));
+            this._pendingChatHistory = pendingHistory;
+            this.noteChatStorageIssue({
+                kind: first.kind || 'unavailable',
+                action,
+                chatId: first.id ?? null,
+                raw: first.raw ?? null,
+                pendingJson: JSON.stringify(pendingHistory),
+                removedIds,
+                currentRev: first.currentRev ?? null,
+                expectedRev: first.expectedRev ?? null,
+            });
+            return false;
+        }
+
+        this.chatHistory = safeHistory.filter(chat => !chat || chat.id == null || !this.isChatDeleted(chat.id));
+        this._pendingChatHistory = null;
+        for (const id of removedIds) {
+            this._pendingRemovalIds = this._pendingRemovalIds.filter(pendingId => String(pendingId) !== String(id));
+        }
+        if (this._pendingRemovalIds.length === 0) this._pendingRemovalAction = null;
+        if (this._pendingRemovalIds.length === 0) this.chatStorageIssue = null;
+        return true;
+    },
+
+    // Single-record save for one chat. This is the hot path and costs one record
+    // write plus an index update, independent of how many chats exist.
+    async saveChatRecord(chat, { action = 'chat' } = {}) {
+        if (!chat || chat.id == null) return false;
+        if (this.isChatDeleted(chat.id)) return false;
+        // Queued behind any other write for this chat, so the revision this reads
+        // is the one it will actually meet on disk.
+        return this.serializeChatWrite(chat.id, async () => {
+            if (this.isChatDeleted(chat.id)) return false;
+            const store = this.chatRecordStore();
+            const put = await store.put(chat, { expectRev: this.recordRevFor(chat.id) });
+
+            if (!put.ok) {
+                this.handleRecordWriteFailure(chat.id, put, chat);
+                return false;
+            }
+
+            this.rememberRecordRev(chat.id, put.rev);
+            this.announceChatUpdate(chat.id, put.rev);
+            if (put.indexDegraded) {
+                // The chat is safely committed; only the derived index is behind.
+                // Rebuild it rather than blocking the user, and stay quiet unless the
+                // rebuild also fails.
+                const rebuilt = await store.rebuildIndex();
+                if (!rebuilt.ok) {
+                    this.noteChatStorageIssue({
+                        kind: rebuilt.kind || 'unavailable',
+                        action: 'index',
+                        raw: rebuilt.raw ?? null,
+                    });
                 }
             }
-            console.error('Chat history too large for localStorage even after trimming');
-        }
+            if (this._pendingRemovalIds.length === 0) this.chatStorageIssue = null;
+            return true;
+        });
+    },
+
+    async saveStreamChat(stream, chatId, messages, model, systemPrompt) {
+        if (stream?._discardWrites) return false;
+        return this.saveCurrentChat(chatId, messages, model, systemPrompt);
     },
 
     async startNewChat(options = {}) {
+        if (!this.chatMutationAllowed()) return false;
         this.cancelPersistModelSettingsTimer();
         const prevChatId = this.currentChatId;
         const preserveDraft = options.preserveDraft === true && !prevChatId;
@@ -5725,13 +6396,13 @@
             const prevSession = this.getChatSession(prevChatId, false);
             if (prevSession) {
                 prevSession.messages = this.messages;
-                this.saveCurrentChat(
+                if (!await this.saveCurrentChat(
                     prevChatId,
                     null,
                     null,
                     null,
                     { touchUpdatedAt: false }
-                );
+                )) return false;
             }
         }
 
@@ -5783,7 +6454,7 @@
         this.resetStreamSession(this.getStreamSession(chatId, true));
         this.recentStats = this.emptyStats();
         this.stopStatsPollingIfIdle();
-        this.saveCurrentChat(chatId);
+        if (!await this.saveCurrentChat(chatId)) return false;
 
         this.$nextTick(() => {
             const input = this.$refs.messageInput;
@@ -5801,21 +6472,23 @@
             this.computeTimelineDots();
             this.computeTimelineActive();
         });
+        return true;
     },
 
     async loadChat(chatId) {
+        if (this.chatStorageIssue && this.currentChatId !== chatId) return false;
         this.cancelPersistModelSettingsTimer();
         if (this.currentChatId && this.currentChatId !== chatId) {
             const prevSession = this.getChatSession(this.currentChatId, false);
             if (prevSession) {
                 prevSession.messages = this.messages;
-                this.saveCurrentChat(
+                if (!await this.saveCurrentChat(
                     this.currentChatId,
                     null,
                     null,
                     null,
                     { touchUpdatedAt: false }
-                );
+                )) return false;
             }
         }
 
@@ -5860,9 +6533,10 @@
         }
         this.isMobile = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
         this.sidebarOpen = window.innerWidth >= 768;
+        return true;
     },
 
-    saveCurrentChat(
+    async saveCurrentChat(
         chatId = this.currentChatId,
         messages = null,
         model = null,
@@ -5873,32 +6547,16 @@
         const messagesToSave = messages ?? session?.messages ?? (chatId === this.currentChatId ? this.messages : []);
         if (!chatId) return;
 
-        const existingIndex = this.chatHistory.findIndex(c => c.id === chatId);
-        const existingChat = existingIndex >= 0 ? this.chatHistory[existingIndex] : null;
+        const baseHistory = this.pendingChatHistory();
+        const existingIndex = baseHistory.findIndex(c => c.id === chatId);
+        const existingChat = existingIndex >= 0 ? baseHistory[existingIndex] : null;
 
-        // Strip base64 image data from content arrays to avoid localStorage quota issues
-        const messagesForStorage = messagesToSave.map(msg => {
-            if (!Array.isArray(msg.content)) return msg;
-            return {
-                ...msg,
-                content: msg.content.map(part => {
-                    if (part.type === 'image_url') {
-                        return { type: 'image_url', image_url: { url: '' } };
-                    }
-                    if (part.type === 'file') {
-                        return {
-                            type: 'file',
-                            file: {
-                                filename: part.file?.filename || '',
-                                mime_type: part.file?.mime_type || '',
-                                data: '',
-                            },
-                        };
-                    }
-                    return part;
-                })
-            };
-        });
+        // Media passes through intact: the record store offloads inline base64 to
+        // its blobs store and stores a digest reference, so attachments survive
+        // reload. The localStorage backend has nowhere to put the bytes and blanks
+        // them inside its own put(), keeping that limitation in the backend rather
+        // than repeated in every caller.
+        const messagesForStorage = messagesToSave;
 
         const title = this.resolveAutoChatTitle(messagesToSave, existingChat);
 
@@ -5948,19 +6606,24 @@
             }
         }
 
+        const nextHistory = [...baseHistory];
         if (existingIndex >= 0) {
-            this.chatHistory[existingIndex] = chatData;
+            nextHistory[existingIndex] = chatData;
         } else {
-            this.chatHistory.unshift(chatData);
+            nextHistory.unshift(chatData);
         }
 
-        this.sortChatHistory();
-        // Keep only last MAX_CHAT_HISTORY_SIZE chats
-        this.chatHistory = this.chatHistory.slice(0, MAX_CHAT_HISTORY_SIZE);
-        this.saveChatHistory();
+        // Update the in-memory list first so the UI stays responsive, then
+        // persist only this chat. The write costs one record plus an index
+        // update, independent of how many chats exist.
+        this.sortChatHistory(nextHistory);
+        this.chatHistory = nextHistory;
+
+        return await this.saveChatRecord(chatData, { action: 'chat' });
     },
 
     startRenamingChat(chat) {
+        if (!this.chatMutationAllowed()) return;
         this.renamingChatId = chat.id;
         this.renameDraft = chat.title || this.untitledChatTitle();
         this.$nextTick(() => {
@@ -5977,18 +6640,24 @@
         this.renameDraft = '';
     },
 
-    saveRenamedChat(chatId) {
+    async saveRenamedChat(chatId) {
+        if (!this.chatMutationAllowed()) return;
         const chat = this.chatHistory.find(c => c.id === chatId);
         if (!chat) return;
 
-        chat.title = this.renameDraft.trim() || this.untitledChatTitle();
-        chat.manualTitle = true;
-        chat.updatedAt = new Date().toISOString();
-        this.saveChatHistory();
-        this.cancelRenamingChat();
+        const nextHistory = this.chatHistory.map(c => c.id === chatId ? {
+            ...c,
+            title: this.renameDraft.trim() || this.untitledChatTitle(),
+            manualTitle: true,
+            updatedAt: new Date().toISOString(),
+        } : c);
+        if (await this.saveChatHistory(nextHistory, { action: 'rename' })) {
+            this.cancelRenamingChat();
+        }
     },
 
     async sendMessage() {
+        if (!this.chatMutationAllowed()) return;
         if (this.hasAsrSupport()) {
             await this.sendTranscriptionMessage();
             return;
@@ -6012,7 +6681,12 @@
         });
 
         if (!this.currentChatId) {
-            await this.startNewChat({ preserveDraft: true });
+            if (!await this.startNewChat({ preserveDraft: true })) {
+                this.inputMessage = userText;
+                this.uploadImages = images;
+                this.uploadDocuments = documents;
+                return;
+            }
         }
 
         const chatId = this.currentChatId;
@@ -6048,6 +6722,9 @@
         const userMsg = { id: this.newMessageId(), role: 'user', content };
         chatSession.messages.push(userMsg);
         this.messages = chatSession.messages;
+        if (!await this.saveCurrentChat(chatId, chatSession.messages, sourceModel, sourceSystemPrompt)) {
+            return;
+        }
         this.forceScrollToBottom();
         await this.streamResponse({
             chatId,
@@ -6058,6 +6735,7 @@
     },
 
     async sendTranscriptionMessage() {
+        if (!this.chatMutationAllowed()) return;
         if (!this.uploadAudio || this.micActive()) return;
         if (!this.currentModel || this.isCurrentChatStreaming()) return;
 
@@ -6065,7 +6743,10 @@
         this.uploadAudio = null;
 
         if (!this.currentChatId) {
-            await this.startNewChat({ preserveDraft: true });
+            if (!await this.startNewChat({ preserveDraft: true })) {
+                this.uploadAudio = audio;
+                return;
+            }
         }
         const chatId = this.currentChatId;
         const sourceModel = this.currentModel;
@@ -6082,6 +6763,9 @@
         };
         chatSession.messages.push(userMsg);
         this.messages = chatSession.messages;
+        if (!await this.saveCurrentChat(chatId, chatSession.messages, sourceModel, chatSession.systemPrompt)) {
+            return;
+        }
         this.forceScrollToBottom();
         await this.streamTranscription({
             chatId,
@@ -6176,7 +6860,7 @@
                 _transcription: true,
                 _perfVisible: false,
             });
-            this.saveCurrentChat(chatId, chatSession.messages, chatSession.model, chatSession.systemPrompt);
+            await this.saveCurrentChat(chatId, chatSession.messages, chatSession.model, chatSession.systemPrompt);
             if (this.currentChatId === chatId) this.scheduleEnhanceMessages();
         } catch (error) {
             if (error.name === 'AbortError') {
@@ -6190,7 +6874,7 @@
                         _transcription: true,
                         _perfVisible: false,
                     });
-                    this.saveCurrentChat(chatId, chatSession.messages, chatSession.model, chatSession.systemPrompt);
+                    await this.saveCurrentChat(chatId, chatSession.messages, chatSession.model, chatSession.systemPrompt);
                 }
             } else {
                 console.error('Transcription error:', error);
@@ -6201,7 +6885,7 @@
                     model: requestModel,
                     _perfVisible: false,
                 });
-                this.saveCurrentChat(chatId, chatSession.messages, chatSession.model, chatSession.systemPrompt);
+                await this.saveCurrentChat(chatId, chatSession.messages, chatSession.model, chatSession.systemPrompt);
             }
             if (this.currentChatId === chatId) this.scheduleEnhanceMessages();
         } finally {
@@ -6246,6 +6930,7 @@
     },
 
     async startMicTranscription() {
+        if (!this.chatMutationAllowed()) return;
         if (this.micActive() || this.uploadAudio) return;
         if (!this.currentModel || this.isCurrentChatStreaming()) return;
 
@@ -6259,7 +6944,10 @@
         }
 
         if (!this.currentChatId) {
-            await this.startNewChat({ preserveDraft: true });
+            if (!await this.startNewChat({ preserveDraft: true })) {
+                mediaStream.getTracks().forEach(track => track.stop());
+                return;
+            }
         }
         const chatId = this.currentChatId;
         const sourceModel = this.currentModel;
@@ -6500,7 +7188,7 @@
         }
     },
 
-    _finalizeMicTranscription(session, stream, chatSession) {
+    async _finalizeMicTranscription(session, stream, chatSession) {
         if (session.finalized) return;
         session.finalized = true;
         const text = session.committed || stream.streamingContent || '';
@@ -6513,7 +7201,7 @@
                 _transcription: true,
                 _perfVisible: false,
             });
-            this.saveCurrentChat(session.chatId, chatSession.messages,
+            await this.saveCurrentChat(session.chatId, chatSession.messages,
                 chatSession.model, chatSession.systemPrompt);
             if (this.currentChatId === session.chatId) this.scheduleEnhanceMessages();
         }
@@ -6521,7 +7209,7 @@
         this.resetStreamSession(stream, { preserveFinalContent: true });
     },
 
-    _failMicTranscription(session, stream, chatSession, message) {
+    async _failMicTranscription(session, stream, chatSession, message) {
         if (session.finalized) return;
         session.finalized = true;
         chatSession.messages.push({
@@ -6531,7 +7219,7 @@
             model: session.requestModel,
             _perfVisible: false,
         });
-        this.saveCurrentChat(session.chatId, chatSession.messages,
+        await this.saveCurrentChat(session.chatId, chatSession.messages,
             chatSession.model, chatSession.systemPrompt);
         if (this.currentChatId === session.chatId) this.scheduleEnhanceMessages();
         this._teardownMicSession(session);
@@ -6821,7 +7509,8 @@
                     this.attachProfileToAssistantMessage(errorMsg, context._profile);
                     chatSession.messages.push(errorMsg);
                     this._setActiveVariant(chatSession, assistantId, context._variantUserIndex);
-                    this.saveCurrentChat(
+                    await this.saveStreamChat(
+                        stream,
                         context.chatId,
                         chatSession.messages,
                         chatSession.model,
@@ -6939,7 +7628,13 @@
                     });
                 });
 
-                this.saveCurrentChat(context.chatId, chatSession.messages, chatSession.model, context.systemPrompt);
+                if (!await this.saveStreamChat(
+                    stream,
+                    context.chatId,
+                    chatSession.messages,
+                    chatSession.model,
+                    context.systemPrompt
+                )) return;
                 if (stream.abortController?.signal.aborted) {
                     return;
                 }
@@ -6979,7 +7674,7 @@
             this.attachProfileToAssistantMessage(assistantMsg, context._profile);
             chatSession.messages.push(assistantMsg);
             this._setActiveVariant(chatSession, assistantId, context._variantUserIndex);
-            this.saveCurrentChat(context.chatId, chatSession.messages, chatSession.model, context.systemPrompt);
+            await this.saveStreamChat(stream, context.chatId, chatSession.messages, chatSession.model, context.systemPrompt);
             if (this.currentChatId === context.chatId) {
                 this.scheduleEnhanceMessages();
             }
@@ -7017,7 +7712,7 @@
                     this.attachProfileToAssistantMessage(assistantMsg, context._profile);
                     chatSession.messages.push(assistantMsg);
                     this._setActiveVariant(chatSession, assistantId, context._variantUserIndex);
-                    this.saveCurrentChat(context.chatId, chatSession.messages, chatSession.model, context.systemPrompt);
+                    await this.saveStreamChat(stream, context.chatId, chatSession.messages, chatSession.model, context.systemPrompt);
                     if (this.currentChatId === context.chatId) {
                         this.scheduleEnhanceMessages();
                     }
@@ -7052,7 +7747,7 @@
                 this.attachProfileToAssistantMessage(assistantMsg, context._profile);
                 chatSession.messages.push(assistantMsg);
                 this._setActiveVariant(chatSession, assistantId, context._variantUserIndex);
-                this.saveCurrentChat(context.chatId, chatSession.messages, chatSession.model, context.systemPrompt);
+                await this.saveStreamChat(stream, context.chatId, chatSession.messages, chatSession.model, context.systemPrompt);
                 if (this.currentChatId === context.chatId) {
                     this.scheduleEnhanceMessages();
                 }
@@ -7134,7 +7829,7 @@
                         }
                 }
                 // Persist perf timeline that was just attached (saved earlier, before finally ran)
-                this.saveCurrentChat(context.chatId, chatSession.messages, chatSession.model, context.systemPrompt);
+                await this.saveStreamChat(stream, context.chatId, chatSession.messages, chatSession.model, context.systemPrompt);
                 // Recursive tool rounds share one stream; only its root owns cleanup.
                 this.resetStreamSession(stream, { preserveFinalContent: true });
                 this.thinkingAutoScroll = true;
@@ -7151,6 +7846,7 @@
     },
 
     async regenerateMessage(index, opts = {}) {
+        if (!this.chatMutationAllowed()) return;
         if (this.isCurrentChatStreaming()) return;
 
         const session = this.getChatSession(this.currentChatId, true);
@@ -7242,7 +7938,7 @@
         this._copyText(text);
     },
 
-    deleteMessage(index) {
+    async deleteMessage(index) {
         if (this.isCurrentChatStreaming()) return;
         const session = this.getChatSession(this.currentChatId, true);
         if (!session) return;
@@ -7254,11 +7950,13 @@
         }
         this.messages = session.messages;
         this.syncFooterStatsFromMessages(session.messages);
-        this.saveCurrentChat(chatId);
+        if (!await this.saveCurrentChat(chatId)) {
+            return;
+        }
         this.scheduleEnhanceMessages();
     },
 
-    deleteVariant(userIndex, variantId, event) {
+    async deleteVariant(userIndex, variantId, event) {
         if (event) {
             event.stopPropagation();
             event.preventDefault();
@@ -7267,7 +7965,6 @@
 
         const session = this.getChatSession(this.currentChatId, true);
         if (!session?.messages[userIndex] || session.messages[userIndex].role !== 'user') return;
-
         const turnMsgs = [];
         for (let i = userIndex + 1; i < session.messages.length && session.messages[i].role !== 'user'; i++) {
             turnMsgs.push(session.messages[i]);
@@ -7290,7 +7987,9 @@
         }
 
         this.messages = session.messages;
-        this.saveCurrentChat(this.currentChatId);
+        if (!await this.saveCurrentChat(this.currentChatId)) {
+            return;
+        }
         this.scheduleEnhanceMessages();
     },
 
@@ -7316,7 +8015,8 @@
         this.attachProfileToAssistantMessage(msg, this.resolveMessageProfile(msg));
     },
 
-    branchChat(index) {
+    async branchChat(index) {
+        if (!this.chatMutationAllowed()) return;
         if (this.isCurrentChatStreaming()) return;
         const session = this.getChatSession(this.currentChatId, true);
         const originalChat = this.chatHistory.find(c => c.id === this.currentChatId);
@@ -7343,28 +8043,9 @@
         };
         this.chatSessions[branchId] = branchSession;
 
-        const messagesForStorage = branchMessages.map(msg => {
-            if (!Array.isArray(msg.content)) return msg;
-            return {
-                ...msg,
-                content: msg.content.map(part => {
-                    if (part.type === 'image_url') {
-                        return { type: 'image_url', image_url: { url: '' } };
-                    }
-                    if (part.type === 'file') {
-                        return {
-                            type: 'file',
-                            file: {
-                                filename: part.file?.filename || '',
-                                mime_type: part.file?.mime_type || '',
-                                data: '',
-                            },
-                        };
-                    }
-                    return part;
-                })
-            };
-        });
+        // Same as the save path: media is offloaded by the record store, not
+        // blanked here, so a branched chat keeps its attachments.
+        const messagesForStorage = branchMessages;
 
         const branchData = {
             id: branchId,
@@ -7382,8 +8063,12 @@
             updatedAt: new Date().toISOString()
         };
 
-        this.chatHistory.unshift(branchData);
-        this.saveChatHistory();
+        const nextHistory = [branchData, ...this.chatHistory];
+        this.sortChatHistory(nextHistory);
+        if (!await this.saveChatHistory(nextHistory, { action: 'branch' })) {
+            delete this.chatSessions[branchId];
+            return;
+        }
         this.loadChat(branchId);
     },
 
@@ -7473,7 +8158,8 @@
         this.editImages = [];
     },
 
-            async saveEdit(index) {
+    async saveEdit(index) {
+        if (!this.chatMutationAllowed()) return;
         if (!this.editContent.trim() || this.isCurrentChatStreaming()) return;
 
         const session = this.getChatSession(this.currentChatId, true);
@@ -7511,6 +8197,8 @@
         this.editContent = '';
         this.editImages = [];
 
+        if (!await this.saveCurrentChat(this.currentChatId, session.messages)) return;
+
         // Scroll and get new response
         this.scrollToBottom();
         // Use profile from last assistant message before edit, or current active profile
@@ -7532,15 +8220,17 @@
 
     // Delete chat
     async deleteChat(chatId, { skipConfirm = false } = {}) {
+        if (!this.chatMutationAllowed()) return;
         if (!skipConfirm && !confirm(window.t('chat.confirm_delete_chat'))) return;
 
-        this.cancelStreamTransport(this.getStreamSession(chatId, false));
-        delete this.streamSessions[chatId];
-        delete this.chatSessions[chatId];
-
         const wasCurrent = this.currentChatId === chatId;
-        this.chatHistory = this.chatHistory.filter(c => c.id !== chatId);
-        this.saveChatHistory();
+        const nextHistory = this.pendingChatHistory().filter(c => c.id !== chatId);
+        this._deletedChatIds.add(String(chatId));
+        this._pendingRemovalIds = [...new Set([...this._pendingRemovalIds, chatId])];
+        this._pendingRemovalAction = this._pendingRemovalAction || 'delete';
+        if (!await this.saveChatHistory(nextHistory, { action: 'delete', removedIds: [chatId] })) return;
+
+        this.retireRemovedChats([chatId]);
 
         if (!wasCurrent) return;
 
@@ -7576,13 +8266,33 @@
 
     // Clear all history
     async clearAllHistory() {
+        if (!this.chatMutationAllowed()) return;
         if (!confirm(window.t('chat.confirm_clear_all'))) return;
 
-        this.stopAllStreams();
-        this.chatHistory = [];
+        const store = this.chatRecordStore();
+        const listed = await store.keys();
+        if (!listed.ok) {
+            this.noteChatStorageIssue({
+                kind: listed.kind || 'unavailable',
+                action: 'clear',
+                raw: listed.raw ?? null,
+            });
+            return;
+        }
+        const removedIds = listed.ids;
+        const affectedIds = new Set([
+            ...removedIds,
+            ...this.chatHistory.map(chat => chat.id),
+            ...Object.keys(this.streamSessions),
+            this.currentChatId,
+        ].filter(id => id != null));
+        affectedIds.forEach(id => this._deletedChatIds.add(String(id)));
+        this._pendingRemovalIds = [...removedIds];
+        this._pendingRemovalAction = 'clear';
+        if (!await this.saveChatHistory([], { action: 'clear', removedIds })) return;
+        this.retireRemovedChats([...affectedIds]);
         this.chatSessions = {};
         this.streamSessions = {};
-        this.saveChatHistory();
         await this.startNewChat();
 
     },
@@ -7930,21 +8640,25 @@
     },
 
     // Sort chat list: pinned first, then most-recently-updated.
-    sortChatHistory() {
-        this.chatHistory.sort((a, b) => {
+    sortChatHistory(history = this.chatHistory) {
+        history.sort((a, b) => {
             if (!!b.pinned !== !!a.pinned) return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0);
             const ta = a.updatedAt ? Date.parse(a.updatedAt) : 0;
             const tb = b.updatedAt ? Date.parse(b.updatedAt) : 0;
             return (Number.isNaN(tb) ? 0 : tb) - (Number.isNaN(ta) ? 0 : ta);
         });
+        return history;
     },
 
-    togglePinChat(chatId) {
+    async togglePinChat(chatId) {
+        if (!this.chatMutationAllowed()) return;
         const chat = this.chatHistory.find(c => c.id === chatId);
         if (!chat) return;
-        chat.pinned = !chat.pinned;
-        this.sortChatHistory();
-        this.saveChatHistory();
+        const nextHistory = this.chatHistory.map(c => c.id === chatId
+            ? { ...c, pinned: !c.pinned }
+            : c);
+        this.sortChatHistory(nextHistory);
+        await this.saveChatHistory(nextHistory, { action: 'pin' });
     },
 
     imageLimitReached() {

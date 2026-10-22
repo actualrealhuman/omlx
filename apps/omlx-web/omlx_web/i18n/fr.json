@@ -2271,5 +2271,21 @@
   "cluster.v2.join.cleanup_forgotten": "Ancien nettoyage oublié sur ce Mac. Le nettoyage distant n’a pas été confirmé.",
   "cluster.v2.join.forget_cleanup_error": "Impossible d’oublier ce nettoyage.",
   "cluster.v2.membership.waiting_request": "En attente du code et de la demande de couplage de ce Mac.",
-  "cluster.v2.membership.add_device": "Ajouter ce Mac"
+  "cluster.v2.membership.add_device": "Ajouter ce Mac",
+  "chat.storage_error.title": "L’historique des discussions n’a pas été enregistré",
+  "chat.storage_error.quota": "Le stockage du navigateur est plein. Les nouvelles activités de discussion sont suspendues jusqu’à ce que vous téléchargiez une sauvegarde et libériez de l’espace.",
+  "chat.storage_error.corrupt": "L’historique enregistré est endommagé ou illisible. Il a été conservé pour récupération et ne sera pas écrasé.",
+  "chat.storage_error.serialization": "L’historique en attente n’a pas pu être encodé. Les nouvelles activités sont suspendues afin de protéger l’historique existant.",
+  "chat.storage_error.unavailable": "Le stockage du navigateur est indisponible. Les nouvelles activités sont suspendues afin de protéger l’historique existant.",
+  "chat.storage_error.incomplete": "Certaines discussions n’ont pas pu être converties vers le nouveau format de stockage ; la conversion a donc été interrompue. Rien n’a été écrasé ni supprimé, et votre historique d’origine est conservé pour téléchargement.",
+  "chat.storage_error.no_data_deleted": "Aucune discussion existante n’a été supprimée.",
+  "chat.storage_error.download_pending": "Télécharger les discussions non enregistrées",
+  "chat.storage_error.download_raw": "Télécharger les données de récupération",
+  "chat.storage_error.retry": "Réessayer l’enregistrement",
+  "chat.storage_error.manage": "Gérer les discussions",
+  "chat.storage_error.conflict": "Cette conversation a été modifiée dans un autre onglet ou une autre fenêtre. Votre version a été conservée sans être enregistrée, rien n’est perdu.",
+  "chat.storage_error.index": "L’index des conversations n’a pas pu être mis à jour. Vos conversations sont toujours enregistrées.",
+  "chat.storage_error.load_newer": "Charger la version la plus récente",
+  "chat.storage_error.keep_mine": "Garder ma version",
+  "chat.multi_tab_notice": "La conversation est ouverte dans un autre onglet. Travailler dans les deux à la fois peut provoquer des conflits."
 }

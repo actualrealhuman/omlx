@@ -2271,5 +2271,21 @@
   "cluster.v2.join.cleanup_forgotten": "Limpeza antiga esquecida neste Mac. A limpeza remota não foi confirmada.",
   "cluster.v2.join.forget_cleanup_error": "Não foi possível esquecer esta limpeza.",
   "cluster.v2.membership.waiting_request": "Aguardando este Mac mostrar seu código e enviar uma solicitação de pareamento.",
-  "cluster.v2.membership.add_device": "Adicionar este Mac"
+  "cluster.v2.membership.add_device": "Adicionar este Mac",
+  "chat.storage_error.title": "O histórico de chats não foi salvo",
+  "chat.storage_error.quota": "O armazenamento do navegador está cheio. Novas atividades de chat ficam pausadas até você baixar um backup e liberar espaço.",
+  "chat.storage_error.corrupt": "O histórico armazenado está danificado ou ilegível. Ele foi preservado para recuperação e não será sobrescrito.",
+  "chat.storage_error.serialization": "Não foi possível codificar o histórico pendente. Novas atividades ficam pausadas para manter o histórico existente seguro.",
+  "chat.storage_error.unavailable": "O armazenamento do navegador está indisponível. Novas atividades ficam pausadas para manter o histórico existente seguro.",
+  "chat.storage_error.incomplete": "Alguns chats não puderam ser convertidos para o novo formato de armazenamento, então a conversão foi interrompida. Nada foi sobrescrito ou excluído; o histórico original foi preservado para download.",
+  "chat.storage_error.no_data_deleted": "Nenhum chat existente foi excluído.",
+  "chat.storage_error.download_pending": "Baixar chats não salvos",
+  "chat.storage_error.download_raw": "Baixar dados de recuperação",
+  "chat.storage_error.retry": "Tentar salvar novamente",
+  "chat.storage_error.manage": "Gerenciar chats",
+  "chat.storage_error.conflict": "Este chat foi alterado em outra aba ou janela. Sua versão foi mantida sem salvar para que nada seja perdido.",
+  "chat.storage_error.index": "O índice de chats não pôde ser atualizado. Seus chats continuam salvos.",
+  "chat.storage_error.load_newer": "Carregar a versão mais recente",
+  "chat.storage_error.keep_mine": "Manter minha versão",
+  "chat.multi_tab_notice": "O chat está aberto em outra aba. Trabalhar nas duas ao mesmo tempo pode causar conflitos."
 }

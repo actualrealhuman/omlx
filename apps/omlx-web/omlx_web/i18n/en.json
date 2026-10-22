@@ -2271,5 +2271,21 @@
   "cluster.v2.join.cleanup_forgotten": "Old cleanup forgotten on this Mac. Remote cleanup was not confirmed.",
   "cluster.v2.join.forget_cleanup_error": "Could not forget this cleanup.",
   "cluster.v2.membership.waiting_request": "Waiting for this Mac to show its code and send a pairing request.",
-  "cluster.v2.membership.add_device": "Add this Mac"
+  "cluster.v2.membership.add_device": "Add this Mac",
+  "chat.storage_error.title": "Chat history was not saved",
+  "chat.storage_error.quota": "Browser storage is full. New chat activity is paused until you download a backup and free space.",
+  "chat.storage_error.corrupt": "The stored chat history is damaged or unreadable. It has been preserved for recovery and will not be overwritten.",
+  "chat.storage_error.serialization": "The pending chat history could not be encoded. New chat activity is paused so the existing history remains safe.",
+  "chat.storage_error.unavailable": "Browser storage is unavailable. New chat activity is paused so the existing history remains safe.",
+  "chat.storage_error.incomplete": "Some chats could not be converted to the new storage format, so the conversion was stopped. Nothing was overwritten or deleted, and your original history has been kept for download.",
+  "chat.storage_error.no_data_deleted": "No existing chats were deleted.",
+  "chat.storage_error.download_pending": "Download unsaved chats",
+  "chat.storage_error.download_raw": "Download recovery data",
+  "chat.storage_error.retry": "Retry save",
+  "chat.storage_error.manage": "Manage chats",
+  "chat.storage_error.conflict": "This chat was changed in another tab or window. Your version has been kept unsaved so nothing is lost.",
+  "chat.storage_error.index": "The chat index could not be updated. Your chats are still saved.",
+  "chat.storage_error.load_newer": "Load the newer version",
+  "chat.storage_error.keep_mine": "Keep my version",
+  "chat.multi_tab_notice": "Chat is open in another tab. Working in both at once can cause conflicts."
 }
