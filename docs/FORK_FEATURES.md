@@ -1,22 +1,90 @@
-# Personal oMLX feature sources
+# Choose oMLX additions for your own build
 
-Choose an addition, inspect its source, and follow the
-[integration guide](INTEGRATING_FEATURES.md). The entries below identify public
-code, including older implementations. They are not a menu of automatically
-composable patches or a promise of compatibility with your upstream version.
+Start with the behavior you want, then give its recipe to your coding agent.
+These source additions can be evaluated for your own checkout or for upstream
+integration. Each adopter chooses, adapts, validates and builds the selected
+source; this fork provides no compiled distribution or release service.
 
-Source references were checked on 2026-10-10. Fixed revisions make an entry
-reproducible even when a branch moves. A baseline is the common upstream
-ancestor used to inspect the topic diff; the version shown is the version
-declared there, not a claim that the ancestor is a release tag. Validation
-pointers tell you what to rerun after adapting a change, not that this guide
-has retested every source snapshot.
+Read [the agent starting point](AGENT_START.md) for the adoption procedure and
+[the development policy](FEATURE_DEVELOPMENT.md) for how new work stays separable.
+Use the [composition guide](FEATURE_COMPOSITION.md) when selecting more than one
+addition.
+
+## Feature recipes
+
+| Addition | ID | Source boundary |
+| --- | --- | --- |
+| [Choose whether benchmark results are uploaded](features/benchmark-upload-controls.md) | `benchmark-upload-controls` | Prepared topic (local) |
+| [Inspect persisted cache content](features/cache-inspection.md) | `cache-inspection` | Topic |
+| [Battery and power telemetry, with historical governor source](features/battery-power.md) | `battery-power` | Historical variant |
+| [Live Inference Throttle](features/inference-pacing.md) | `inference-pacing` | Topic |
+| [Configurable battery reserve protection](features/battery-protection.md) | `battery-protection` | Bundle component |
+| [See context usage while requests run](features/live-context.md) | `live-context` | Topic |
+| [Per-model generation concurrency limits](features/per-model-concurrency.md) | `per-model-concurrency` | Prepared topic (local) |
+| [Preserve chat history when saving fails](features/chat-history-safety.md) | `chat-history-safety` | Topic |
+| [IndexedDB chat records and media preservation](features/chat-storage-indexeddb.md) | `chat-storage-indexeddb` | Prepared topic (local) |
+| [Autosizing inline message editor](features/chat-edit-autosize.md) | `chat-edit-autosize` | Topic |
+| [Require explicit cancellation of message edits](features/safe-edit-cancel.md) | `safe-edit-cancel` | Topic |
+| [User-supplied stylesheets and optional True Black preset](features/custom-css-overrides.md) | `custom-css-overrides` | Prepared topic (local) |
+| [Let the native supervisor own web-requested restarts](features/supervisor-owned-restarts.md) | `supervisor-owned-restarts` | Topic |
+| [Local activation and restart verification helpers](features/reliable-local-activation.md) | `reliable-local-activation` | Topic |
+| [Coordinated model execution turns](features/inference-scheduling.md) | `inference-scheduling` | Bundle component |
+| [Recover a hidden menu-bar icon without blocking startup](features/nonblocking-menubar-warning.md) | `nonblocking-menubar-warning` | Prepared topic (local) |
+| [Hierarchical allowances and interactive control panel](features/inference-allowances.md) | `inference-allowances` | Bundle component |
+| [Choose reusable KV and image retention per request](features/request-cache-policy.md) | `request-cache-policy` | Prepared topic (local) |
+
+**Topic** means a focused branch or commit exists at the linked revision.
+**Prepared topic (local)** means a focused local source branch and recipe are
+prepared, but public publication is pending. Qualification status is separate
+and stated in each recipe; prepared source is not automatically ready to ship.
+**Extraction** means the behavior must be taken from a combined source snapshot.
+**Bundle component** means the published inference controls share implementation
+interfaces; independent extraction remains unqualified. **Historical variant**
+means the public implementation differs from the later feature's intended
+boundary. **Unpublished** means this catalog offers no public implementation
+snapshot for it yet. None of these labels certifies compatibility with a new
+upstream revision.
+
+The [combined inference controls recipe](features/inference-controls.md) is the
+published adoption unit for its coupled subfeatures. The
+[interrupted-output recipe](features/stream-recovery.md) is historical: upstream
+v0.7.1 provides partial-output preservation, so check your target first.
+
+The [old dark-theme patch](features/high-contrast-dark-theme.md) is historical.
+It has been replaced by the [stylesheet feature](features/custom-css-overrides.md),
+whose focused source is prepared but not yet public. Its
+[usage guide](custom-css.md) describes the editor, presets and recovery path.
+
+New local [storage](features/chat-storage-indexeddb.md),
+[benchmark controls](features/benchmark-upload-controls.md) and
+[request retention](features/request-cache-policy.md) source units are based on
+stable v0.7.1. The storage port includes the deletion/write-order fixes missing
+from the older public snapshot. These new ports still await target qualification
+and publication; the older combined-build provenance below is historical.
+
+For the coupled inference components, the [source map](inference-adoption-map.md)
+names the actual runtime/configuration boundaries and extraction order. It
+distinguishes runtime bypass switches from source independence.
+
+The catalog covers the 18 registered additions, the two historical entries and
+the inference bundle. It is not an attribution claim for every branch or
+upstream subsystem in this fork. Native custom kernels are upstream build
+components, not a new downstream feature supplied by these recipes.
+
+## Source evidence
+
+Public source snapshots below were readable on GitHub on 2026-10-21. Baselines
+and linked file paths were inspected against those exact local Git objects.
+This is source/navigation verification, not new runtime qualification. A baseline
+is the common upstream ancestor used to inspect a topic diff; a version declared
+there need not identify a stable release tag. Use recipes to select a boundary;
+the tables below preserve source provenance and historical validation details.
 
 ## Combined inference controls
 
 | Addition | Source snapshot | Baseline | Scope and integration notes |
 | --- | --- | --- | --- |
-| Combined inference controls | [feature/inference-controls][inference-controls-branch], source snapshot [bd850747][inference-controls-candidate] | Current upstream snapshot [73322ed1][base-inference-controls] | Combines Inference Throttle, battery protection, model-turn scheduling, hierarchical global/class/model allowances, the persisted master bypass, and accepted dashboard chart and model selection. Read its [user guide][inference-controls-guide] and [validation notes][inference-controls-tests]. The separate [Inference Throttle source][throttle] remains available and is not superseded. |
+| Combined inference controls | [feature/inference-controls][inference-controls-branch], source snapshot [bd850747][inference-controls-candidate] | Upstream development snapshot [73322ed1][base-inference-controls] | Combines Inference Throttle, battery protection, model-turn scheduling, hierarchical global/class/model allowances, the persisted master bypass, and accepted dashboard chart and model selection. Read its [user guide][inference-controls-guide] and [validation notes][inference-controls-tests]. The separate [Inference Throttle source][throttle] remains available and is not superseded. |
 
 The combined scheduler is cooperative and covers supported local batched text
 and VLM work. Percentages are configured relative allowances, not observed
@@ -51,7 +119,7 @@ record for the new revision.
 | Autosizing message editor | [feature/chat-edit-autosize][autosize-branch], [20dba1ca][autosize] | 0.6.4 / [e467261e][base-ui] | Inline chat editing grows with its content. Shares `chat.html` with the other chat changes; adapt to your current editor lifecycle. |
 | Explicit edit cancellation | [feature/chat-edit-safe-cancel][cancel-branch], [c26317ff][cancel] | 0.6.4 / [b908f563][base-cancel] | Requires an explicit action to cancel a message edit. Keep focus, keyboard, and save behavior consistent with your target UI. |
 | Preserve interrupted output | [feature/chat-preserve-interrupted-output][interrupted-branch], [86fd1d63][interrupted] | 0.6.4 / [e467261e][base-ui] | Keeps partial assistant output after stream failure. Reconcile with your chat persistence and cancellation behavior; bring its translation keys along. |
-| High-contrast dark theme | [feature/high-contrast-dark-theme][theme-branch], [183625ff][theme] | 0.7.0.dev2 / [b390b31e][base-theme] | True-black admin/chat theme with stronger contrast. Uses shared CSS and templates; check dashboard, chat, login, and light appearance on your target. |
+| High-contrast dark theme (historical) | [feature/high-contrast-dark-theme][theme-branch], [183625ff][theme] | 0.7.0.dev2 / [b390b31e][base-theme] | Superseded by custom CSS overrides; retained as historical source. Do not layer this patched base theme underneath the replacement. |
 | Skip community benchmark upload, original patch | [patch/telemetry-upload-disabled][uploads-branch], [e2e9e189][uploads] | 0.6.4 / [e008a66b][base-cache] | The original patch skips the benchmark upload path. It is smaller than the later settings-based permission controls below; it does not represent a general network-access policy. |
 
 ## Sources inside the published combined build

@@ -39,3 +39,12 @@ universal performance result or ongoing maintenance commitment.
 
 See the [feature index](../FORK_FEATURES.md) and
 [integration guide](../INTEGRATING_FEATURES.md).
+
+## 2026-10-21 refinement
+
+The [separable source decision](0003-separable-feature-source.md) and
+[development policy](../FEATURE_DEVELOPMENT.md) make feature boundaries and
+agent adoption recipes part of new work. Existing combined sources remain
+explicitly labeled until independent extraction is qualified. The landing page
+reserves its opening for the owner's human-written introduction and links a
+separate [agent starting point](../AGENT_START.md).
