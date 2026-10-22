@@ -22,9 +22,14 @@ stops and offers the user a choice rather than overwriting either copy.
   `feature/chat-storage-adoption`.
 - Baseline: stable release `v0.7.1`, full commit
   `bd1e9b112474862ebed550a9c83b4316038a1d74`.
-- Required changes: the five storage modules in `apps/omlx-web/omlx_web/static/js/`,
-  their template includes, and the bounded storage lifecycle, migration, save,
-  recovery, delete, clear, import, and stream hooks in `chat.html`. Carry the
+- Required production changes: the storage modules
+  `apps/omlx-web/omlx_web/static/js/chat_history_storage.js`,
+  `apps/omlx-web/omlx_web/static/js/chat_record_store.js`,
+  `apps/omlx-web/omlx_web/static/js/chat_indexeddb_store.js`,
+  `apps/omlx-web/omlx_web/static/js/chat_history_migration.js`, and
+  `apps/omlx-web/omlx_web/static/js/chat_media_store.js`; their includes and the
+  bounded storage lifecycle, migration, save, recovery, delete, clear, import,
+  and stream hooks in `apps/omlx-web/omlx_web/templates/chat.html`. Carry the
   storage tests, real-template Node harness, fake IndexedDB, UI assertions, and
   all locale keys with the implementation.
 - Dependencies: no separate runtime feature. Preserve the safety invariant that
