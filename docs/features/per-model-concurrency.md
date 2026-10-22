@@ -20,14 +20,16 @@ diffusion batching.
 
 ## Source and adoption boundary
 
-- Availability: local focused branch; public availability of the implementation
-  commit has not been verified.
+- Availability: local focused branch; this implementation tip was not publicly
+  available from the verified fork as of 2026-10-21.
 - Source: `feature/per-model-concurrency`, commit
   `f519ae699db4d903f8828b0db4dcdbcbed653a01`.
-- Baseline: `bd1e9b112474862ebed550a9c83b4316038a1d74` (the pinned stable
-  `v0.7.1` release). The implementation commit's parent is
-  `d6b2b92b11ebcbf4a4c1f002b0d590a3117212a8`, an ancestor of that baseline.
-  The patch is one commit; its history contains no unrelated feature commits.
+- Source baseline: `d6b2b92b11ebcbf4a4c1f002b0d590a3117212a8`, the exact parent
+  of the one-commit implementation. The patch has no unrelated feature commits.
+- Suggested target: `bd1e9b112474862ebed550a9c83b4316038a1d74` (pinned stable
+  `v0.7.1`). It is newer than the source baseline; port the one feature commit
+  onto it and qualify the port rather than diffing the entire source branch
+  against this target.
 - Required changes: take the complete implementation commit, including
   `omlx/model_settings.py`, `omlx/model_profiles.py`, `omlx/engine_pool.py`,
   the admin routes, dashboard JavaScript and model settings template, all
