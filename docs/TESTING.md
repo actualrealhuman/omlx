@@ -52,6 +52,10 @@ Cluster process-group tests use the `mock_cluster_ssh` fixture; remote teardown 
 
 Run `python -m pytest -q tests/test_vision_feature_cache.py tests/test_paged_ssd_cache.py -k "cleanup_unlink_failure or corrupt_block_cleanup_logging"` to check failed-delete warnings and cache cleanup state. These cases use the existing cache fixtures to close writer threads.
 
+# Request-scoped cache retention
+
+Run `python -m pytest -q tests/test_cache_policy_api.py tests/test_engine_cache_policy.py tests/test_scheduler_cache_policy.py tests/test_paged_ssd_cache.py tests/test_prefix_cache.py tests/test_prefix_cache_gdn_split.py tests/test_vision_feature_cache.py tests/test_vlm_cached_vision_inputs.py tests/test_request.py tests/test_specprefill_draft.py tests/test_specprefill_target.py tests/test_affine4_prefix_cache.py` to check per-request KV and image-cache retention. The suite covers body/header validation and acknowledgements, supported-engine rejection, memory-only and no-retention behavior through scheduler and speculative helpers, queued-writer races, exact-prefix reuse, vision features, and packed Affine state. It uses local synthetic cache data and does not qualify real-model or packaged-build behavior.
+
 # Cache-preserving engine teardown tests
 
 Run `python -m pytest -q tests/test_engine_teardown.py tests/test_engine_core.py tests/test_scheduler.py tests/test_paged_ssd_cache.py tests/test_hot_cache.py tests/test_engine_pool.py tests/test_batched_engine.py tests/test_vlm_engine.py` to check the 60-second teardown budget and one progress-gated extension to 120 seconds. Clock tests cover the deadlines; short-budget subprocesses exercise fatal exits. Real writer-thread cases verify primary/draft flushes and in-flight prefix stores survive a saturated queue and can be reused after reload. Async cases cover event-loop responsiveness, cancellation, and leases during another model's unload.
