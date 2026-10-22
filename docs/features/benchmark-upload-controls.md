@@ -29,10 +29,11 @@ limits still apply.
 
 - Availability: local focused adoption branch; public availability of these
   implementation commits has not been verified.
-- Source: `feature/benchmark-controls-adoption`, implementation commits
-  `5b6f5616ed5b98d1d50818708d8cf503a7aec82e` and
+- Source: `feature/benchmark-controls-adoption`, adoption commits
+  `5b6f5616ed5b98d1d50818708d8cf503a7aec82e`,
   `854fd6cfc6ba359b51cf142643841e4c19244a73`, followed by
-  `a6d8fc6e42f594aeb0aa9c0f1ef3410ff54ce641` (latest).
+  `a6d8fc6e42f594aeb0aa9c0f1ef3410ff54ce641` and test correction
+  `c9241b218cb929252836306cb9aaa7e9bacb5442` (latest source revision).
 - Baseline: `bd1e9b112474862ebed550a9c83b4316038a1d74` (the pinned stable
   `v0.7.1` release). This is a focused port of the controls and upload gates
   present in canonical `personal/main` at
@@ -41,8 +42,8 @@ limits still apply.
   adoption commits include only the permission-control source boundary and
   tests; build identity, profile packaging, and local installer changes are
   excluded.
-- Required changes: take both implementation commits in order. Together they
-  add the persisted
+- Required changes: take all four adoption commits in order. Together they add
+  the persisted
   settings model and fail-closed policy helper in `omlx/settings.py`; guards
   automatic throughput and accuracy submissions in `omlx/admin/benchmark.py`
   and `omlx/admin/accuracy_upload.py`; carries the settings through
@@ -65,7 +66,7 @@ limits still apply.
 
 ## Validation
 
-Suggested local tests:
+Focused local test command:
 
 ```sh
 python -m pytest -q tests/test_settings.py tests/test_admin_server_aliases.py tests/test_accuracy_upload.py tests/test_benchmark.py tests/test_benchmark_upload_settings_ui.py
@@ -74,12 +75,13 @@ python -m pytest -q tests/test_settings.py tests/test_admin_server_aliases.py te
 These tests cover fail-closed defaults and malformed saved values, persistence,
 API read/write behavior, mocked throughput and accuracy upload paths with the
 disabled policy, and a policy toggle during the first throughput POST or after
-the accuracy summary POST. The transport tests use mocks and should not
-contact `omlx.ai`. No tests have been run for these adoption commits. The
-macOS Settings screen and native DTO path have no feature-specific unit test in
-this source;
-compile and manually verify the three controls, persistence, error recovery,
-and disabled status messages on the target before declaring qualification.
+the accuracy summary POST. They passed on the candidate checkout at source
+revision `c9241b218cb929252836306cb9aaa7e9bacb5442`: 629 passed in 3.42s. The
+transport tests use mocks and do not contact `omlx.ai`. No packages were
+installed. The macOS Settings screen and native DTO path have no feature-specific
+unit test in this source; compile and manually verify the three controls,
+persistence, error recovery, and disabled status messages on the target before
+declaring qualification.
 
 For a target check, start from settings with no `benchmark_uploads` section and
 confirm submissions stay disabled. Exercise all master/per-kind combinations
@@ -87,14 +89,16 @@ through each settings client, restart and confirm the values persist, verify a
 throughput run reports a disabled skip without changing its local results, and
 verify an accuracy suite reports a disabled skip. Only enable submission for a
 separate explicitly approved check that may send benchmark data externally.
-No integration or target-isolation qualification is claimed here.
+These results cover focused Python units only; native UI behavior, full
+server-and-client integration, and real upload behavior remain unqualified.
 
 ## Limitations and remaining work
 
 The web copy and native default strings are currently English-only; add and
 review translations before claiming localized settings coverage. The native
-settings UI lacks feature-specific unit coverage. The source has not been
-qualified against the pinned target with only these declared dependencies.
-Port the complete commit onto the intended target, run the mocked local tests,
-review API and UI interactions, and record the exact target revision and
-results in this recipe before calling the feature independently adoptable.
+settings UI lacks feature-specific unit coverage, and native controls,
+persistence, error recovery, and disabled status messages have not been manually
+verified. The focused Python suites passed on this pinned-stable-derived
+candidate, but no native or end-to-end upload qualification is claimed. Record
+those remaining checks at the exact target revision before calling the feature
+independently adoptable.
