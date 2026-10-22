@@ -1520,7 +1520,7 @@ class TestUploadToOmlxAi:
         run = BenchmarkRun(
             bench_id="test-bench-opt-out",
             request=BenchmarkRequest(
-                model_id="Qwen3-30B-4bit", prompt_lengths=[1024, 2048]
+                model_id="Qwen3-30B-4bit", prompt_lengths=[1024, 4096]
             ),
         )
         run.results = [
@@ -1529,7 +1529,7 @@ class TestUploadToOmlxAi:
                 "processing_tps": 500.0, "gen_tps": 50.0,
                 "ttft_ms": 100.0, "peak_memory_bytes": 0,
             }
-            for context in (1024, 2048)
+            for context in (1024, 4096)
         ]
         mock_entry = MagicMock()
         mock_entry.model_path = "/models/Qwen3-30B-4bit"
