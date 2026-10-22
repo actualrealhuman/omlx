@@ -673,6 +673,10 @@ class GlobalSettingsRequest(BaseModel):
     gpu_keep_warm_interval: float | None = None
     distributed_inference_enabled: bool | None = None
     max_audio_upload_size: str | None = None
+    # Automatic community benchmark submissions (live-applied privacy policy)
+    benchmark_uploads_enabled: bool | None = None
+    benchmark_uploads_throughput_enabled: bool | None = None
+    benchmark_uploads_accuracy_enabled: bool | None = None
 
     # Model settings
     model_dirs: list[str] | None = None
@@ -4580,6 +4584,7 @@ def _global_settings_response(global_settings):
 
     return {
         "base_path": str(global_settings.base_path),
+        "benchmark_uploads": global_settings.benchmark_uploads.to_dict(),
         "server": {
             "host": global_settings.server.host,
             "port": global_settings.server.port,
@@ -4943,6 +4948,18 @@ async def update_global_settings(
             )
         global_settings.server.max_audio_upload_size = request.max_audio_upload_size
         runtime_applied.append("max_audio_upload_size")
+
+    benchmark_upload_fields = {
+        "benchmark_uploads_enabled": "enabled",
+        "benchmark_uploads_throughput_enabled": "throughput_enabled",
+        "benchmark_uploads_accuracy_enabled": "accuracy_enabled",
+    }
+    for request_field, setting_field in benchmark_upload_fields.items():
+        value = getattr(request, request_field)
+        if value is None:
+            continue
+        setattr(global_settings.benchmark_uploads, setting_field, value)
+        runtime_applied.append(request_field)
 
     if request.server_aliases is not None:
         from ..utils.network import is_valid_alias

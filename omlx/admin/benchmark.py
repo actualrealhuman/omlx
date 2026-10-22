@@ -1524,6 +1524,21 @@ async def _upload_to_omlx_ai(run: BenchmarkRun, engine_pool: Any) -> None:
     grouped by submission_group. Upload failures don't affect
     the benchmark run status.
     """
+    from ..settings import automatic_benchmark_upload_allowed
+
+    if not automatic_benchmark_upload_allowed("throughput"):
+        run.upload_state["phase"] = "skipped"
+        run.upload_state["skipped_reason"] = "disabled"
+        await _send_event(
+            run,
+            {
+                "type": "upload_skipped",
+                "reason": "disabled",
+                "features": run.feature_flags,
+            },
+        )
+        return
+
     import requests
 
     from .._version import __version__

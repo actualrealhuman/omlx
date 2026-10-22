@@ -1476,6 +1476,36 @@ class TestUploadModelName:
 
 
 class TestUploadToOmlxAi:
+    @pytest.fixture(autouse=True)
+    def _enable_upload_policy(self, monkeypatch):
+        """Transport cases opt in; the disabled-policy case overrides this."""
+        monkeypatch.setattr(
+            "omlx.settings.automatic_benchmark_upload_allowed",
+            lambda kind: kind == "throughput",
+        )
+
+    @pytest.mark.asyncio
+    async def test_disabled_policy_skips_without_transport(self, monkeypatch):
+        from omlx.admin.benchmark import _upload_to_omlx_ai
+
+        monkeypatch.setattr(
+            "omlx.settings.automatic_benchmark_upload_allowed",
+            lambda kind: False,
+        )
+        run = BenchmarkRun(
+            bench_id="test-bench-disabled",
+            request=BenchmarkRequest(model_id="Qwen3-30B-4bit", prompt_lengths=[1024]),
+        )
+        transport = AsyncMock()
+
+        with patch("asyncio.to_thread", transport):
+            await _upload_to_omlx_ai(run, MagicMock())
+
+        transport.assert_not_awaited()
+        assert run.upload_state["phase"] == "skipped"
+        assert run.upload_state["skipped_reason"] == "disabled"
+        assert [event["type"] for event in run.events] == ["upload_skipped"]
+
     @pytest.mark.asyncio
     async def test_upload_success(self):
         """Test successful upload sends correct SSE events."""

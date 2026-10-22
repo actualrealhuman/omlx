@@ -7,6 +7,9 @@ final class SecurityScreenVM {
     var apiKey: String?
     var skipApiKeyVerification: Bool = false
     var allowUnauthenticatedInference: Bool = false
+    var benchmarkUploadsEnabled: Bool = false
+    var throughputUploadsEnabled: Bool = true
+    var accuracyUploadsEnabled: Bool = true
     var subKeys: [SubKeyDTO] = []
     var lastError: String?
 
@@ -32,6 +35,9 @@ final class SecurityScreenVM {
             self.skipApiKeyVerification = settings.auth?.skipApiKeyVerification ?? false
             self.allowUnauthenticatedInference =
                 settings.auth?.allowUnauthenticatedInference ?? false
+            self.benchmarkUploadsEnabled = settings.benchmarkUploads?.enabled ?? false
+            self.throughputUploadsEnabled = settings.benchmarkUploads?.throughputEnabled ?? true
+            self.accuracyUploadsEnabled = settings.benchmarkUploads?.accuracyEnabled ?? true
             self.subKeys = settings.auth?.subKeys ?? []
             self.lastError = nil
         } catch {
@@ -101,6 +107,44 @@ final class SecurityScreenVM {
         } catch {
             allowUnauthenticatedInference = previous
             self.lastError = error.omlxDescription
+        }
+    }
+
+    func saveBenchmarkUploadsEnabled(client: OMLXClient) async {
+        await saveBenchmarkUploadPatch(
+            GlobalSettingsPatch(benchmarkUploadsEnabled: benchmarkUploadsEnabled),
+            client: client
+        )
+    }
+
+    func saveThroughputUploadsEnabled(client: OMLXClient) async {
+        await saveBenchmarkUploadPatch(
+            GlobalSettingsPatch(
+                benchmarkUploadsThroughputEnabled: throughputUploadsEnabled
+            ),
+            client: client
+        )
+    }
+
+    func saveAccuracyUploadsEnabled(client: OMLXClient) async {
+        await saveBenchmarkUploadPatch(
+            GlobalSettingsPatch(
+                benchmarkUploadsAccuracyEnabled: accuracyUploadsEnabled
+            ),
+            client: client
+        )
+    }
+
+    private func saveBenchmarkUploadPatch(
+        _ patch: GlobalSettingsPatch,
+        client: OMLXClient
+    ) async {
+        do {
+            _ = try await client.updateGlobalSettings(patch)
+            self.lastError = nil
+        } catch {
+            self.lastError = error.omlxDescription
+            await load(client: client)
         }
     }
 

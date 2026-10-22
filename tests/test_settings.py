@@ -14,6 +14,7 @@ from omlx.settings import (
     BURST_DECODE_MODES,
     DEFAULT_BURST_DECODE_MODE,
     AuthSettings,
+    BenchmarkUploadSettings,
     CacheSettings,
     ClaudeCodeSettings,
     GlobalSettings,
@@ -36,6 +37,58 @@ from omlx.settings import (
     reset_settings,
     resolve_default_base_path,
 )
+
+
+class TestBenchmarkUploadSettings:
+    def test_private_defaults_fail_closed(self):
+        settings = BenchmarkUploadSettings()
+
+        assert settings.enabled is False
+        assert settings.throughput_enabled is True
+        assert settings.accuracy_enabled is True
+        assert settings.allows("throughput") is False
+        assert settings.allows("accuracy") is False
+
+    def test_master_and_per_kind_gates(self):
+        settings = BenchmarkUploadSettings(
+            enabled=True,
+            throughput_enabled=False,
+            accuracy_enabled=True,
+        )
+
+        assert settings.allows("throughput") is False
+        assert settings.allows("accuracy") is True
+
+    def test_malformed_saved_values_do_not_enable_uploads(self):
+        settings = BenchmarkUploadSettings.from_dict(
+            {"enabled": "false", "throughput_enabled": "false"}
+        )
+
+        assert settings.enabled is False
+        assert settings.throughput_enabled is False
+        assert settings.accuracy_enabled is True
+        assert settings.allows("throughput") is False
+        assert settings.allows("accuracy") is False
+
+    def test_malformed_section_uses_fail_closed_defaults(self):
+        settings = BenchmarkUploadSettings.from_dict(None)
+
+        assert settings.enabled is False
+        assert settings.allows("throughput") is False
+        assert settings.allows("accuracy") is False
+
+    def test_global_settings_round_trip(self, tmp_path):
+        settings = GlobalSettings(base_path=tmp_path)
+        settings.benchmark_uploads.enabled = True
+        settings.benchmark_uploads.throughput_enabled = False
+
+        with patch.object(GlobalSettings, "ensure_directories"):
+            settings.save()
+            loaded = GlobalSettings.load(base_path=tmp_path)
+
+        assert loaded.benchmark_uploads.enabled is True
+        assert loaded.benchmark_uploads.throughput_enabled is False
+        assert loaded.benchmark_uploads.accuracy_enabled is True
 
 
 class TestServerSettings:
