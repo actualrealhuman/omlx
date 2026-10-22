@@ -31,7 +31,8 @@ limits still apply.
   implementation commits has not been verified.
 - Source: `feature/benchmark-controls-adoption`, implementation commits
   `5b6f5616ed5b98d1d50818708d8cf503a7aec82e` and
-  `854fd6cfc6ba359b51cf142643841e4c19244a73` (latest).
+  `854fd6cfc6ba359b51cf142643841e4c19244a73`, followed by
+  `a6d8fc6e42f594aeb0aa9c0f1ef3410ff54ce641` (latest).
 - Baseline: `bd1e9b112474862ebed550a9c83b4316038a1d74` (the pinned stable
   `v0.7.1` release). This is a focused port of the controls and upload gates
   present in canonical `personal/main` at
