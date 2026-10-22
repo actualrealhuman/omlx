@@ -41,4 +41,3 @@ Adapt the behavior to the current editor lifecycle rather than replacing the ful
 
 Return to the [feature index](../FORK_FEATURES.md) or follow the
 [agent adoption guide](../AGENT_START.md).
-

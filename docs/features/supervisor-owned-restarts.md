@@ -45,4 +45,3 @@ The source is a focused commit in combined public history, not a separate publis
 
 Return to the [feature index](../FORK_FEATURES.md) or follow the
 [agent adoption guide](../AGENT_START.md).
-

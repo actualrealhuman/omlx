@@ -52,4 +52,3 @@ Sidecars expose recoverable prompt content. Turning capture off does not remove 
 
 Return to the [feature index](../FORK_FEATURES.md) or follow the
 [agent adoption guide](../AGENT_START.md).
-

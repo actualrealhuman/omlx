@@ -41,4 +41,3 @@ The standalone downstream stream-recovery feature is retired for stable v0.7.1 i
 
 Return to the [feature index](../FORK_FEATURES.md) or follow the
 [agent adoption guide](../AGENT_START.md).
-

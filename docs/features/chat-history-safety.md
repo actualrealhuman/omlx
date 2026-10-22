@@ -43,4 +43,3 @@ The original source predates asynchronous per-chat records. Do not overwrite a n
 
 Return to the [feature index](../FORK_FEATURES.md) or follow the
 [agent adoption guide](../AGENT_START.md).
-
