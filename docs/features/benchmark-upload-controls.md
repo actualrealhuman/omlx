@@ -13,9 +13,13 @@ uninitialized settings fail closed.
 
 The admin web UI exposes the controls under Settings > Auth & Info > Benchmark
 Privacy. The macOS app exposes them under Settings > Security > Benchmark
-Privacy. Changes are saved through the existing global-settings API and take
-effect immediately. When disabled, throughput and accuracy results stay local
-and the benchmark UI reports that submission was skipped. If enabled, the
+Privacy. Changes are saved through the existing global-settings API. The
+uploader rechecks the setting at each network-request boundary, so switching
+off stops later throughput submissions and stops the separate accuracy raw
+upload after its summary request. A request already in flight cannot be
+revoked; an accuracy summary already accepted remains published even when its
+question-level raw upload is skipped. The UI reports skipped throughput rows
+and an accepted accuracy summary whose raw data stayed local. If enabled, the
 existing automatic upload paths may submit eligible local throughput results
 and eligible accuracy summaries with associated question-level results to
 `omlx.ai`. Existing nonlocal-endpoint exclusions and accuracy eligibility
@@ -23,19 +27,21 @@ limits still apply.
 
 ## Source and adoption boundary
 
-- Availability: local focused adoption branch; public availability of this
-  implementation commit has not been verified.
-- Source: `feature/benchmark-controls-adoption`, commit
-  `5b6f5616ed5b98d1d50818708d8cf503a7aec82e`.
+- Availability: local focused adoption branch; public availability of these
+  implementation commits has not been verified.
+- Source: `feature/benchmark-controls-adoption`, implementation commits
+  `5b6f5616ed5b98d1d50818708d8cf503a7aec82e` and
+  `854fd6cfc6ba359b51cf142643841e4c19244a73` (latest).
 - Baseline: `bd1e9b112474862ebed550a9c83b4316038a1d74` (the pinned stable
   `v0.7.1` release). This is a focused port of the controls and upload gates
   present in canonical `personal/main` at
   `8560a3d0080aa078e7494354b9426b375c40f125`, originally introduced with
   build identity work in `f372c31a658a2d315280b81201e5c83088194f16`. The
-  adoption commit includes only the permission-control source boundary and
+  adoption commits include only the permission-control source boundary and
   tests; build identity, profile packaging, and local installer changes are
   excluded.
-- Required changes: take the complete source commit. It adds the persisted
+- Required changes: take both implementation commits in order. Together they
+  add the persisted
   settings model and fail-closed policy helper in `omlx/settings.py`; guards
   automatic throughput and accuracy submissions in `omlx/admin/benchmark.py`
   and `omlx/admin/accuracy_upload.py`; carries the settings through
@@ -46,7 +52,9 @@ limits still apply.
   `apps/omlx-mac/Sources/AppView/Screens/`. The test boundary is
   `tests/test_settings.py`, `tests/test_admin_server_aliases.py`,
   `tests/test_accuracy_upload.py`, `tests/test_benchmark.py`, and
-  `tests/test_benchmark_upload_settings_ui.py`.
+  `tests/test_benchmark_upload_settings_ui.py`. The follow-up rechecks policy
+  before each HTTP request and reports partial throughput skips and accuracy
+  summary/raw split outcomes.
 - Dependencies: existing throughput and accuracy benchmark/upload paths,
   global settings persistence, the authenticated admin global-settings API,
   and the existing web and macOS settings clients. No separate feature ID or
@@ -63,10 +71,12 @@ python -m pytest -q tests/test_settings.py tests/test_admin_server_aliases.py te
 ```
 
 These tests cover fail-closed defaults and malformed saved values, persistence,
-API read/write behavior, and mocked throughput and accuracy upload paths with
-the disabled policy. The transport tests use mocks and should not contact
-`omlx.ai`. No tests have been run for this adoption commit. The macOS Settings
-screen and native DTO path have no feature-specific unit test in this source;
+API read/write behavior, mocked throughput and accuracy upload paths with the
+disabled policy, and a policy toggle during the first throughput POST or after
+the accuracy summary POST. The transport tests use mocks and should not
+contact `omlx.ai`. No tests have been run for these adoption commits. The
+macOS Settings screen and native DTO path have no feature-specific unit test in
+this source;
 compile and manually verify the three controls, persistence, error recovery,
 and disabled status messages on the target before declaring qualification.
 
