@@ -94,15 +94,13 @@ Those checks remain pending on this snapshot. Record the exact target revision,
 test results, working-tree fingerprint if dirty, and any unsupported engine
 families before describing the feature as qualified.
 
-### Qualification attempt
+### Focused local validation
 
 At source revision `1290c82fca51eaacebaccfd37dfa896a27fc94a2`, the full focused
 and listed fallback/helper suites passed with pytest's default exclusions for
-`slow` and `integration` tests. The designated canonical Python environment
-did not contain pytest or MLX, so an existing Python 3.11 local test environment
-with Metal access was used without installing or changing dependencies. It had
+`slow` and `integration` tests. The local test environment used Python 3.11,
 pytest 9.1.1, mlx-lm `0.31.4.dev132+g94cdcae13` (matching the pinned commit),
-mlx-vlm 0.7.7, and MLX 0.32.3; this checkout pins MLX 0.32.4, so the exact MLX
+mlx-vlm 0.7.7, and MLX 0.32.3. This checkout pins MLX 0.32.4, so the exact MLX
 patch-version remains a qualification limitation.
 
 - Focused recipe command: 583 passed in 6.75 seconds.
