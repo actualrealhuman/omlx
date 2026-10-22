@@ -18,8 +18,9 @@ stops and offers the user a choice rather than overwriting either copy.
 ## Source and adoption boundary
 
 - Availability: unpublished local feature branch; no public source is available.
-- Source: local implementation commit `c2ec040fbba636473bd20e3c6ae96adaccff4236` on
-  `feature/chat-storage-adoption`.
+- Source: `feature/chat-storage-adoption`, beginning with implementation commit
+  `c2ec040fbba636473bd20e3c6ae96adaccff4236` and including focused fixes at
+  tested revision `8afa2b68b30c10037469ec501360baf5cf971349`.
 - Baseline: stable release `v0.7.1`, full commit
   `bd1e9b112474862ebed550a9c83b4316038a1d74`.
 - Required production changes: the storage modules
@@ -29,20 +30,22 @@ stops and offers the user a choice rather than overwriting either copy.
   `apps/omlx-web/omlx_web/static/js/chat_history_migration.js`, and
   `apps/omlx-web/omlx_web/static/js/chat_media_store.js`; their includes and the
   bounded storage lifecycle, migration, save, recovery, delete, clear, import,
-  and stream hooks in `apps/omlx-web/omlx_web/templates/chat.html`. Carry the
-  storage tests, real-template Node harness, fake IndexedDB, UI assertions, and
-  all locale keys with the implementation.
+  and stream hooks in `apps/omlx-web/omlx_web/templates/chat.html`, including
+  initialized write queues/deletion tombstones and a discarded-stream finalizer
+  guard. Carry the storage tests, real-template Node harness, fake IndexedDB, UI
+  assertions, and all locale keys with the implementation.
 - Dependencies: no separate runtime feature. Preserve the safety invariant that
   quota, parse, serialization, storage, or migration errors never silently
   delete existing history and require an explicit recovery choice. Keep the
-  target's existing partial-stream finalization and composer layout. Theme and
-  editor changes that share `chat.html` are not required companions.
+  target's partial-stream output/error behavior and one-field composer layout.
+  Theme and editor changes that share `chat.html` are not required companions.
 
 The template changes must include queued per-chat writes, revision checks,
 explicit record removal with failed-delete retry intent, and guards against
 late stream saves and same-ID imports. Do not replace the whole target chat
 template from a different feature branch. This branch is prepared on the
-stated baseline; it has not yet been qualified on that target.
+stated baseline. The focused synthetic suites below pass on the prepared port;
+browser migration and wider target qualification remain pending.
 
 ## Validation
 
@@ -57,18 +60,29 @@ These cover localStorage fallback, migration retry, attachment preservation,
 revision conflicts, visible write failures, deletion and clear persistence,
 failed-delete recovery, stale stream saves, same-ID import, variant write
 serialization, and partial output after stop or stream error. Use disposable
-browser storage for any manual migration check. These are required checks, not
-claimed results. Integration with only the declared prerequisites has not yet
-been qualified; run the suites on this branch before offering it for adoption.
+browser storage for any manual migration check. Local validation on 2026-10-22
+UTC at implementation revision `8afa2b68b30c10037469ec501360baf5cf971349`:
+
+- Storage, record, and IndexedDB Node suites: 66 passed.
+- Migration and media Node suites: 60 passed.
+- Real-template app integration Node suite: 40 passed.
+- Chat UI Python suite: 19 passed.
+- `git diff --check`: passed.
+
+These synthetic suites use fake browser storage and do not establish real-browser
+behavior. A disposable-origin migration check, broader browser qualification,
+performance checks, and packaged-app qualification remain pending.
 
 ## Limitations and remaining work
 
 Storage is per browser and origin; there is no sync, account service, archive
 export, storage meter, or thumbnail generation. Migration retains the legacy
 history bytes while converting records. Browser quota and eviction policy still
-apply. Runtime tests and a disposable-origin migration check remain pending, so
-independent adoption is not yet qualified.
+apply. Independent adoption is not yet fully qualified while disposable-origin
+migration and broader browser checks remain pending.
 
-Prepared branch tip: `d9c60dd69b5da7b1fe63331f250ac0fb1d55886c` (implementation plus recipe updates).
+Prepared branch: `feature/chat-storage-adoption`, tip `da5efb2131043499b521b35d597499aa87902b58`
+(implementation plus recipe updates).
 
-Return to the [catalog](../FORK_FEATURES.md) or [composition guide](../FEATURE_COMPOSITION.md).
+Return to the [catalog](../FORK_FEATURES.md) or
+[composition guide](../FEATURE_COMPOSITION.md).

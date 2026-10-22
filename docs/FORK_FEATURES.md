@@ -59,8 +59,10 @@ New local [storage](features/chat-storage-indexeddb.md),
 [benchmark controls](features/benchmark-upload-controls.md) and
 [request retention](features/request-cache-policy.md) source units are based on
 stable v0.7.1. The storage port includes the deletion/write-order fixes missing
-from the older public snapshot. These new ports still await target qualification
-and publication; the older combined-build provenance below is historical.
+from the older public snapshot. Their focused local validation is recorded
+below; browser, native, real-model and wider target checks remain feature-specific
+limitations. Public source publication is pending. The older combined-build
+provenance below is historical.
 
 For the coupled inference components, the [source map](inference-adoption-map.md)
 names the actual runtime/configuration boundaries and extraction order. It
@@ -70,6 +72,25 @@ The catalog covers the 18 registered additions, the two historical entries and
 the inference bundle. It is not an attribution claim for every branch or
 upstream subsystem in this fork. Native custom kernels are upstream build
 components, not a new downstream feature supplied by these recipes.
+
+## Prepared source validation
+
+Local checks on 2026-10-22 ran on the prepared stable-baseline ports, with
+synthetic inputs or mocked transports. The recipe records
+the commands and full source revision; these results do not transfer to a later
+port or a combined custom build.
+
+| Prepared source | Tested revision | Focused results | Remaining qualification |
+| --- | --- | --- | --- |
+| [Chat storage](features/chat-storage-indexeddb.md) | `8afa2b68b30c10037469ec501360baf5cf971349` | 166 Node tests and 19 Python UI tests passed | Disposable-origin migration, real browsers and packaged-app behavior |
+| [Benchmark upload controls](features/benchmark-upload-controls.md) | `c9241b218cb929252836306cb9aaa7e9bacb5442` | 629 Python tests passed | Native controls, full client/server behavior, live uploads and localization |
+| [Request cache policy](features/request-cache-policy.md) | `1290c82fca51eaacebaccfd37dfa896a27fc94a2` | 583 focused tests and 744 helper/fallback tests passed; 1 skipped | Exact MLX dependency pin, real-model behavior, packaged builds and performance |
+
+The cache runner used MLX 0.32.3 while the checkout pins 0.32.4. Its default
+`slow` and `integration` exclusions were active. No live benchmark submission,
+model loading, app build, installation or launch was part of these checks.
+Public availability remains separate from validation: the prepared branches
+must be published before an external agent can retrieve these implementations.
 
 ## Source evidence
 

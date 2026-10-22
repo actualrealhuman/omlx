@@ -31,10 +31,11 @@ snapshot yet. The catalog labels these differences. Cloning this documentation
 branch does not enable the additions. Upstream installers install upstream oMLX.
 
 Focused stable-source ports for chat storage, benchmark upload controls and
-request cache retention are prepared locally. Their recipes identify the source
-and remaining qualification; they become externally adoptable after verified
-publication. Use the [composition guide](docs/FEATURE_COMPOSITION.md) when
-selecting several features together.
+request cache retention are prepared locally, with passing focused tests.
+See [validation and remaining checks](docs/FORK_FEATURES.md#prepared-source-validation)
+and each recipe before selecting them. They become externally retrievable after
+verified publication. Use the [composition guide](docs/FEATURE_COMPOSITION.md)
+when selecting several features together.
 
 Give your agent a request such as:
 
