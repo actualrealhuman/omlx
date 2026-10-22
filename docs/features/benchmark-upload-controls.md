@@ -1,0 +1,89 @@
+# Benchmark upload privacy controls
+
+Feature ID: `benchmark-upload-controls`
+
+## Behavior and use
+
+Automatic community benchmark submission is disabled by default. The persisted
+master setting `benchmark_uploads.enabled` must be enabled before any automatic
+benchmark upload can occur. Separate `throughput_enabled` and
+`accuracy_enabled` switches let the user permit either kind while retaining the
+other switch's value when the master setting is off. Missing, malformed, or
+uninitialized settings fail closed.
+
+The admin web UI exposes the controls under Settings > Auth & Info > Benchmark
+Privacy. The macOS app exposes them under Settings > Security > Benchmark
+Privacy. Changes are saved through the existing global-settings API and take
+effect immediately. When disabled, throughput and accuracy results stay local
+and the benchmark UI reports that submission was skipped. If enabled, the
+existing automatic upload paths may submit eligible local throughput results
+and eligible accuracy summaries with associated question-level results to
+`omlx.ai`. Existing nonlocal-endpoint exclusions and accuracy eligibility
+limits still apply.
+
+## Source and adoption boundary
+
+- Availability: local focused adoption branch; public availability of this
+  implementation commit has not been verified.
+- Source: `feature/benchmark-controls-adoption`, commit
+  `5b6f5616ed5b98d1d50818708d8cf503a7aec82e`.
+- Baseline: `bd1e9b112474862ebed550a9c83b4316038a1d74` (the pinned stable
+  `v0.7.1` release). This is a focused port of the controls and upload gates
+  present in canonical `personal/main` at
+  `8560a3d0080aa078e7494354b9426b375c40f125`, originally introduced with
+  build identity work in `f372c31a658a2d315280b81201e5c83088194f16`. The
+  adoption commit includes only the permission-control source boundary and
+  tests; build identity, profile packaging, and local installer changes are
+  excluded.
+- Required changes: take the complete source commit. It adds the persisted
+  settings model and fail-closed policy helper in `omlx/settings.py`; guards
+  automatic throughput and accuracy submissions in `omlx/admin/benchmark.py`
+  and `omlx/admin/accuracy_upload.py`; carries the settings through
+  `omlx/admin/routes.py`; and adds web dashboard controls and skipped-result
+  messaging under `apps/omlx-web/omlx_web/`. The macOS settings API and Security
+  screen changes are in `apps/omlx-mac/Sources/Net/DTO/GlobalSettingsDTO.swift`,
+  `apps/omlx-mac/Sources/AppView/ViewModels/SecurityScreenVM.swift`, and
+  `apps/omlx-mac/Sources/AppView/Screens/`. The test boundary is
+  `tests/test_settings.py`, `tests/test_admin_server_aliases.py`,
+  `tests/test_accuracy_upload.py`, `tests/test_benchmark.py`, and
+  `tests/test_benchmark_upload_settings_ui.py`.
+- Dependencies: existing throughput and accuracy benchmark/upload paths,
+  global settings persistence, the authenticated admin global-settings API,
+  and the existing web and macOS settings clients. No separate feature ID or
+  build-identity/package profile is required. Keep the backend policy guard
+  together with both client surfaces and the skipped-result messaging; a UI
+  toggle alone does not control submissions.
+
+## Validation
+
+Suggested local tests:
+
+```sh
+python -m pytest -q tests/test_settings.py tests/test_admin_server_aliases.py tests/test_accuracy_upload.py tests/test_benchmark.py tests/test_benchmark_upload_settings_ui.py
+```
+
+These tests cover fail-closed defaults and malformed saved values, persistence,
+API read/write behavior, and mocked throughput and accuracy upload paths with
+the disabled policy. The transport tests use mocks and should not contact
+`omlx.ai`. No tests have been run for this adoption commit. The macOS Settings
+screen and native DTO path have no feature-specific unit test in this source;
+compile and manually verify the three controls, persistence, error recovery,
+and disabled status messages on the target before declaring qualification.
+
+For a target check, start from settings with no `benchmark_uploads` section and
+confirm submissions stay disabled. Exercise all master/per-kind combinations
+through each settings client, restart and confirm the values persist, verify a
+throughput run reports a disabled skip without changing its local results, and
+verify an accuracy suite reports a disabled skip. Only enable submission for a
+separate explicitly approved check that may send benchmark data externally.
+No integration or target-isolation qualification is claimed here.
+
+## Limitations and remaining work
+
+The web copy and native default strings are currently English-only; add and
+review translations before claiming localized settings coverage. The native
+settings UI lacks feature-specific unit coverage. The source has not been
+qualified against the pinned target with only these declared dependencies.
+Port the complete commit onto the intended target, run the mocked local tests,
+review API and UI interactions, and record the exact target revision and
+results in this recipe before calling the feature independently adoptable.
