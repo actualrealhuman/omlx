@@ -38,6 +38,25 @@ For the separate throttle-only alternative, use the
 [standalone pacing recipe](inference-pacing.md). Do not combine its separate
 pacer implementation with this bundle.
 
+## Prepared model-chooser layout follow-up
+
+Local follow-up `d861a301e2630db33e41cfb95087e09adae6f43e` applies after the
+published bundle above. It stacks each model name above its status beside a
+checkbox, allowing both text rows to wrap in narrow dashboard widgets. Only
+dashboard CSS and the user guide change; no additional runtime dependency,
+setting or migration is introduced.
+
+This follow-up is not yet published. Headless Chrome inspection on 2026-10-27
+used a fixture with production dashboard CSS, theme, Tailwind and font assets.
+It reproduced the old compression and confirmed stacked text at widget widths
+of 180, 220, 280 and 600 CSS pixels, including long unbroken model identifiers,
+translated status text and light/dark appearance. The existing clickable-label
+markup and selection handlers are unchanged.
+
+This was a browser layout inspection, not a live-server, real-device or runtime
+regression suite. Historical bundle results above do not qualify the changed
+source. Verify public availability before updating the published snapshot.
+
 Return to the [catalog](../FORK_FEATURES.md) or [composition guide](../FEATURE_COMPOSITION.md).
 
 [Open the fixed implementation source](https://github.com/actualrealhuman/omlx/tree/bd850747e6336ee59e6fc9242a865eda5257d061).

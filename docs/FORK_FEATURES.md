@@ -103,6 +103,11 @@ the tables below preserve source provenance and historical validation details.
 
 ## Combined inference controls
 
+A prepared, unpublished model-chooser layout correction is described in the
+[bundle recipe](features/inference-controls.md#prepared-model-chooser-layout-follow-up).
+Its production-styled fixture was inspected in headless Chrome; publication is
+pending. The published snapshot and historical validation below remain unchanged.
+
 | Addition | Source snapshot | Baseline | Scope and integration notes |
 | --- | --- | --- | --- |
 | Combined inference controls | [feature/inference-controls][inference-controls-branch], source snapshot [bd850747][inference-controls-candidate] | Upstream development snapshot [73322ed1][base-inference-controls] | Combines Inference Throttle, battery protection, model-turn scheduling, hierarchical global/class/model allowances, the persisted master bypass, and accepted dashboard chart and model selection. Read its [user guide][inference-controls-guide] and [validation notes][inference-controls-tests]. The separate [Inference Throttle source][throttle] remains available and is not superseded. |
