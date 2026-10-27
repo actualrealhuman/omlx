@@ -1797,9 +1797,10 @@
 }
 
 .inference-picker-option {
-    display:flex;
-    align-items:center;
-    gap:10px;
+    display:grid;
+    grid-template-columns:auto minmax(0,1fr);
+    align-items:start;
+    gap:4px 10px;
     min-height:44px;
     padding:8px 0;
     border-bottom:1px solid var(--border-faint);
@@ -1810,14 +1811,25 @@
     border-bottom:0;
 }
 
+.inference-picker-option input {
+    grid-column:1;
+    grid-row:1 / span 2;
+    margin:1px 0 0;
+}
+
 .inference-picker-option .inference-help-text {
-    flex-shrink:0;
+    grid-column:2;
+    min-width:0;
     margin:0;
+    white-space:normal;
+    overflow-wrap:anywhere;
 }
 
 .inference-picker-name {
-    flex:1;
+    grid-column:2;
     min-width:0;
+    white-space:normal;
+    word-break:normal;
     overflow-wrap:anywhere;
     font-size:13px;
 }

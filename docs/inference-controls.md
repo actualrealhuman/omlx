@@ -60,6 +60,9 @@ The searchable checklist includes installed models so you can configure one
 before loading it. Favorites and custom scheduling settings do not add a model
 to the panel by themselves.
 
+Each checklist entry shows the model name above its status, beside a checkbox.
+Both text lines wrap as needed so names remain readable in narrow widgets.
+
 Use **Hide from panel** to remove an entry. Hiding wins over automatic inclusion,
 even if the model remains loaded. Panel membership is saved per browser; it
 neither loads a model nor changes its scheduling settings.
