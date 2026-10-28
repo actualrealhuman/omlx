@@ -17,7 +17,9 @@ stops and offers the user a choice rather than overwriting either copy.
 
 ## Source and adoption boundary
 
-- Availability: unpublished local feature branch; no public source is available.
+- Availability at the 2026-10-28 publication review: local and unpublished.
+  Verify the receiving remote contains the recorded source commit before adoption;
+  later publication does not establish additional qualification.
 - Source: `feature/chat-storage-adoption`, beginning with implementation commit
   `c2ec040fbba636473bd20e3c6ae96adaccff4236` and including focused fixes at
   tested revision `8afa2b68b30c10037469ec501360baf5cf971349`.
