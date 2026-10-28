@@ -17,10 +17,12 @@ stops and offers the user a choice rather than overwriting either copy.
 
 ## Source and adoption boundary
 
-- Availability: unpublished local feature branch; no public source is available.
+- Availability: public focused branch [`feature/chat-storage-adoption` at
+  `f9ec698a11e6d6086be28141134ee2a97898d66b`](https://github.com/actualrealhuman/omlx/tree/f9ec698a11e6d6086be28141134ee2a97898d66b).
 - Source: `feature/chat-storage-adoption`, beginning with implementation commit
-  `c2ec040fbba636473bd20e3c6ae96adaccff4236` and including focused fixes at
-  tested revision `8afa2b68b30c10037469ec501360baf5cf971349`.
+  [`c2ec040fbba636473bd20e3c6ae96adaccff4236`](https://github.com/actualrealhuman/omlx/tree/c2ec040fbba636473bd20e3c6ae96adaccff4236)
+  and including focused fixes at tested revision
+  [`8afa2b68b30c10037469ec501360baf5cf971349`](https://github.com/actualrealhuman/omlx/tree/8afa2b68b30c10037469ec501360baf5cf971349).
 - Baseline: stable release `v0.7.1`, full commit
   `bd1e9b112474862ebed550a9c83b4316038a1d74`.
 - Required production changes: the storage modules
@@ -81,12 +83,10 @@ history bytes while converting records. Browser quota and eviction policy still
 apply. Independent adoption is not yet fully qualified while disposable-origin
 migration and broader browser checks remain pending.
 
-Prepared branch: `feature/chat-storage-adoption`, tip `f9ec698a11e6d6086be28141134ee2a97898d66b`
-(implementation plus recipe updates).
+Published branch: [`feature/chat-storage-adoption` at `f9ec698a11e6d6086be28141134ee2a97898d66b`](https://github.com/actualrealhuman/omlx/tree/f9ec698a11e6d6086be28141134ee2a97898d66b). The public tip adds documentation-only publication-review notes; the implementation and tested revision above are unchanged.
 
 Return to the [catalog](../FORK_FEATURES.md) or
 [composition guide](../FEATURE_COMPOSITION.md).
 
-The prepared tip includes a documentation-only update dating the source-owned
-publication-review note. The implementation and recorded test revisions above
-are unchanged; verify the remote before treating this source as public.
+The recorded test revisions remain unchanged. Public availability does not
+qualify this source on a different target.

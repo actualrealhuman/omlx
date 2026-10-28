@@ -7,8 +7,16 @@ feature revision, your target revision, the problem, and the checks you ran;
 keep each change focused. See the [feature index](FORK_FEATURES.md) and
 [integration guide](INTEGRATING_FEATURES.md). Review and support are best effort;
 this source-sharing fork does not provide binaries, promise releases, or assume
-product maintenance obligations. The feature index distinguishes prepared
-candidates from published sources and reports their validation status.
+product maintenance obligations. The feature index links the public source
+boundaries and reports their validation status.
+
+For a feature-code contribution, work in its focused `feature/...` branch or
+declared dependency stack and keep the implementation, relevant tests and
+affected recipe together. For landing-page, catalog, agent-guide or other
+documentation-only changes, target `personal/source-guide`; target the
+applicable feature branch for a feature-code pull request rather than accepting
+the repository default automatically. Update source links and qualification
+wording without implying that documentation publishes or qualifies code.
 
 The remaining guidance describes contributions to
 [upstream oMLX](https://github.com/jundot/omlx). Its maintainer policies, CI,

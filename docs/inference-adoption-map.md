@@ -6,14 +6,17 @@ qualified. It is an adoption guide for source, not a build or release recipe.
 
 ## Fixed snapshots
 
-The combined inference-controls source is `bd850747e6336ee59e6fc9242a865eda5257d061`,
-based on `73322ed188a25b9ce2e490d3137d810f7d50128d`. It contains global and
+The current published adoption snapshot is
+[`d861a301e2630db33e41cfb95087e09adae6f43e`](https://github.com/actualrealhuman/omlx/tree/d861a301e2630db33e41cfb95087e09adae6f43e).
+It adds a CSS-only model-chooser layout follow-up to the runtime bundle. The
+runtime-tested base is `bd850747e6336ee59e6fc9242a865eda5257d061`, based on
+`73322ed188a25b9ce2e490d3137d810f7d50128d`. It contains global and
 per-model throttling, hierarchical allowances, serial model turns, the master
 bypass, battery reserve protection, and the web controls. Treat this combined
 diff as the adoption unit unless you are doing the component extraction and
 qualification work described below.
 
-Historical validation at this exact source revision was recorded on
+Historical validation at runtime-tested base `bd850747` was recorded on
 2026-10-20. The default suite had five numerical failures that also reproduced
 on the exact `73322ed1` upstream baseline. A bounded two-model functional check
 was recorded. This history does not establish broad model/hardware coverage,

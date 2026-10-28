@@ -42,8 +42,8 @@ failed-save behavior, bypass/re-enable, migration backups and failures, profile
 independence, and browser model selection/hide state. These tests are references
 for qualification; they do not qualify a standalone allowance patch.
 
-The [combined bundle recipe](inference-controls.md#prepared-model-chooser-layout-follow-up)
-also records an unpublished layout-only follow-up for narrow model choosers.
+The [combined bundle recipe](inference-controls.md#published-model-chooser-layout-follow-up)
+also records the published layout-only follow-up for narrow model choosers.
 It does not change panel selection or allowance enforcement.
 
 Return to the [catalog](../FORK_FEATURES.md) or [composition guide](../FEATURE_COMPOSITION.md).

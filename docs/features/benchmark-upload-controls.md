@@ -27,13 +27,13 @@ limits still apply.
 
 ## Source and adoption boundary
 
-- Availability: local focused adoption branch; public availability of these
-  implementation commits has not been verified.
+- Availability: published on [`feature/benchmark-controls-adoption` at `0fe9fed12e2f9e5d3b4edde636167a2e73721b17`](https://github.com/actualrealhuman/omlx/tree/0fe9fed12e2f9e5d3b4edde636167a2e73721b17). The implementation and test revisions are identified separately below.
 - Source: `feature/benchmark-controls-adoption`, adoption commits
   `5b6f5616ed5b98d1d50818708d8cf503a7aec82e`,
   `854fd6cfc6ba359b51cf142643841e4c19244a73`, followed by
   `a6d8fc6e42f594aeb0aa9c0f1ef3410ff54ce641` and test correction
-  `c9241b218cb929252836306cb9aaa7e9bacb5442` (latest source revision).
+  [`c9241b218cb929252836306cb9aaa7e9bacb5442`](https://github.com/actualrealhuman/omlx/tree/c9241b218cb929252836306cb9aaa7e9bacb5442)
+  (latest implementation/test revision).
 - Baseline: `bd1e9b112474862ebed550a9c83b4316038a1d74` (the pinned stable
   `v0.7.1` release). This is a focused port of the controls and upload gates
   present in canonical `personal/main` at
@@ -103,12 +103,10 @@ candidate, but no native or end-to-end upload qualification is claimed. Record
 those remaining checks at the exact target revision before calling the feature
 independently adoptable.
 
-Prepared branch: `feature/benchmark-controls-adoption`, tip `0fe9fed12e2f9e5d3b4edde636167a2e73721b17`
-(implementation plus recipe updates).
+Published branch: [`feature/benchmark-controls-adoption` at `0fe9fed12e2f9e5d3b4edde636167a2e73721b17`](https://github.com/actualrealhuman/omlx/tree/0fe9fed12e2f9e5d3b4edde636167a2e73721b17). Later branch commits update documentation only; implementation and recorded test revisions above are unchanged.
 
 Return to the [catalog](../FORK_FEATURES.md) or
 [composition guide](../FEATURE_COMPOSITION.md).
 
-The prepared tip includes a documentation-only update dating the source-owned
-publication-review note. The implementation and recorded test revisions above
-are unchanged; verify the remote before treating this source as public.
+The recorded test revisions remain unchanged. Public availability does not
+qualify this source on a different target.

@@ -20,10 +20,8 @@ diffusion batching.
 
 ## Source and adoption boundary
 
-- Availability: local focused branch; this implementation tip was not publicly
-  available from the verified fork as of 2026-10-21.
-- Source: `feature/per-model-concurrency`, commit
-  `f519ae699db4d903f8828b0db4dcdbcbed653a01`.
+- Availability: published on [`feature/per-model-concurrency` at `40742bf7462a8b08c19e87da7bd4b73d62a4e58b`](https://github.com/actualrealhuman/omlx/tree/40742bf7462a8b08c19e87da7bd4b73d62a4e58b). A 2026-10-21 availability check had found it unpublished.
+- Source: implementation commit [`f519ae699db4d903f8828b0db4dcdbcbed653a01`](https://github.com/actualrealhuman/omlx/tree/f519ae699db4d903f8828b0db4dcdbcbed653a01) on `feature/per-model-concurrency`; the published tip adds recipe documentation.
 - Source baseline: `d6b2b92b11ebcbf4a4c1f002b0d590a3117212a8`, the exact parent
   of the one-commit implementation. The patch has no unrelated feature commits.
 - Suggested target: `bd1e9b112474862ebed550a9c83b4316038a1d74` (pinned stable

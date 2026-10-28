@@ -28,7 +28,7 @@ alternative implementations and shared-file overlap for common selections.
 
 | Recipe availability | How to proceed |
 | --- | --- |
-| Topic | Inspect its fixed baseline-to-source diff. Apply or port the complete focused behavior and relevant tests. A focused commit may live in combined public history without a topic branch. |
+| Topic | Use the recipe's exact public source revision. Inspect its fixed baseline-to-source diff; apply or port the complete focused behavior and relevant tests. A focused commit may live in combined public history without a separate topic branch. |
 | Prepared topic (local) | A complete local source boundary is prepared. Read the recipe's qualification state; external adoption must wait until the exact source is publicly available. |
 | Extraction | Use the identified modules and hooks in the combined snapshot. Extract selected behavior; do not merge the full personal build. |
 | Bundle component | Inspect shared prerequisites before extracting. The whole inference bundle is available, but do not silently add it when only one component was requested. Explain the scope choice if extraction needs substantial new work. |
@@ -45,7 +45,7 @@ ports of overlapping behavior, not two features to stack mechanically.
 The old patched dark theme is also an alternative historical implementation,
 not a prerequisite for custom CSS overrides. The stylesheet feature restores
 the application theme and supplies True Black as an optional preset. Check its
-recipe for publication status before attempting adoption.
+recipe for the exact source and target qualification before adoption.
 
 ## Preserve the feature's contract
 

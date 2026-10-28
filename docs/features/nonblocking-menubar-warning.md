@@ -19,10 +19,8 @@ status item, button, or window is treated as hidden.
 
 ## Source and adoption boundary
 
-- Availability: local focused branch; this implementation tip was not publicly
-  available from the verified fork as of 2026-10-21.
-- Source: `feature/nonblocking-menubar-warning`, commit
-  `546ac1cf29b6ce8474c5c413e5d9214cad2f4e88`.
+- Availability: published on [`feature/nonblocking-menubar-warning` at `925cb01bd3a8b2b9d7fa06290dba4bf15210c9bb`](https://github.com/actualrealhuman/omlx/tree/925cb01bd3a8b2b9d7fa06290dba4bf15210c9bb). A 2026-10-21 availability check had found it unpublished.
+- Source: implementation commit [`546ac1cf29b6ce8474c5c413e5d9214cad2f4e88`](https://github.com/actualrealhuman/omlx/tree/546ac1cf29b6ce8474c5c413e5d9214cad2f4e88) on `feature/nonblocking-menubar-warning`; the published tip adds recipe documentation.
 - Source baseline: `328edc756010693e61f8bd4e47f00996e0758176`, the exact parent
   of the one-commit implementation. The patch is focused and has no unrelated
   feature commits.

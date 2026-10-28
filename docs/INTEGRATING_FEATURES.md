@@ -61,18 +61,20 @@ and extract only the relevant changes. Merging `personal/main` brings unrelated
 additions with it. A feature manifest records build identity; changing feature
 labels does not select code.
 
-The combined inference-controls source snapshot is fixed at
-[`bd850747`](https://github.com/actualrealhuman/omlx/tree/bd850747e6336ee59e6fc9242a865eda5257d061),
-based on upstream `73322ed1`. Its [user guide](https://github.com/actualrealhuman/omlx/blob/bd850747e6336ee59e6fc9242a865eda5257d061/docs/inference-controls.md)
-describes behavior; its [testing notes](https://github.com/actualrealhuman/omlx/blob/bd850747e6336ee59e6fc9242a865eda5257d061/docs/TESTING.md#inference-controls)
+The combined inference-controls adoption snapshot is fixed at
+[`d861a301`](https://github.com/actualrealhuman/omlx/tree/d861a301e2630db33e41cfb95087e09adae6f43e),
+based on upstream `73322ed1`. It adds a CSS-only model-chooser layout follow-up
+to the runtime bundle. The [user guide](https://github.com/actualrealhuman/omlx/blob/d861a301e2630db33e41cfb95087e09adae6f43e/docs/inference-controls.md)
+describes the current layout. Historical runtime validation applies to the
+[`bd850747` bundle base](https://github.com/actualrealhuman/omlx/tree/bd850747e6336ee59e6fc9242a865eda5257d061); its [testing notes](https://github.com/actualrealhuman/omlx/blob/bd850747e6336ee59e6fc9242a865eda5257d061/docs/TESTING.md#inference-controls)
 identify checks performed on 2026-10-20. See the [feature index](FORK_FEATURES.md)
-for exact counts and scope: its default-suite run includes five failures that
-match the pristine upstream baseline, while its bounded two-model check passed
-functionally, including overlapping interactive/background requests under the
-coordinator. These results do not establish a performance or energy gain,
-broader model/hardware coverage, or PR readiness. Do not substitute a moving
-branch tip for this revision. The older Inference Throttle topic branch remains
-distinct and is not superseded by this source snapshot.
+for exact counts and scope: the base default-suite run includes five failures
+that match the pristine upstream baseline, while its bounded two-model check
+passed functionally, including overlapping interactive/background requests
+under the coordinator. These historical results do not establish a performance
+or energy gain, broader model/hardware coverage, or PR readiness; they do not
+requalify the CSS follow-up on another target. The older Inference Throttle
+topic branch remains distinct and is not superseded by this bundle.
 
 Resolve dependencies explicitly. Chat persistence changes share browser state
 and transaction rules; battery control and throttle code share inference

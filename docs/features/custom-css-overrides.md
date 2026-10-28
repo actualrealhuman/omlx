@@ -1,6 +1,6 @@
 # Custom CSS overrides
 
-Feature ID: `custom-css-overrides` · Availability: **Unpublished (focused local source)**
+Feature ID: `custom-css-overrides` · Availability: **Published focused source**
 
 ## Behavior and use
 
@@ -21,12 +21,10 @@ Default remains sticky.
 
 ## Source and adoption boundary
 
-- Availability: focused topic branch; public branch publication is pending.
+- Availability: published on [`feature/custom-css-overrides` at `1ca6d7a5efb0de7403c71806ce81ee6e994cf0e0`](https://github.com/actualrealhuman/omlx/tree/1ca6d7a5efb0de7403c71806ce81ee6e994cf0e0).
 - Source branch: `feature/custom-css-overrides`.
-- Prepared branch tip: `1ca6d7a5efb0de7403c71806ce81ee6e994cf0e0`;
-  this adds recipe documentation after the implementation boundary below.
-- Feature source boundary: `abf991f4938f0c772775f312bd4340a25c2f580c`
-  (the complete branch history through that commit).
+- Published branch tip: [`1ca6d7a5efb0de7403c71806ce81ee6e994cf0e0`](https://github.com/actualrealhuman/omlx/tree/1ca6d7a5efb0de7403c71806ce81ee6e994cf0e0); it adds recipe documentation after the implementation boundary below.
+- Feature source boundary: [`abf991f4938f0c772775f312bd4340a25c2f580c`](https://github.com/actualrealhuman/omlx/tree/abf991f4938f0c772775f312bd4340a25c2f580c) (the complete branch history through that commit).
 - Baseline: oMLX v0.7.1, commit
   `bd1e9b112474862ebed550a9c83b4316038a1d74`.
 - Required changes: the complete branch through its recorded feature tip,
@@ -42,10 +40,10 @@ web package.
 
 Read the [usage guide](../custom-css.md). This entry replaces the older
 [built-in dark-theme patch](high-contrast-dark-theme.md) in the current catalog.
-The prepared branch was not available through the public fork when checked on
-2026-10-22 UTC. The revisions above identify prepared source, not a working
-public download link. An external adopter must wait for verified publication;
-do not substitute the older theme implementation for this feature.
+The branch was not available through the public fork when checked on 2026-10-22
+UTC; it is now publicly available at the exact tip above. Do not substitute the
+older theme implementation for this feature. Public availability does not
+qualify its composition with another downstream feature.
 
 ## Validation
 
@@ -82,8 +80,8 @@ Integration qualification on 2026-10-21 at `personal/main` revision
 
 Documentation review covered this recipe, `docs/custom-css.md`,
 `docs/web-ui-design.md`, `PERSONAL_BUILD.md`, the build manifest, and the agent
-and feature-development guidance. Public source/recipe publication remains
-pending and requires separate authorization.
+and feature-development guidance. The source and recipe are now public at the
+branch tip above; publication does not add target or composition qualification.
 
 For a manual browser check, verify App Default in light and dark modes, select
 True Black and reload dashboard/chat/login, add and disable a visible custom rule,
@@ -105,12 +103,11 @@ disturbed.
   custom `!important` rules.
 - The True Black preset is isolated to one file but may need targeted selector
   maintenance when upstream markup changes.
-- Public branch publication and qualification after composition with other
-  downstream features remain separate actions.
+- Qualification after composition with other downstream features remains
+  separate from public source availability.
 
 Return to the [feature catalog](../FORK_FEATURES.md) or the
 [agent starting point](../AGENT_START.md).
 
-The prepared tip includes a documentation-only update dating the source-owned
-publication-review note. The implementation and recorded test revisions above
-are unchanged; verify the remote before treating this source as public.
+The published tip includes documentation-only updates after the implementation
+boundary; the test revisions above remain tied to the stated source revision.

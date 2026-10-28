@@ -1,11 +1,11 @@
 # Request-scoped cache retention
 
 - **Feature ID:** `request-cache-policy`
-- **Status:** Prepared source; target qualification is pending.
+- **Status:** Public source; target qualification is pending.
 - **Baseline:** oMLX `v0.7.1`, commit `bd1e9b112474862ebed550a9c83b4316038a1d74`.
-- **Implementation source:** commit `e3453b4bc6cfaec1f644b92be5cc81d900c2fc40`.
+- **Implementation source:** commit [`e3453b4bc6cfaec1f644b92be5cc81d900c2fc40`](https://github.com/actualrealhuman/omlx/tree/e3453b4bc6cfaec1f644b92be5cc81d900c2fc40).
 - **Dependencies:** None beyond the stated baseline and its normal runtime dependencies.
-- **Public availability:** This source snapshot is local until its branch is separately published.
+- **Public availability:** Published on [`feature/cache-policy-adoption` at `455d1fcdec98e775f5be4007770dd963e3e0a084`](https://github.com/actualrealhuman/omlx/tree/455d1fcdec98e775f5be4007770dd963e3e0a084). This publication does not extend the recorded test revision or qualify a different target.
 
 ## Behavior
 
@@ -96,7 +96,7 @@ families before describing the feature as qualified.
 
 ### Focused local validation
 
-At source revision `1290c82fca51eaacebaccfd37dfa896a27fc94a2`, the full focused
+At source revision [`1290c82fca51eaacebaccfd37dfa896a27fc94a2`](https://github.com/actualrealhuman/omlx/tree/1290c82fca51eaacebaccfd37dfa896a27fc94a2), the full focused
 and listed fallback/helper suites passed with pytest's default exclusions for
 `slow` and `integration` tests. The local test environment used Python 3.11,
 pytest 9.1.1, mlx-lm `0.31.4.dev132+g94cdcae13` (matching the pinned commit),
@@ -113,12 +113,10 @@ cover the declared synthetic/local test suites; they do not establish real
 model behavior, packaged-build behavior, or performance. Re-run on the exact
 pinned dependency set before removing the patch-version qualification note.
 
-Prepared branch: `feature/cache-policy-adoption`, tip `455d1fcdec98e775f5be4007770dd963e3e0a084`
-(implementation plus recipe updates).
+Published branch: [`feature/cache-policy-adoption` at `455d1fcdec98e775f5be4007770dd963e3e0a084`](https://github.com/actualrealhuman/omlx/tree/455d1fcdec98e775f5be4007770dd963e3e0a084). Later branch commits update documentation only; the implementation and recorded test revisions above are unchanged.
 
 Return to the [catalog](../FORK_FEATURES.md) or
 [composition guide](../FEATURE_COMPOSITION.md).
 
-The prepared tip includes a documentation-only update dating the source-owned
-publication-review note. The implementation and recorded test revisions above
-are unchanged; verify the remote before treating this source as public.
+The recorded test revisions remain unchanged. Public availability does not
+qualify this source on a different target.

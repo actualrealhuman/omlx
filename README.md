@@ -40,30 +40,30 @@ navigation; the linked recipes define each implementation's actual scope.
 
 | Requested improvement | Start here |
 | --- | --- |
-| Live inference limits, battery protection, model turns and relative allowances | [Inference controls bundle](docs/features/inference-controls.md) or [standalone throttle](docs/features/inference-pacing.md) |
+| Live inference limits, battery protection, model turns and relative allowances | [Inference controls bundle](docs/features/inference-controls.md) ([adoption snapshot `d861a30`](https://github.com/actualrealhuman/omlx/tree/d861a301e2630db33e41cfb95087e09adae6f43e)) or [standalone throttle](docs/features/inference-pacing.md) |
 | Understand persisted cache content | [Cache inspection](docs/features/cache-inspection.md) |
-| Choose per-request KV and image retention | [Request cache policy](docs/features/request-cache-policy.md) (source publication pending) |
-| Set concurrent generation limits for each model | [Per-model concurrency](docs/features/per-model-concurrency.md) (source publication pending) |
-| Preserve chat history and media | [History safety](docs/features/chat-history-safety.md) and [IndexedDB storage](docs/features/chat-storage-indexeddb.md) |
-| Supply your own stylesheets or select an optional True Black preset | [Custom CSS recipe](docs/features/custom-css-overrides.md) (source publication pending) |
+| Choose per-request KV and image retention | [Request cache policy](docs/features/request-cache-policy.md) ([public source `455d1fc`](https://github.com/actualrealhuman/omlx/tree/455d1fcdec98e775f5be4007770dd963e3e0a084)) |
+| Set concurrent generation limits for each model | [Per-model concurrency](docs/features/per-model-concurrency.md) ([public source `40742bf`](https://github.com/actualrealhuman/omlx/tree/40742bf7462a8b08c19e87da7bd4b73d62a4e58b)) |
+| Preserve chat history and media | [History safety](docs/features/chat-history-safety.md) and [IndexedDB storage](docs/features/chat-storage-indexeddb.md) ([public source `f9ec698`](https://github.com/actualrealhuman/omlx/tree/f9ec698a11e6d6086be28141134ee2a97898d66b)) |
+| Supply your own stylesheets or select an optional True Black preset | [Custom CSS recipe](docs/features/custom-css-overrides.md) ([public source `1ca6d7a`](https://github.com/actualrealhuman/omlx/tree/1ca6d7a5efb0de7403c71806ce81ee6e994cf0e0)) |
 | Improve inline editing and live context visibility | [Feature catalog](docs/FORK_FEATURES.md#feature-recipes) |
-| Control benchmark uploads and improve native lifecycle handling | [Feature catalog](docs/FORK_FEATURES.md#feature-recipes) |
+| Control benchmark uploads and improve native lifecycle handling | [Feature catalog](docs/FORK_FEATURES.md#feature-recipes) ([benchmark source `0fe9fed`](https://github.com/actualrealhuman/omlx/tree/0fe9fed12e2f9e5d3b4edde636167a2e73721b17); [menu-bar source `925cb01`](https://github.com/actualrealhuman/omlx/tree/925cb01bd3a8b2b9d7fa06290dba4bf15210c9bb)) |
 
 **[Agent starting point](docs/AGENT_START.md)** ·
 [All feature recipes and source availability](docs/FORK_FEATURES.md) ·
 [Integration procedure](docs/INTEGRATING_FEATURES.md)
 
-Some additions have focused source branches; others need extraction from a
-combined snapshot, and some catalog entries have no public implementation
-snapshot yet. The catalog labels these differences. Cloning this documentation
+Some additions have focused source branches; others are available only inside a
+combined snapshot or historical variant and need extraction for a different
+boundary. The catalog labels these differences. Cloning this documentation
 branch does not enable the additions. Upstream installers install upstream oMLX.
 
-Focused stable-source ports for chat storage, benchmark upload controls and
-request cache retention are prepared locally, with passing focused tests.
-See [validation and remaining checks](docs/FORK_FEATURES.md#prepared-source-validation)
-and each recipe before selecting them. They become externally retrievable after
-verified publication. Use the [composition guide](docs/FEATURE_COMPOSITION.md)
-when selecting several features together.
+Public stable-source ports for chat storage, benchmark upload controls and
+request cache retention have recorded focused tests. See [historical validation
+and remaining checks](docs/FORK_FEATURES.md#recorded-local-validation) and each
+recipe before selecting them. Public availability does not qualify a port on a
+different target. Use the [composition guide](docs/FEATURE_COMPOSITION.md) when
+selecting several features together.
 
 Give your agent a request such as:
 

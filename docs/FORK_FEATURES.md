@@ -14,26 +14,26 @@ addition.
 
 | Addition | ID | Source boundary |
 | --- | --- | --- |
-| [Choose whether benchmark results are uploaded](features/benchmark-upload-controls.md) | `benchmark-upload-controls` | Prepared topic (local) |
+| [Choose whether benchmark results are uploaded](features/benchmark-upload-controls.md) | `benchmark-upload-controls` | Topic |
 | [Inspect persisted cache content](features/cache-inspection.md) | `cache-inspection` | Topic |
 | [Battery and power telemetry, with historical governor source](features/battery-power.md) | `battery-power` | Historical variant |
 | [Live Inference Throttle](features/inference-pacing.md) | `inference-pacing` | Topic |
 | [Configurable battery reserve protection](features/battery-protection.md) | `battery-protection` | Bundle component |
 | [See context usage while requests run](features/live-context.md) | `live-context` | Topic |
-| [Per-model generation concurrency limits](features/per-model-concurrency.md) | `per-model-concurrency` | Prepared topic (local) |
+| [Per-model generation concurrency limits](features/per-model-concurrency.md) | `per-model-concurrency` | Topic |
 | [Preserve chat history when saving fails](features/chat-history-safety.md) | `chat-history-safety` | Topic |
-| [IndexedDB chat records and media preservation](features/chat-storage-indexeddb.md) | `chat-storage-indexeddb` | Prepared topic (local) |
+| [IndexedDB chat records and media preservation](features/chat-storage-indexeddb.md) | `chat-storage-indexeddb` | Topic |
 | [Autosizing inline message editor](features/chat-edit-autosize.md) | `chat-edit-autosize` | Topic |
 | [Require explicit cancellation of message edits](features/safe-edit-cancel.md) | `safe-edit-cancel` | Topic |
-| [User-supplied stylesheets and optional True Black preset](features/custom-css-overrides.md) | `custom-css-overrides` | Prepared topic (local) |
+| [User-supplied stylesheets and optional True Black preset](features/custom-css-overrides.md) | `custom-css-overrides` | Topic |
 | [Let the native supervisor own web-requested restarts](features/supervisor-owned-restarts.md) | `supervisor-owned-restarts` | Topic |
 | [Local activation and restart verification helpers](features/reliable-local-activation.md) | `reliable-local-activation` | Topic |
 | [Coordinated model execution turns](features/inference-scheduling.md) | `inference-scheduling` | Bundle component |
-| [Recover a hidden menu-bar icon without blocking startup](features/nonblocking-menubar-warning.md) | `nonblocking-menubar-warning` | Prepared topic (local) |
+| [Recover a hidden menu-bar icon without blocking startup](features/nonblocking-menubar-warning.md) | `nonblocking-menubar-warning` | Topic |
 | [Hierarchical allowances and interactive control panel](features/inference-allowances.md) | `inference-allowances` | Bundle component |
-| [Choose reusable KV and image retention per request](features/request-cache-policy.md) | `request-cache-policy` | Prepared topic (local) |
+| [Choose reusable KV and image retention per request](features/request-cache-policy.md) | `request-cache-policy` | Topic |
 
-**Topic** means a focused branch or commit exists at the linked revision.
+**Topic** means a public focused branch or commit exists at the linked revision.
 **Prepared topic (local)** means a focused local source branch and recipe are
 prepared, but public publication is pending. Qualification status is separate
 and stated in each recipe; prepared source is not automatically ready to ship.
@@ -52,17 +52,17 @@ v0.7.1 provides partial-output preservation, so check your target first.
 
 The [old dark-theme patch](features/high-contrast-dark-theme.md) is historical.
 It has been replaced by the [stylesheet feature](features/custom-css-overrides.md),
-whose focused source is prepared but not yet public. Its
+whose focused source is public at the exact revision linked in its recipe. Its
 [usage guide](custom-css.md) describes the editor, presets and recovery path.
 
-New local [storage](features/chat-storage-indexeddb.md),
+Published [storage](features/chat-storage-indexeddb.md),
 [benchmark controls](features/benchmark-upload-controls.md) and
 [request retention](features/request-cache-policy.md) source units are based on
 stable v0.7.1. The storage port includes the deletion/write-order fixes missing
 from the older public snapshot. Their focused local validation is recorded
 below; browser, native, real-model and wider target checks remain feature-specific
-limitations. Public source publication is pending. The older combined-build
-provenance below is historical.
+limitations. Public availability does not expand those test results. The older
+combined-build provenance below is historical.
 
 For the coupled inference components, the [source map](inference-adoption-map.md)
 names the actual runtime/configuration boundaries and extraction order. It
@@ -73,14 +73,14 @@ the inference bundle. It is not an attribution claim for every branch or
 upstream subsystem in this fork. Native custom kernels are upstream build
 components, not a new downstream feature supplied by these recipes.
 
-## Prepared source validation
+## Recorded local validation
 
-Local checks on 2026-10-22 ran on the prepared stable-baseline ports, with
+Local checks on 2026-10-22 ran on stable-baseline ports, with
 synthetic inputs or mocked transports. The recipe records
 the commands and full source revision; these results do not transfer to a later
 port or a combined custom build.
 
-| Prepared source | Tested revision | Focused results | Remaining qualification |
+| Source unit | Tested revision | Focused results | Remaining qualification |
 | --- | --- | --- | --- |
 | [Chat storage](features/chat-storage-indexeddb.md) | `8afa2b68b30c10037469ec501360baf5cf971349` | 166 Node tests and 19 Python UI tests passed | Disposable-origin migration, real browsers and packaged-app behavior |
 | [Benchmark upload controls](features/benchmark-upload-controls.md) | `c9241b218cb929252836306cb9aaa7e9bacb5442` | 629 Python tests passed | Native controls, full client/server behavior, live uploads and localization |
@@ -89,28 +89,30 @@ port or a combined custom build.
 The cache runner used MLX 0.32.3 while the checkout pins 0.32.4. Its default
 `slow` and `integration` exclusions were active. No live benchmark submission,
 model loading, app build, installation or launch was part of these checks.
-Public availability remains separate from validation: the prepared branches
-must be published before an external agent can retrieve these implementations.
+The exact source branches are now public and linked from their recipes.
+Publication does not extend these tested revisions or qualify a different target.
 
 ## Source evidence
 
-Public source snapshots below were readable on GitHub on 2026-10-21. Baselines
-and linked file paths were inspected against those exact local Git objects.
-This is source/navigation verification, not new runtime qualification. A baseline
+The older source snapshots below were read on GitHub on 2026-10-21. The seven
+branches published on 2026-10-28 are linked at immutable revisions in their
+recipes. Baselines and linked file paths were inspected against the exact Git
+objects. This is source/navigation verification, not new runtime qualification. A baseline
 is the common upstream ancestor used to inspect a topic diff; a version declared
 there need not identify a stable release tag. Use recipes to select a boundary;
 the tables below preserve source provenance and historical validation details.
 
 ## Combined inference controls
 
-A prepared, unpublished model-chooser layout correction is described in the
-[bundle recipe](features/inference-controls.md#prepared-model-chooser-layout-follow-up).
-Its production-styled fixture was inspected in headless Chrome; publication is
-pending. The published snapshot and historical validation below remain unchanged.
+The published [model-chooser layout follow-up](features/inference-controls.md#published-model-chooser-layout-follow-up)
+is fixed at `d861a301e2630db33e41cfb95087e09adae6f43e`; its production-styled
+fixture was inspected in headless Chrome. Historical bundle validation below
+remains tied to the `bd850747` runtime-tested base; no new runtime suite is
+claimed for the CSS-only follow-up.
 
 | Addition | Source snapshot | Baseline | Scope and integration notes |
 | --- | --- | --- | --- |
-| Combined inference controls | [feature/inference-controls][inference-controls-branch], source snapshot [bd850747][inference-controls-candidate] | Upstream development snapshot [73322ed1][base-inference-controls] | Combines Inference Throttle, battery protection, model-turn scheduling, hierarchical global/class/model allowances, the persisted master bypass, and accepted dashboard chart and model selection. Read its [user guide][inference-controls-guide] and [validation notes][inference-controls-tests]. The separate [Inference Throttle source][throttle] remains available and is not superseded. |
+| Combined inference controls | [feature/inference-controls at fixed `d861a301`][inference-controls-followup]; runtime-tested base [bd850747][inference-controls-candidate] | Upstream development snapshot [73322ed1][base-inference-controls] | Combines Inference Throttle, battery protection, model-turn scheduling, hierarchical global/class/model allowances, the persisted master bypass, and accepted dashboard chart and model selection. The adoption snapshot adds only the model-chooser CSS and user-guide follow-up; historical runtime validation applies to the `bd850747` base. Read the [current user guide][inference-controls-guide] and [historical validation notes][inference-controls-tests]. The separate [Inference Throttle source][throttle] remains available and is not superseded. |
 
 The combined scheduler is cooperative and covers supported local batched text
 and VLM work. Percentages are configured relative allowances, not observed
@@ -193,9 +195,9 @@ someone else's checkout. See the [source-sharing scope](decisions/fork-source-sh
 [base-throttle]: https://github.com/actualrealhuman/omlx/commit/25aebb3ee0bb052a264241953bef6820f102dd0b
 [throttle-scope]: https://github.com/actualrealhuman/omlx/blob/ee978a1c466323aa366f82bb831e99fe423583ea/docs/decisions/inference-throttle.md
 [throttle-tests]: https://github.com/actualrealhuman/omlx/blob/ee978a1c466323aa366f82bb831e99fe423583ea/docs/TESTING.md
-[inference-controls-branch]: https://github.com/actualrealhuman/omlx/tree/feature/inference-controls
+[inference-controls-followup]: https://github.com/actualrealhuman/omlx/tree/d861a301e2630db33e41cfb95087e09adae6f43e
 [inference-controls-candidate]: https://github.com/actualrealhuman/omlx/tree/bd850747e6336ee59e6fc9242a865eda5257d061
-[inference-controls-guide]: https://github.com/actualrealhuman/omlx/blob/bd850747e6336ee59e6fc9242a865eda5257d061/docs/inference-controls.md
+[inference-controls-guide]: https://github.com/actualrealhuman/omlx/blob/d861a301e2630db33e41cfb95087e09adae6f43e/docs/inference-controls.md
 [inference-controls-tests]: https://github.com/actualrealhuman/omlx/blob/bd850747e6336ee59e6fc9242a865eda5257d061/docs/TESTING.md#inference-controls
 [base-inference-controls]: https://github.com/actualrealhuman/omlx/commit/73322ed188a25b9ce2e490d3137d810f7d50128d
 [battery-branch]: https://github.com/actualrealhuman/omlx/tree/feature/battery-power-management

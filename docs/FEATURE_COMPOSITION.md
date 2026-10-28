@@ -41,10 +41,9 @@ a runtime dependency. Preserve only the requested changes when resolving it.
 5. Build the selected checkout. A manifest's feature labels describe inclusion;
    editing those labels does not compose or remove code.
 
-The catalog separates source availability from target qualification. A focused
-local branch may be ready for review while still unavailable to an external
-adopter. An older public source can be inspectable without being qualified on a
-new target. Keep those distinctions in the result reported to the user.
+The catalog separates source availability from target qualification. A public
+source can be inspectable without being qualified on a new target. Keep both
+facts in the result reported to the user.
 
 If a requested subfeature still shares unseparated runtime interfaces, use its
 component map to plan a bounded port and qualify it. Do not silently import

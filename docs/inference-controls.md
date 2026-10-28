@@ -11,7 +11,7 @@ submitted to the device is allowed to finish.
 
 ## Start with the defaults
 
-Run this branch using the normal [source setup](https://github.com/actualrealhuman/omlx/blob/bd850747e6336ee59e6fc9242a865eda5257d061/README.md#from-source).
+Run this branch using the normal [source setup](https://github.com/actualrealhuman/omlx/blob/d861a301e2630db33e41cfb95087e09adae6f43e/README.md#from-source).
 The web dashboard is available at `/admin`. Add the **Inference Throttle**
 widget from the dashboard layout tray if your saved layout does not include it.
 
@@ -59,6 +59,9 @@ select it in **Choose models**. Observed models remain listed after unloading.
 The searchable checklist includes installed models so you can configure one
 before loading it. Favorites and custom scheduling settings do not add a model
 to the panel by themselves.
+
+Each checklist entry shows the model name above its status, beside a checkbox.
+Both text lines wrap as needed so names remain readable in narrow widgets.
 
 Use **Hide from panel** to remove an entry. Hiding wins over automatic inclusion,
 even if the model remains loaded. Panel membership is saved per browser; it
