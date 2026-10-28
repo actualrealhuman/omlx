@@ -21,7 +21,9 @@ Default remains sticky.
 
 ## Source and adoption boundary
 
-- Availability: focused topic branch; public branch publication is pending.
+- Availability at the 2026-10-28 publication review: local and unpublished.
+  Verify the receiving remote contains the recorded source commit before adoption;
+  later publication does not establish additional qualification.
 - Source branch: `feature/custom-css-overrides`.
 - Feature source boundary: `abf991f4938f0c772775f312bd4340a25c2f580c`
   (the complete branch history through that commit).
@@ -80,5 +82,5 @@ disturbed.
   custom `!important` rules.
 - The True Black preset is isolated to one file but may need targeted selector
   maintenance when upstream markup changes.
-- Public branch publication and qualification after composition with other
-  downstream features remain separate actions.
+- Verify public availability separately from qualification after composition
+  with other downstream features.
