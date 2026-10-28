@@ -1,32 +1,44 @@
-# oMLX additions
+# actualrealhuman's oMLX additions
 
 <!-- Human-written introduction reserved for the repository owner.
      Do not generate or paraphrase that introduction. -->
-Hi! I'm **actualrealhuman** and this is my additions-fork of [oMLX](https://github.com/jundot/omlx)! Here are the features I've added:
+Hi! I'm **actualrealhuman** and this is my additions-fork of [oMLX](https://github.com/jundot/omlx)!
 
-**Inference Throttle** (Gas Pedal)
+Here are the features I've added:
+
+
+**Inference Throttle** (Gas Pedal)\
 Reduce energy consumption, heat, fan noise, and prevent battery drain! Specify limits on a per-model or per-type basis: set your immediate/interactive models to 100% for the fastest responses; set non-interactive models to something lower (like 50%) to put agentic work and background jobs on the back burner. You can use *any percentages you like* and changes happen in **real time!!** Work using too much heat? Drag the slider and watch the heat, noise, and power use go down!
 
-**Battery Preservation and Reserve**
+
+**Battery Preservation and Reserve**\
 Slows down and even halts inference if your battery level drops! If you're running jobs overnight on your MacBook, this can save you from waking up in the morning to a battery with only 8% remaining!
 
-**One Model At A Time**
+**One Model At A Time**\
 Decoding two or more models at once means that using more than one model often crashes throughput--now it doesn't have to! Requests to different models can take turns, so that you're maximizing throughput per-model! Instead of two or more models fighting for memory bandwidth, give your whole memory bandwidth to one model at a time and watch them fly!
 
-**Per-Model Max Streams**
+**Per-Model Max Streams**\
 Some models, like Qwen3.8-27B can decode up to eight streams efficiently, but others like Qwen3.8-Flash-Next are better off with two or one. Before you could only choose a maximum for the entire oMLX server; now each model gets its own limits!
 
-**Custom CSS**
+
+**Custom CSS**\
 So you can use your own stylesheets with ease (and no browser extensions)!
 
-**Better Chat Saving**
+
+**Better Chat Saving**\
 Use IndexedDB to save more than 100 chats, instead of silently deleting your oldest chats! File attachments survive reloading too, so no image placeholders!
 
-**Per-Request Cache Control**
+
+**Per-Request Cache Control**\
 (Requires client support) **Save your SSD** by telling oMLX not to cache a prompt! This can save you 100s of terabytes of SSD write wear!!
 
-**Plain-Text Cache Sidecars**
+
+**Plain-Text Cache Sidecars**\
 Provides text files for cached KV files so you know what's filling up your SSD!
+
+**And more!**\
+Point your agent at this repo and have it tell you all about it!
+
 
 
 
