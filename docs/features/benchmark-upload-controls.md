@@ -103,8 +103,12 @@ candidate, but no native or end-to-end upload qualification is claimed. Record
 those remaining checks at the exact target revision before calling the feature
 independently adoptable.
 
-Prepared branch: `feature/benchmark-controls-adoption`, tip `6d5843f968f14f336ebf7e4cc79dfccf593b7f7e`
+Prepared branch: `feature/benchmark-controls-adoption`, tip `0fe9fed12e2f9e5d3b4edde636167a2e73721b17`
 (implementation plus recipe updates).
 
 Return to the [catalog](../FORK_FEATURES.md) or
 [composition guide](../FEATURE_COMPOSITION.md).
+
+The prepared tip includes a documentation-only update dating the source-owned
+publication-review note. The implementation and recorded test revisions above
+are unchanged; verify the remote before treating this source as public.

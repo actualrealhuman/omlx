@@ -23,7 +23,7 @@ Default remains sticky.
 
 - Availability: focused topic branch; public branch publication is pending.
 - Source branch: `feature/custom-css-overrides`.
-- Prepared branch tip: `8cdf1867dd1131ffead12a753bd1d1010648e8a3`;
+- Prepared branch tip: `1ca6d7a5efb0de7403c71806ce81ee6e994cf0e0`;
   this adds recipe documentation after the implementation boundary below.
 - Feature source boundary: `abf991f4938f0c772775f312bd4340a25c2f580c`
   (the complete branch history through that commit).
@@ -110,3 +110,7 @@ disturbed.
 
 Return to the [feature catalog](../FORK_FEATURES.md) or the
 [agent starting point](../AGENT_START.md).
+
+The prepared tip includes a documentation-only update dating the source-owned
+publication-review note. The implementation and recorded test revisions above
+are unchanged; verify the remote before treating this source as public.

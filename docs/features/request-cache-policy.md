@@ -113,8 +113,12 @@ cover the declared synthetic/local test suites; they do not establish real
 model behavior, packaged-build behavior, or performance. Re-run on the exact
 pinned dependency set before removing the patch-version qualification note.
 
-Prepared branch: `feature/cache-policy-adoption`, tip `d52e99d35fb7b5cc18a22c5387f4afd4b9de515f`
+Prepared branch: `feature/cache-policy-adoption`, tip `455d1fcdec98e775f5be4007770dd963e3e0a084`
 (implementation plus recipe updates).
 
 Return to the [catalog](../FORK_FEATURES.md) or
 [composition guide](../FEATURE_COMPOSITION.md).
+
+The prepared tip includes a documentation-only update dating the source-owned
+publication-review note. The implementation and recorded test revisions above
+are unchanged; verify the remote before treating this source as public.

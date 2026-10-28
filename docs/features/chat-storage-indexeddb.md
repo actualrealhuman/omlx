@@ -81,8 +81,12 @@ history bytes while converting records. Browser quota and eviction policy still
 apply. Independent adoption is not yet fully qualified while disposable-origin
 migration and broader browser checks remain pending.
 
-Prepared branch: `feature/chat-storage-adoption`, tip `da5efb2131043499b521b35d597499aa87902b58`
+Prepared branch: `feature/chat-storage-adoption`, tip `f9ec698a11e6d6086be28141134ee2a97898d66b`
 (implementation plus recipe updates).
 
 Return to the [catalog](../FORK_FEATURES.md) or
 [composition guide](../FEATURE_COMPOSITION.md).
+
+The prepared tip includes a documentation-only update dating the source-owned
+publication-review note. The implementation and recorded test revisions above
+are unchanged; verify the remote before treating this source as public.
