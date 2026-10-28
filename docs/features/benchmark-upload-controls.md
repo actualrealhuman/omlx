@@ -27,8 +27,10 @@ limits still apply.
 
 ## Source and adoption boundary
 
-- Availability: local focused adoption branch; public availability of these
-  implementation commits has not been verified.
+- Availability at the 2026-10-28 publication review: local focused adoption
+  branch; public availability had not been verified. Verify the receiving remote
+  contains the recorded source commits before adoption; later publication does
+  not establish additional qualification.
 - Source: `feature/benchmark-controls-adoption`, adoption commits
   `5b6f5616ed5b98d1d50818708d8cf503a7aec82e`,
   `854fd6cfc6ba359b51cf142643841e4c19244a73`, followed by
