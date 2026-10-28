@@ -5,7 +5,9 @@
 - **Baseline:** oMLX `v0.7.1`, commit `bd1e9b112474862ebed550a9c83b4316038a1d74`.
 - **Implementation source:** commit `e3453b4bc6cfaec1f644b92be5cc81d900c2fc40`.
 - **Dependencies:** None beyond the stated baseline and its normal runtime dependencies.
-- **Public availability:** This source snapshot is local until its branch is separately published.
+- **Availability at the 2026-10-28 publication review:** Local and unpublished.
+  Verify the receiving remote contains the recorded source commit before adoption;
+  later publication does not establish additional qualification.
 
 ## Behavior
 
