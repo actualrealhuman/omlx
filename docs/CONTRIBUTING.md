@@ -33,7 +33,7 @@ git checkout -b fix/describe-the-change
 python -m pip install -e ".[dev]"
 ```
 
-See [Development](../README.md#development) for app builds and [installation instructions](../README.md#from-source) for native kernel requirements.
+See the upstream v0.7.1 [Development](https://github.com/jundot/omlx/blob/bd1e9b112474862ebed550a9c83b4316038a1d74/README.md#development) and [installation instructions](https://github.com/jundot/omlx/blob/bd1e9b112474862ebed550a9c83b4316038a1d74/README.md#from-source) for that release's app builds and native kernel requirements. Use the instructions matching your target release.
 
 ## Keep Changes Focused
 
