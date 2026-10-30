@@ -11,11 +11,20 @@ Here are the features I've added:
 Reduce energy consumption, heat, fan noise, and prevent battery drain! Specify limits on a per-model or per-type basis: set your immediate/interactive models to 100% for the fastest responses; set non-interactive models to something lower (like 50%) to put agentic work and background jobs on the back burner. You can use *any percentages you like* and changes happen in **real time!!** Work using too much heat? Drag the slider and watch the heat, noise, and power use go down!
 
 
+<table>
+<tr><th>Interactive</th><th>Background</th></tr>
+<tr><td valign="top"><a href="docs/images/additions/inference-throttle-interactive.png"><img src="docs/images/additions/inference-throttle-interactive.png" alt="Interactive class and model allowances at 100 percent, with priority controls" width="200"></a></td><td valign="top"><a href="docs/images/additions/inference-throttle-background.png"><img src="docs/images/additions/inference-throttle-background.png" alt="Background class at 80 percent, with model allowances producing 40 and 72 percent limits" width="200"></a></td></tr>
+</table>
+
 **Battery Preservation and Reserve**\
 Slows down and even halts inference if your battery level drops! If you're running jobs overnight on your MacBook, this can save you from waking up in the morning to a battery with only 8% remaining!
 
+<a href="docs/images/additions/battery-protection.png"><img src="docs/images/additions/battery-protection.png" alt="Battery protection settings for limiting, suspension, resumption and minimum generation share" width="360"></a>
+
 **One Model At A Time**\
 Decoding two or more models at once means that using more than one model often crashes throughput--now it doesn't have to! Requests to different models can take turns, so that you're maximizing throughput per-model! Instead of two or more models fighting for memory bandwidth, give your whole memory bandwidth to one model at a time and watch them fly!
+
+<a href="docs/images/additions/inference-throttle-global.png"><img src="docs/images/additions/inference-throttle-global.png" alt="Global inference limit and serial model inference with five-second turns" width="200"></a>
 
 **Per-Model Max Streams**\
 Some models, like Qwen3.8-27B can decode up to eight streams efficiently, but others like Qwen3.8-Flash-Next are better off with two or one. Before you could only choose a maximum for the entire oMLX server; now each model gets its own limits!
@@ -24,6 +33,18 @@ Some models, like Qwen3.8-27B can decode up to eight streams efficiently, but ot
 **Custom CSS**\
 So you can use your own stylesheets with ease (and no browser extensions)!
 
+
+<a href="docs/images/additions/custom-css-settings.png"><img src="docs/images/additions/custom-css-settings.png" alt="Style overrides editor with App Default and True Black presets, custom CSS and import/export controls" width="400"></a>
+
+<details>
+<summary>True Black dashboard screenshots</summary>
+
+<table>
+<tr><th>Dashboard</th><th>Model allowances</th></tr>
+<tr><td valign="top"><a href="docs/images/additions/true-black-dashboard.png"><img src="docs/images/additions/true-black-dashboard.png" alt="True Black dashboard with battery status, server controls and the global inference limit" width="200"></a></td><td valign="top"><a href="docs/images/additions/true-black-model-allowances.png"><img src="docs/images/additions/true-black-model-allowances.png" alt="True Black styling on serial inference and interactive model allowance controls" width="200"></a></td></tr>
+</table>
+
+</details>
 
 **Better Chat Saving**\
 Use IndexedDB to save more than 100 chats, instead of silently deleting your oldest chats! File attachments survive reloading too, so no image placeholders!
