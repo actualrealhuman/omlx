@@ -7,6 +7,7 @@
     <form id="activity-settings" x-show="settingsOpen" @submit.prevent="saveSettings()" class="activity-settings">
         <div class="activity-settings-fields">
             <label class="activity-settings-enabled"><span>{{ t('activity.capture_enabled') }}</span><button type="button" role="switch" :aria-checked="settingsDraft.enabled" @click="settingsDraft.enabled = !settingsDraft.enabled" :disabled="controlBusy" class="activity-capture-switch" :class="settingsDraft.enabled ? 'is-on' : ''" aria-label="{{ t('activity.capture_enabled') }}"><span></span></button></label>
+            <label class="activity-settings-enabled"><span>{{ t('activity.retain_images') }}</span><button type="button" role="switch" :aria-checked="settingsDraft.retain_images" @click="settingsDraft.retain_images = !settingsDraft.retain_images" :disabled="controlBusy" class="activity-capture-switch" :class="settingsDraft.retain_images ? 'is-on' : ''" aria-label="{{ t('activity.retain_images') }}"><span></span></button></label>
             <label><span>{{ t('activity.request_limit') }}</span><input type="number" min="1" step="1" required x-model.number="settingsDraft.max_requests" :disabled="controlBusy"></label>
             <label><span>{{ t('activity.age_limit') }}</span><input type="number" min="1" step="1" required x-model.number="settingsDraft.max_age_days" :disabled="controlBusy"></label>
             <label><span>{{ t('activity.storage_limit') }}</span><input type="number" min="0.0625" step="any" required x-model.number="settingsDraft.storageGiB" :disabled="controlBusy"></label>
@@ -78,11 +79,19 @@
                         <option value="">{{ t('activity.evidence') }}</option><option value="submitted_json">{{ t('activity.submitted_json') }}</option><option value="model_tokens">{{ t('activity.role.model_tokens') }}</option><option value="api_response">{{ t('activity.role.api_response') }}</option><option value="events">{{ t('activity.role.events') }}</option>
                     </select>
                     <button @click="confirmRemoval('delete')" :disabled="controlBusy">{{ t('activity.delete_request') }}</button>
+                    <button x-show="detail?.attachments?.length" @click="toggleAttachments()" :aria-expanded="attachmentsOpen" aria-controls="activity-images" x-text="label('attachments') + ' (' + (detail?.attachments?.length || 0) + ')'"></button>
                     <button @click="exportView('copy')" :disabled="exporting || loading || !total">{{ t('activity.copy') }}</button>
                     <button @click="exportView()" :disabled="exporting || loading || !total" x-text="label(exporting ? 'exporting' : 'download')"></button>
                 </div>
                 <p class="activity-fidelity" x-text="label(mode === 'model' ? 'model_fidelity' : mode === 'submitted' ? 'submitted_fidelity' : 'evidence_fidelity')"></p>
                 <p x-show="detail?.submitted_normalized" class="activity-fidelity">{{ t('activity.media_normalized') }}</p>
+                <div id="activity-images" x-show="attachmentsOpen" class="activity-images">
+                    <div><label><span class="activity-sr-only">{{ t('activity.attachments') }}</span><select x-model="previewId" @change="previewFailed = false"><template x-for="image in detail?.attachments || []" :key="image.id"><option :value="image.id" x-text="image.id + ' · ' + (image.mime_type || label('image_unknown_type')) + ' · ' + label(image.status === 'retained' ? 'image_retained' : 'image_not_retained')"></option></template></select></label><span x-show="previewInfo()?.status === 'retained'" x-text="previewInfo()?.width + ' × ' + previewInfo()?.height + ' · ' + bytes(previewInfo()?.bytes)"></span></div>
+                    <p>{{ t('activity.image_provenance') }}</p>
+                    <p x-show="previewInfo()?.status !== 'retained'" x-text="imageReason(previewInfo())"></p>
+                    <p x-show="previewFailed" role="status">{{ t('activity.image_unavailable') }}</p>
+                    <template x-if="attachmentsOpen &amp;&amp; previewInfo()?.status === 'retained' &amp;&amp; !previewFailed"><img :src="imageUrl(previewId)" :alt="label('image_alt') + ' ' + previewId" decoding="async" referrerpolicy="no-referrer" @error="imageFailed($event)"></template>
+                </div>
                 <div class="activity-navigation">
                     <button @click="outlineOpen = !outlineOpen" :aria-expanded="outlineOpen" aria-controls="activity-outline">{{ t('activity.outline') }}</button>
                     <button class="activity-icon-button" @click="navigate(-1)" :disabled="!total" aria-label="{{ t('activity.previous_message') }}">↑</button><button class="activity-icon-button" @click="navigate(1)" :disabled="!total" aria-label="{{ t('activity.next_message') }}">↓</button>

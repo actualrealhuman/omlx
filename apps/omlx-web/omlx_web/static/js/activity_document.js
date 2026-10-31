@@ -28,7 +28,9 @@
                     part.source?.url, part.input_audio?.data, part.video_url?.url, part.video_url, part.input_video?.url,
                     part.input_video, part.file?.file_data, part.file?.data, part.file?.file_id, part.file_data, part.file_id];
                 const reference = candidates.find(item => item?._omlx_activity_attachment)?._omlx_activity_attachment;
-                return `[${part.type}${reference?.id ? ' · ' + reference.id : ''}: ${labels.attachment_not_retained || 'attachment preview unavailable'}]`;
+                const availability = reference?.status === 'reference' ? labels.attachment_reference || 'see Attachments for availability'
+                    : labels.attachment_not_retained || 'attachment preview unavailable';
+                return `[${part.type}${reference?.id ? ' · ' + reference.id : ''}: ${availability}]`;
             }
             return JSON.stringify(part, null, 2);
         }).join('\n');

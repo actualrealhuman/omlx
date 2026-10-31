@@ -91,7 +91,7 @@
 .activity-heading-actions { display:flex; align-items:center; gap:16px; }
 .activity-heading-actions button,.activity-settings button,.activity-confirm button { font-size:12px; padding:8px 12px; border:1px solid var(--border-normal); border-radius:9999px; }
 .activity-settings { border:1px solid var(--border-normal); border-radius:16px; padding:18px; margin-bottom:16px; background:var(--bg-primary); }
-.activity-settings-fields { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; align-items:end; }
+.activity-settings-fields { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:16px; align-items:end; }
 .activity-settings-fields label { display:flex; flex-direction:column; gap:8px; font-size:12px; color:var(--text-secondary); }
 .activity-settings-fields .activity-settings-enabled { flex-direction:row; align-items:center; padding-bottom:8px; }
 .activity-settings .activity-capture-switch { width:44px; height:24px; padding:0; border:0; position:relative; flex-shrink:0; background:rgb(var(--palette-neutral-200)); }
@@ -112,6 +112,10 @@
 .activity-confirm p { font-size:12px; line-height:1.7; color:var(--text-secondary); margin:16px 0; overflow-wrap:anywhere; }
 .activity-confirm > div { display:flex; justify-content:flex-end; gap:8px; }
 .activity-confirm button:last-child { color:var(--text-danger); }
+.activity-images { padding:12px 16px; border-block:1px solid var(--border-normal); background:var(--bg-secondary); overflow:auto; max-height:45%; flex-shrink:1; font-size:12px; }
+.activity-images > div { display:flex; align-items:center; flex-wrap:wrap; gap:10px; }
+.activity-images p,.activity-images > div > span { color:var(--text-secondary); font-size:10px; line-height:1.7; margin:6px 0; }
+.activity-images img { display:block; max-width:100%; max-height:260px; object-fit:contain; margin-top:10px; border-radius:8px; }
 @media (max-width:1050px) { .activity-metrics { gap:10px; } .activity-metrics > div:first-child { display:none; } .activity-workspace { grid-template-columns:245px minmax(0,1fr); } }
 @media (max-width:760px) {
     .activity-evidence-metrics { gap:8px; padding-left:14px; padding-right:14px; }

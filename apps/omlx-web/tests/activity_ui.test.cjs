@@ -129,17 +129,19 @@ test('capture controls use versioned settings writes and pin deletion to the con
             return {ok: true, json: async () => ({health: {enabled: true}, config_version: 'new-version'})};
         }
         return {ok: true, json: async () => url.endsWith('/status')
-            ? {health: {enabled: false}, settings: {enabled: false, max_requests: 1000, max_age_days: 7, max_storage_bytes: 5 * 1024 ** 3}, config_version: 'old-version'}
+            ? {health: {enabled: false}, settings: {enabled: false, retain_images: true, max_requests: 1000, max_age_days: 7, max_storage_bytes: 5 * 1024 ** 3}, config_version: 'old-version'}
             : {models: [], sources: []}};
     };
     await app.activate(true);
     await app.openSettings();
     assert.equal(app.settingsDraft.storageGiB, 5);
     app.settingsDraft.enabled = true; app.settingsDraft.max_requests = 10000;
+    app.settingsDraft.retain_images = false;
     await app.saveSettings();
     assert.equal(writes[0].headers['X-Activity-Action'], 'settings');
     assert.equal(writes[0].headers['If-Match'], 'old-version');
     assert.equal(JSON.parse(writes[0].body).max_requests, 10000);
+    assert.equal(JSON.parse(writes[0].body).retain_images, false);
     assert.equal(JSON.parse(writes[0].body).max_storage_bytes, 5 * 1024 ** 3);
     app.selected = 'confirmed'; app.confirmRemoval('delete'); app.selected = 'other';
     await app.removeConfirmed();
@@ -150,6 +152,42 @@ test('capture controls use versioned settings writes and pin deletion to the con
     app.confirmRemoval('clear');
     await app.activate(false);
     assert.equal(app.pendingAction, '');
+});
+
+test('image previews load one admin URL lazily and invalidate on selection, expiry and hidden tabs', async () => {
+    const {app, streams} = harness();
+    await app.activate(true);
+    const detail = {id: 'first', version: 'images', representations: [], attachments: [
+        {id: 'attachment-1', status: 'not_retained', reason: 'attachment_queue_limit'},
+        {id: 'attachment-2', status: 'retained', mime_type: 'image/png'},
+        {id: 'attachment-3', status: 'retained', mime_type: 'image/jpeg'},
+    ]};
+    const snapshot = value => ({data: JSON.stringify({active: [], recent: [], health: {}, detail: value})});
+    streams.at(-1).events.snapshot(snapshot(detail));
+    assert.equal(app.imageUrl('attachment-2'), null);
+    app.toggleAttachments();
+    assert.equal(app.previewId, 'attachment-2');
+    assert.equal(app.imageUrl(app.previewId), '/admin/api/activity/requests/first/attachments/attachment-2');
+    assert.equal(app.imageUrl('https://example.invalid/image'), null);
+    assert.equal(app.imageUrl('attachment-1'), null);
+    assert.equal(app.imageReason(detail.attachments[0]), 'activity.image_reason.attachment_queue_limit');
+    app.previewId = 'attachment-3';
+    app.imageFailed({target: {src: 'http://test.invalid/admin/api/activity/requests/first/attachments/attachment-2'}});
+    assert.equal(app.previewFailed, false);
+    app.imageFailed({target: {src: 'http://test.invalid' + app.imageUrl(app.previewId)}});
+    assert.equal(app.previewFailed, true);
+    app.toggleAttachments();
+    assert.equal(app.previewId, '');
+    app.toggleAttachments();
+    streams.at(-1).events.authorization_lost();
+    assert.equal(app.imageUrl('attachment-2'), null);
+    app.toggleAttachments();
+    streams.at(-1).events.snapshot(snapshot(null));
+    assert.equal(app.attachmentsOpen, false);
+    app.select('second');
+    assert.equal(app.previewId, '');
+    await app.activate(false);
+    assert.equal(app.imageUrl('attachment-2'), null);
 });
 
 test('failed settings writes retain the draft and do not blindly retry', async () => {

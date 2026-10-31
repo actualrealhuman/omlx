@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import ActivitySettings
+from .images import prepare_image
 from .snapshot import SemanticSnapshot, snapshot_request
 from .store import (
     MAX_CHUNK_BYTES,
@@ -257,7 +258,11 @@ class ActivityRecorder:
             self._freezing_count += 1
         try:
             snapshot = snapshot_request(
-                request, memory_bytes=reservation - _CHUNK_OVERHEAD, max_bytes=logical
+                request,
+                memory_bytes=reservation - _CHUNK_OVERHEAD,
+                max_bytes=logical,
+                retain_images=self.settings.retain_images,
+                max_attachment_bytes=self.settings.max_attachment_bytes,
             )
             chunk = (
                 _Chunk(handle, "submitted", "0", snapshot)
@@ -621,6 +626,25 @@ class ActivityRecorder:
                                 break
                         # The loop variable otherwise retains the final buffer.
                         data = None
+                        if saved and isinstance(chunk.data, SemanticSnapshot):
+                            for image in chunk.data.images:
+                                info, payload = prepare_image(image)
+                                if not store.save_attachment(
+                                    chunk.handle.request_id, info, payload
+                                ):
+                                    saved = False
+                                    break
+                                if payload is not None:
+                                    encoded_bytes += len(payload)
+                                if info["status"] != "retained":
+                                    with self._lock:
+                                        current = self._lookup(chunk.handle)
+                                        if current is not None:
+                                            self._gap(current, info["reason"])
+                                payload = None
+                            # Loop variables must not keep an original alive
+                            # after the queue advertises its reservation as free.
+                            image = payload = None
                     else:
                         saved = True  # Explicit deletion/clear, not a capture gap.
                         encoded_bytes = chunk.estimated_bytes

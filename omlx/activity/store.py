@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .config import ActivitySettings
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MAX_CHUNK_BYTES = 256 * 1024
 MAX_READ_BYTES = 1024 * 1024
 TERMINAL_STATES = frozenset(
@@ -48,7 +48,7 @@ class ActivityStore:
         self.db = db
         try:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, SCHEMA_VERSION):
+            if version not in (0, 1, SCHEMA_VERSION):
                 raise ValueError(
                     "Unsupported Activity schema; existing store preserved"
                 )
@@ -66,6 +66,7 @@ class ActivityStore:
             self._limit_pages()
             db.executescript(
                 """
+                BEGIN IMMEDIATE;
                 CREATE TABLE IF NOT EXISTS requests (
                     id TEXT PRIMARY KEY,
                     received_at REAL NOT NULL,
@@ -95,6 +96,15 @@ class ActivityStore:
                 );
                 CREATE INDEX IF NOT EXISTS activity_content
                     ON content_chunks(request_id, invocation_id, representation, sequence);
+                CREATE TABLE IF NOT EXISTS attachments (
+                    request_id TEXT NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+                    attachment_id TEXT NOT NULL,
+                    metadata TEXT NOT NULL,
+                    data BLOB,
+                    PRIMARY KEY(request_id, attachment_id)
+                );
+                PRAGMA user_version=2;
+                COMMIT;
                 """
             )
             with db:
@@ -189,6 +199,34 @@ class ActivityStore:
             )
         return True
 
+    def save_attachment(self, request_id, metadata, data):
+        """One transactional reference/original; cascades with its request."""
+        if data is not None and (
+            type(data) is not bytes or len(data) > self.settings.max_attachment_bytes
+        ):
+            raise ValueError("Activity attachment outside bounds")
+        size = len(data) if data is not None else 0
+        encoded = json.dumps(metadata, ensure_ascii=True)
+        if not self._make_room(size * 2 + len(encoded) * 2 + 16384):
+            return False
+        with self.db:
+            row = self.db.execute(
+                "SELECT captured_bytes FROM requests WHERE id=?", (request_id,)
+            ).fetchone()
+            if row is None or row[0] + size > self.settings.max_request_bytes:
+                return False
+            cursor = self.db.execute(
+                "INSERT OR IGNORE INTO attachments(request_id,attachment_id,metadata,data) VALUES (?,?,?,?)",
+                (request_id, metadata["id"], encoded, data),
+            )
+            if cursor.rowcount != 1:
+                return False
+            self.db.execute(
+                "UPDATE requests SET captured_bytes=captured_bytes+? WHERE id=?",
+                (size, request_id),
+            )
+        return True
+
     def physical_bytes(self):
         return sum(
             p.stat().st_size if p.exists() else 0
@@ -213,12 +251,28 @@ class ActivityStore:
         self.db.execute(f"PRAGMA max_page_count={max(32, page_limit)}")
 
     def _make_room(self, extra: int):
-        if self.physical_bytes() + extra <= self.settings.max_storage_bytes:
+        def fits():
+            if self.physical_bytes() + extra > self.settings.max_storage_bytes:
+                return False
+            page_size = self.db.execute("PRAGMA page_size").fetchone()[0]
+            pages = self.db.execute("PRAGMA page_count").fetchone()[0]
+            free = self.db.execute("PRAGMA freelist_count").fetchone()[0]
+            page_limit = max(
+                32, (self.settings.max_storage_bytes - 256 * 1024) // (2 * page_size)
+            )
+            # Callers reserve roughly twice the new pages for WAL/maintenance.
+            # A checkpoint can make physical bytes fit while used DB pages
+            # still exhaust max_page_count; reclaim/evict before that write.
+            return (pages - free) * page_size + (
+                extra + 1
+            ) // 2 <= page_limit * page_size
+
+        if fits():
             return True
-        while self.physical_bytes() + extra > self.settings.max_storage_bytes:
+        while not fits():
             before = self.physical_bytes()
             self._reclaim()
-            if self.physical_bytes() + extra <= self.settings.max_storage_bytes:
+            if fits():
                 return True
             row = self.db.execute(
                 "SELECT id FROM requests WHERE finished_at IS NOT NULL "
@@ -274,7 +328,10 @@ class ActivityReader:
         )
         db.row_factory = sqlite3.Row
         try:
-            if db.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+            if db.execute("PRAGMA user_version").fetchone()[0] not in (
+                1,
+                SCHEMA_VERSION,
+            ):
                 raise ValueError("Unsupported Activity history schema")
         except BaseException:
             db.close()
@@ -383,6 +440,7 @@ class ActivityReader:
                 (request_id,),
             )
         ]
+        result["attachments"] = self._attachments(db, request_id)
         result["producer_output_layer"] = (
             "engine output before API formatting; native engine parsers may already have transformed text"
         )
@@ -410,6 +468,49 @@ class ActivityReader:
             json.dumps(result, sort_keys=True, ensure_ascii=True).encode()
         ).hexdigest()
         return result
+
+    @staticmethod
+    def _attachments(db, request_id):
+        if db.execute("PRAGMA user_version").fetchone()[0] < 2:
+            return []
+        return [
+            json.loads(row[0])
+            for row in db.execute(
+                "SELECT metadata FROM attachments WHERE request_id=? ORDER BY length(attachment_id),attachment_id LIMIT 128",
+                (request_id,),
+            )
+        ]
+
+    def attachment(self, request_id, attachment_id, *, offset=0, limit=65536):
+        if (
+            type(offset) is not int
+            or offset < 0
+            or type(limit) is not int
+            or not 1 <= limit <= MAX_READ_BYTES
+        ):
+            raise ValueError("Activity attachment range outside bounds")
+        if not self.path.exists():
+            return None
+        db = self._connect()
+        try:
+            db.execute("BEGIN")
+            if db.execute("PRAGMA user_version").fetchone()[0] < 2:
+                return None
+            # SQLite substr bounds the Python buffer even for a large original.
+            row = db.execute(
+                "SELECT metadata,length(data) AS size,substr(data,?,?) AS data FROM attachments "
+                "WHERE request_id=? AND attachment_id=? AND data IS NOT NULL",
+                (offset + 1, limit, request_id, attachment_id),
+            ).fetchone()
+            if row is None:
+                return None
+            return {
+                "metadata": json.loads(row["metadata"]),
+                "size": row["size"],
+                "data": row["data"],
+            }
+        finally:
+            db.close()
 
     def detail(self, request_id):
         if not self.path.exists():

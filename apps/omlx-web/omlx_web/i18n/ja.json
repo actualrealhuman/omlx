@@ -2392,5 +2392,22 @@
   "activity.counts_scope": "Counts cover observed scheduler invocations only. Missing values are unknown; they are not inferred from text length. Input includes the logical admitted prefix, including cached tokens. Invocation events contain admission settings and terminal reasons.",
   "activity.attachment_not_retained": "payload not retained; preview unavailable",
   "activity.submitted_json": "Submitted JSON",
-  "activity.media_normalized": "Attachment payloads were replaced with ordered references before capture. Surrounding text is retained where limits allow. Preview bytes are not retained yet; use Submitted JSON for the normalized structure."
+  "activity.media_normalized": "Media payloads are represented by ordered references. Use Attachments for image availability and Submitted JSON for the normalized structure.",
+  "activity.retain_images": "Retain supported images",
+  "activity.attachments": "Attachments",
+  "activity.attachment_reference": "see Attachments for availability",
+  "activity.image_unknown_type": "Unknown type",
+  "activity.image_retained": "Retained",
+  "activity.image_not_retained": "Not retained",
+  "activity.image_alt": "Submitted image",
+  "activity.image_provenance": "Submitted original · container checked by Activity; pixels are decoded by your browser. This does not prove inference accepted or used the image. One original loads at a time.",
+  "activity.image_unavailable": "Image unavailable. It may have expired, been deleted, or access may have ended.",
+  "activity.image_reason.attachment_size_limit": "The image exceeded the attachment size limit. Surrounding text remains available.",
+  "activity.image_reason.attachment_request_limit": "The request capture budget had no room for this image.",
+  "activity.image_reason.attachment_queue_limit": "The bounded capture queue had no room for this image and its verification buffers.",
+  "activity.image_reason.image_retention_disabled": "Image retention was disabled for this request.",
+  "activity.image_reason.reference_not_fetched": "External image references are recorded without fetching their content.",
+  "activity.image_reason.unsupported_image_type": "Previews support static PNG, JPEG and WebP images.",
+  "activity.image_reason.unsupported_image_encoding": "This image encoding is unavailable for previews.",
+  "activity.image_reason.image_verification_failed": "Image verification failed, or its dimensions or animation exceeded preview limits."
 }

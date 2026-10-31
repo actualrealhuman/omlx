@@ -37,8 +37,8 @@ Defaults: disabled capture, 1,000 terminal requests, seven days, and a 5 GiB
 physical storage budget. Counts and budgets are configurable; 1,000 is not a
 hard ceiling. Internal safety defaults include a 64 MiB request cap, a 16 MiB
 attachment cap, 128 MiB observer memory, a 16 MiB content queue and 1,024 active
-capture slots. Media normalization is present; attachment bytes/previews are not
-retained yet. Captured
+capture slots. Supported inline originals have bounded image retention and
+lazy previews; effective queue limits can be lower than the attachment cap. Captured
 content is distinct from aggregate serving statistics and reusable KV caches.
 
 ## Source and adoption boundary
@@ -89,6 +89,11 @@ explicit/null/extra fields, large-media text survival, nested references, plain
 file/tool data, immutable ownership, Unicode/chunk/size/depth boundaries,
 disabled behavior and clear/delete/disable/failure reservation races. It also
 checks that JSON encoding executes on the writer thread.
+`tests/test_activity_images.py` covers actual request schemas and PNG/JPEG/WebP
+original-byte fidelity/provenance, text-first budgets, disabled retention/no
+fetches, repeated references, malformed/animated/oversized containers, no codec
+work, bounded authorized streaming/session expiry, clear/delete races,
+transactional migration rollback and physical/count/age retention.
 `tests/test_activity_metrics.py` checks multiple invocations, cumulative-counter
 idempotence/regression, unavailable counts, capture-off fences, scalar evidence
 through queue loss and safe admission-option filtering. The engine integration
@@ -130,6 +135,7 @@ inference keys do not grant access:
 | `/facets` | Bounded model and historical credential-label choices |
 | `/requests/{id}` | Metadata, retained representation indexes and a version fingerprint |
 | `/requests/{id}/content` | Bounded raw byte ranges for a representation/invocation |
+| `/requests/{id}/attachments/{attachment_id}` | Lazy, bounded-streamed original PNG/JPEG/WebP bytes |
 | `/events` | Committed metadata snapshots with optional selected-request indexes |
 
 Content is never embedded in list or live snapshot responses. Content ranges
@@ -166,8 +172,9 @@ Recognized inline image/audio/video/file payload fields become ordered
 text therefore survives media that would have overflowed a whole-JSON snapshot.
 Plain text documents and ordinary tool-result JSON fields named `data` stay
 text. References include source position, kind, encoded size and explicit
-not-retained/submitted-unvalidated status. They do not prove media validation
-or engine acceptance. No attachment bytes or thumbnails are retained yet.
+submitted-unvalidated provenance. Image references point to the detail attachment
+index for retained/not-retained status and reasons. Other media remains explicit
+not-retained references. None proves engine acceptance.
 External references are bounded metadata and are never fetched by Activity.
 
 The snapshot walk has memory/byte limits, an 8,192-node and 32-level traversal
@@ -180,10 +187,51 @@ This prevents deleted requests from being resurrected and avoids negative queue
 accounting after a persistence failure. These are bounded structural controls,
 not a completed throughput/overhead qualification.
 
-The readable submitted view shows attachment placeholders. Submitted JSON under
+The readable submitted view shows ordered attachment references. Submitted JSON under
 More evidence exposes the retained normalized structure, including fields that
 the readable message layout does not display. Copy/download reflects the chosen
 view. The page explicitly labels normalized attachment payloads.
+
+### Original image previews
+
+When capture and `retain_images` are enabled, inline PNG, JPEG and WebP
+originals are candidates after submitted text has won admission. Image decoding
+from base64, bounded container/header checks and persistence run on the Activity
+writer. No image codec, metadata decompression, pixel buffers, network fetches,
+PIL objects, device arrays or inference preprocessing are used by the observer.
+The reference is a submitted original, independently container-checked by
+Activity; it is not an assertion that inference validated, accepted or used it.
+Checks identify expected containers and dimensions, reject animation and cap
+traversal at 4,096 chunks/segments. PNG chunk CRCs are checked; JPEG/WebP checks
+are structural headers, not full codec validation. A browser can still reject
+a malformed file; the inspector reports that as unavailable.
+
+Original previews have hard 16 MiB file, 16,384-side and 16 Mi-pixel ceilings,
+as well as configured per-attachment/request/queue bounds. Queue reservations
+include the immutable encoded string, base64/byte/SQLite temporaries and a
+conservative per-image allowance. With the default 16 MiB queue, even an
+otherwise valid image can be omitted well below 16 MiB. Omission reasons remain
+visible and do not discard surrounding text. Audio/video/documents, remote
+fetches, processed-image reconstructions and cross-request deduplication are
+outside this preview slice.
+
+Detail indexes contain bounded metadata only, including original dimensions,
+size, availability, provenance and omission reasons. Open Attachments to load
+one original at a time through the admin-only byte endpoint. Request changes,
+expiry, session loss and hiding Activity remove mounted images. No arbitrary
+submitted URL is assigned to an image element. Streams share the eight-viewer
+limit with SSE, read at most 64 KiB per short database transaction, recheck admin
+authority between chunks, and stop after 60 seconds or missing/deleted data.
+Responses use inert allowlisted image MIME types, no-store/nosniff and fixed
+filenames; image bodies are never put in list/SSE snapshots.
+
+Schema 2 transactionally adds request-owned attachment rows to schema 1. Reads
+can still inspect schema-1 text before migration. Unsupported newer schemas
+remain untouched. Originals and references cascade with clear/delete and
+count/age/byte retention. Original byte lengths contribute to captured bytes
+and per-request limits; SQLite page capacity and physical sidecars both enter
+pre-write admission. Existing v1 binaries preserve/refuse the newer store;
+rolling an app back must not downgrade or replace that history.
 
 ## Live controls
 
@@ -196,7 +244,7 @@ apply promptly; completed history is removed first. If an active store cannot
 fit a reduced byte allowance, its captures stop and become eligible for retention.
 
 `PUT /admin/api/activity/settings` accepts `enabled`, `max_requests`,
-`max_age_days`, and `max_storage_bytes`; unknown fields, nulls and inconsistent
+`max_age_days`, `max_storage_bytes`, and `retain_images`; unknown fields, nulls and inconsistent
 limits are rejected. Send `X-Activity-Action: settings` and optionally `If-Match`
 with the `config_version` from status to reject stale saves. Only the Activity
 section is saved, preserving stored values versus unrelated runtime overrides.
@@ -215,7 +263,9 @@ bounded control admission. A task retains the shared settings-save lock through
 its worker result even if the HTTP caller disconnects. On a failed or timed-out
 response, reload settings/history before deciding whether to retry; a save can
 have succeeded even if its later live application did not finish. The API
-reports that saved/live distinction explicitly. A replacement writer cannot
+reports that saved/live distinction explicitly. `retain_images` controls future
+submitted snapshots; changing it neither deletes existing originals nor revokes
+already admitted image work. A replacement writer cannot
 start while the previous writer is still stopping.
 
 ## Observed execution evidence
@@ -290,8 +340,9 @@ new non-English entries currently use the repository's English fallback.
 - The bounded semantic walk runs once before preprocessing. Qualify its overhead
   with concurrent requests, large structures and actual model serving; the current
   checks prove structural caps and handoff behavior, not serving performance.
-- Attachments and native restart/long-running viewer lifecycle remain to be
-  completed or qualified. Image previews are not implemented yet.
+- Actual image-preview interaction, browser pixel-decoder memory, repeated
+  large-image throughput and native restart/long-running viewer lifecycle remain
+  to be qualified. The first source slice now includes supported inline previews.
 - Actual rendered-browser validation, text selection across virtualized windows,
   per-message copying, richer parsed reasoning/tool output, complete large-outline
   navigation and deep-link history polish remain to be qualified or completed.

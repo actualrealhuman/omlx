@@ -23,6 +23,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
 from .config import ActivitySettings
+from .images import IMAGE_FORMATS, MAX_PREVIEW_BYTES
 from .recorder import ActivityRecorder
 from .runtime import configure_recorder, get_recorder
 from .store import MAX_READ_BYTES, REPRESENTATIONS, STATES, ActivityReader
@@ -36,6 +37,7 @@ _MAX_EVENT_BYTES = 1024 * 1024
 class ActivityUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     enabled: StrictBool | None = None
+    retain_images: StrictBool | None = None
     max_requests: StrictInt | None = Field(None, gt=0, le=2**63 - 1)
     max_age_days: StrictInt | None = Field(None, gt=0, le=2**31 - 1)
     max_storage_bytes: StrictInt | None = Field(None, gt=0, le=2**63 - 1)
@@ -85,11 +87,11 @@ def _decode_cursor(value):
 class _StreamResponse(StreamingResponse):
     """Release admission even if the body iterator never starts."""
 
-    def __init__(self, body, release):
+    def __init__(self, body, release, *, media_type="text/event-stream", headers=None):
         super().__init__(
             body,
-            media_type="text/event-stream",
-            headers={**_NO_STORE, "X-Accel-Buffering": "no"},
+            media_type=media_type,
+            headers={**_NO_STORE, "X-Accel-Buffering": "no", **(headers or {})},
         )
         self._release = weakref.finalize(self, release)
 
@@ -597,6 +599,73 @@ def create_activity_router(
                     request, reader, request_id, model_id, source_id, initial
                 ),
                 release,
+            )
+        except BaseException:
+            release()
+            raise
+
+    @router.get("/requests/{request_id}/attachments/{attachment_id}")
+    async def attachment(request: Request, request_id: str, attachment_id: str):
+        if len(request_id) > 128 or len(attachment_id) > 64:
+            raise HTTPException(404, "Activity image not retained")
+        release = service.reserve_stream()
+        try:
+            reader = service.reader()
+            first = await service.read(
+                lambda: reader.attachment(request_id, attachment_id)
+            )
+            if first is None:
+                raise HTTPException(404, "Activity image not retained")
+            info = first["metadata"]
+            size, mime = first["size"], info.get("mime_type")
+            if (
+                mime not in IMAGE_FORMATS
+                or info.get("status") != "retained"
+                or info.get("validation") != "observer_container_checked"
+                or type(size) is not int
+                or not 0 < size <= MAX_PREVIEW_BYTES
+                or size != info.get("bytes")
+            ):
+                raise HTTPException(503, "Activity image unavailable")
+
+            async def body():
+                page, offset = first, 0
+                started = time.monotonic()
+                while page and offset < size and time.monotonic() - started < 60:
+                    try:
+                        authorization = service.require_admin(request)
+                        if inspect.isawaitable(authorization):
+                            await authorization
+                    except Exception:
+                        return
+                    if (
+                        page["size"] != size
+                        or page["metadata"] != info
+                        or not page["data"]
+                    ):
+                        return
+                    yield page["data"]
+                    offset += len(page["data"])
+                    page = None
+                    if offset < size:
+                        page = await service.read(
+                            lambda offset=offset: reader.attachment(
+                                request_id, attachment_id, offset=offset
+                            )
+                        )
+
+            extension = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}[
+                mime
+            ]
+            return _StreamResponse(
+                body(),
+                release,
+                media_type=mime,
+                headers={
+                    "Content-Length": str(size),
+                    "Content-Disposition": f'inline; filename="activity-image.{extension}"',
+                    "Content-Security-Policy": "default-src 'none'; sandbox",
+                },
             )
         except BaseException:
             release()

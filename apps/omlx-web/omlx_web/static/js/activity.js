@@ -16,7 +16,8 @@
             outlineOpen: false, outlineTruncated: false, current: null, row: 0, visibleRows: 25, columns: 100,
             searchQuery: '', searchResult: {count: 0, match: 0, marks: []}, activeMore: false, recentMore: false,
             pageCursor: '', pageScope: 'recent', paging: false, exporting: false, newOutput: false, viewReady: false, outputBytes: 0,
-            settingsOpen: false, settingsDraft: {enabled: false, max_requests: 1000, max_age_days: 7, storageGiB: 5},
+            settingsOpen: false, settingsDraft: {enabled: false, retain_images: true, max_requests: 1000, max_age_days: 7, storageGiB: 5},
+            attachmentsOpen: false, previewId: '', previewFailed: false,
             configVersion: '', controlBusy: false, pendingAction: '', pendingDeleteId: '',
             boot() {
                 this._visibility = () => this.activate(this.mainTab === 'activity' && !document.hidden);
@@ -38,6 +39,7 @@
             async activate(value) {
                 if (!value) {
                     this.pendingAction = '';
+                    this.attachmentsOpen = false; this.previewId = '';
                     stopped = true; generation++; activation++; stream?.close(); stream = null;
                     worker?.terminate(); worker = null; controller?.abort();
                     clearTimeout(retry); clearTimeout(searchTimer); cancelAnimationFrame(frame);
@@ -90,7 +92,7 @@
                 this.controlBusy = true; this.error = '';
                 try {
                     const draft = this.settingsDraft;
-                    const status = await this.write('/settings', 'PUT', 'settings', {enabled: draft.enabled,
+                    const status = await this.write('/settings', 'PUT', 'settings', {enabled: draft.enabled, retain_images: draft.retain_images,
                         max_requests: Number(draft.max_requests), max_age_days: Number(draft.max_age_days),
                         max_storage_bytes: Math.round(Number(draft.storageGiB) * 1024 ** 3)});
                     this.health = status.health; this.configVersion = status.config_version;
@@ -137,7 +139,7 @@
                             this.missing = !snapshot.detail;
                             this.detail = snapshot.detail;
                             if (snapshot.detail && snapshot.detail.id === this.selected) this.inspect(snapshot.detail);
-                            else if (!snapshot.detail) { generation++; worker?.terminate(); worker = null; loadedVersion = ''; this.rows = []; this.outline = []; this.current = null; this.total = 0; }
+                            else if (!snapshot.detail) { this.attachmentsOpen = false; this.previewId = ''; generation++; worker?.terminate(); worker = null; loadedVersion = ''; this.rows = []; this.outline = []; this.current = null; this.total = 0; }
                         }
                         this.loadFacets().catch(() => {});
                     } catch (_) { this.error = label('invalid_snapshot'); }
@@ -146,7 +148,7 @@
                 for (const type of ['reconnect', 'unavailable', 'authorization_lost']) current.addEventListener(type, () => {
                     if (stream !== current) return;
                     current.close(); this.connection = 'disconnected';
-                    if (type === 'authorization_lost') this.error = label('sign_in');
+                    if (type === 'authorization_lost') { this.error = label('sign_in'); this.attachmentsOpen = false; this.previewId = ''; }
                     else { if (type === 'unavailable') this.error = label('unavailable'); retry = setTimeout(() => this.connect(), 3000); }
                 });
                 current.onerror = () => { if (stream === current) this.connection = 'reconnecting'; };
@@ -165,6 +167,7 @@
                 }
                 generation++; worker?.terminate(); worker = null; loadedVersion = '';
                 this.selected = id; this.detail = null; this.missing = false; this.error = '';
+                this.attachmentsOpen = false; this.previewId = ''; this.previewFailed = false;
                 this.rows = []; this.outline = []; this.total = 0; this.loading = !!id;
                 this.current = null; this.viewReady = false; this.outputBytes = 0;
                 this.searchQuery = ''; this.searchResult = {count: 0, match: 0, marks: []}; this.newOutput = false;
@@ -215,7 +218,28 @@
                 }
                 if (loadedVersion === detail.version) return;
                 loadedVersion = detail.version;
-                worker.postMessage({type: 'sync', detail, labels: {...Object.fromEntries(roles.map(role => [role, label(`role.${role}`)])), attachment_not_retained: label('attachment_not_retained')}});
+                worker.postMessage({type: 'sync', detail, labels: {...Object.fromEntries(roles.map(role => [role, label(`role.${role}`)])), attachment_not_retained: label('attachment_not_retained'), attachment_reference: label('attachment_reference')}});
+            },
+            toggleAttachments() {
+                this.attachmentsOpen = !this.attachmentsOpen; this.previewFailed = false;
+                this.previewId = this.attachmentsOpen ? (this.detail?.attachments?.find(item => item.status === 'retained') || this.detail?.attachments?.[0])?.id || '' : '';
+            },
+            previewInfo() {
+                return this.detail?.attachments?.find(item => item.id === this.previewId);
+            },
+            imageUrl(id) {
+                if (stopped || !this.attachmentsOpen || this.detail?.id !== this.selected || !/^attachment-[0-9]+$/.test(id)) return null;
+                if (!this.detail.attachments?.some(item => item.id === id && item.status === 'retained')) return null;
+                return `${API}/requests/${encodeURIComponent(this.selected)}/attachments/${encodeURIComponent(id)}`;
+            },
+            imageFailed(event) {
+                const current = this.imageUrl(this.previewId);
+                if (current && new URL(event.target.src, window.location.href).pathname === current) this.previewFailed = true;
+            },
+            imageReason(info) {
+                const known = ['attachment_size_limit', 'attachment_request_limit', 'attachment_queue_limit', 'image_retention_disabled',
+                    'reference_not_fetched', 'unsupported_image_type', 'unsupported_image_encoding', 'image_verification_failed'];
+                return label(known.includes(info?.reason) ? `image_reason.${info.reason}` : 'image_unavailable');
             },
             measure() {
                 const el = this.$refs.contextViewport;

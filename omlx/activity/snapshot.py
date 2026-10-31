@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from enum import Enum
 from itertools import chain
 
+from .images import submitted_image
+
 MAX_NODES = 8192
 MAX_DEPTH = 32
 MAX_MEDIA = 128
@@ -71,6 +73,7 @@ class SemanticSnapshot:
     estimated_bytes: int
     media_count: int
     reasons: tuple[str, ...]
+    images: tuple = ()
 
     def encoded_chunks(self, limit):
         parts, size = [], 0
@@ -99,11 +102,13 @@ def _mapping(value):
 
 
 class _Builder:
-    def __init__(self, memory, logical):
+    def __init__(self, memory, logical, retain_images):
         self.memory_limit, self.logical_limit = memory - _MARGIN, logical - _MARGIN
         self.memory = self.logical = self.nodes = self.media = 0
         self.reasons = set()
         self.exhausted = False
+        self.retain_images = retain_images
+        self.images = []
 
     def omit(self, reason, *, exhausted=False):
         self.reasons.add(reason)
@@ -120,11 +125,12 @@ class _Builder:
         self.logical += logical
         return True
 
-    def attachment(self, value, kind, path):
+    def attachment(self, value, kind, path, mime_type=None):
         self.media += 1
         if self.media > MAX_MEDIA:
             return self.omit("attachment_reference_limit")
-        self.reasons.add("attachment_payload_not_retained")
+        if kind not in {"image", "image_reference"} or self.retain_images is None:
+            self.reasons.add("attachment_payload_not_retained")
         inline = value.startswith("data:")
         comma = value.find(",", 0, 256) if inline else -1
         mime = value[5:comma].split(";", 1)[0] if comma >= 0 else None
@@ -139,6 +145,16 @@ class _Builder:
         }
         if mime:
             reference["mime_type"] = mime
+        if kind in {"image", "image_reference"} and self.retain_images is not None:
+            self.images.append(
+                submitted_image(
+                    reference["id"],
+                    value,
+                    mime_type=mime_type,
+                    enabled=self.retain_images,
+                )
+            )
+            reference.update(status="reference", reason="see_attachment_index")
         if not inline and kind in {
             "image_reference",
             "video_reference",
@@ -268,7 +284,14 @@ class _Builder:
                     break
                 media_kind = self.media_kind(context, kind, key)
                 frozen = (
-                    self.attachment(child, media_kind, path + (key,))
+                    self.attachment(
+                        child,
+                        media_kind,
+                        path + (key,),
+                        mime_type=data.get("media_type")
+                        if context == "image_source"
+                        else None,
+                    )
                     if media_kind and type(child) is str
                     else self.freeze(
                         child, path + (key,), self.child(context, kind, key), depth + 1
@@ -304,15 +327,30 @@ class _Builder:
         return self.omit("snapshot_value_unavailable")
 
 
-def snapshot_request(value, *, memory_bytes, max_bytes):
+def snapshot_request(
+    value, *, memory_bytes, max_bytes, retain_images=None, max_attachment_bytes=0
+):
     if memory_bytes < 8192 or max_bytes < 8192:
         return None
-    builder = _Builder(memory_bytes, max_bytes)
+    builder = _Builder(memory_bytes, max_bytes, retain_images)
     root = builder.freeze(value)
+    # Text wins admission before any original media bytes. The API still owns
+    # the source request during the walk; only charged immutable strings leave.
+    images = []
+    for image in builder.images:
+        admitted = image.admit(
+            memory=memory_bytes - builder.memory - _MARGIN,
+            logical=max_bytes - builder.logical - _MARGIN,
+            attachment_limit=max_attachment_bytes,
+        )
+        images.append(admitted)
+        builder.memory += admitted.memory_bytes
+        builder.logical += admitted.estimated_bytes
     return SemanticSnapshot(
         root,
         builder.memory + _MARGIN,
         builder.logical + _MARGIN,
         builder.media,
         tuple(sorted(builder.reasons)),
+        tuple(images),
     )

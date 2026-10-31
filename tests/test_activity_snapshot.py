@@ -155,7 +155,7 @@ def test_large_media_is_normalized_before_queue_admission_and_text_survives(
         row = recorder.reader.get(handle.request_id)
         assert row["submitted_normalized"] is True
         assert row["submitted_media_references"] == 1
-        assert row["capture_reason"] == "attachment_payload_not_retained"
+        assert row["capture_reason"] == "attachment_queue_limit"
         assert recorder.health()["pending_bytes"] == 0
     finally:
         assert recorder.close()
