@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from omlx.activity import ActivityRecorder, ActivitySettings
 from omlx.activity.runtime import (
@@ -38,12 +39,13 @@ def observed_engine(tmp_path, mock_model, mock_tokenizer):
             recorder.close()
 
 
+class Payload(BaseModel):
+    model: str
+
+
 def arguments():
     return dict(
-        request=SimpleNamespace(
-            model="synthetic-model",
-            model_dump_json=lambda **_: '{"model":"synthetic-model"}',
-        ),
+        request=Payload(model="synthetic-model"),
         http_request=SimpleNamespace(
             state=SimpleNamespace(), url=SimpleNamespace(path="/v1/chat/completions")
         ),

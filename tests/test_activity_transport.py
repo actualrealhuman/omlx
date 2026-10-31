@@ -5,7 +5,6 @@ import asyncio
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -75,9 +74,7 @@ class TransportTests(unittest.TestCase):
 
         async def app(scope, receive, send):
             http_request = Request(scope)
-            payload = SimpleNamespace(
-                model="a", model_dump_json=lambda **_: '{"model":"a"}'
-            )
+            payload = Payload(model="a")
             response = await endpoint(request=payload, http_request=http_request)
             await send(
                 {

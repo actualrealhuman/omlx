@@ -14,14 +14,14 @@ function sections() {
     const result = [];
     for (const source of sources.values()) {
         const rep = source.item.representation;
-        const include = mode === 'submitted' ? ['submitted', 'raw_output'].includes(rep)
+        const include = mode === 'submitted_json' ? rep === 'submitted' : mode === 'submitted' ? ['submitted', 'raw_output'].includes(rep)
             : mode === 'model' ? ['model_input', 'raw_output'].includes(rep)
             : mode === rep;
         if (!include || !source.text) continue;
         if (rep === 'submitted' && source.parsedAt !== source.offset) {
-            source.parts = submittedSections(source.text); source.parsedAt = source.offset;
+            source.parts = submittedSections(source.text, labels); source.parsedAt = source.offset;
         }
-        const parts = rep === 'submitted' ? source.parts
+        const parts = rep === 'submitted' && mode !== 'submitted_json' ? source.parts
             : [{key: rep, role: rep, text: source.text}];
         parts.forEach((part, i) => result.push({
             ...part, key: `${source.key}:${part.key}`,

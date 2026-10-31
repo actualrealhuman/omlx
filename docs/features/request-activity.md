@@ -19,7 +19,8 @@ qualification remain pending.
 The foundation uses one background SQLite writer and separately bounded content
 and lifecycle metadata. Producer methods enqueue immutable CPU observations;
 encoding, compression and persistence happen on the worker. Queue saturation
-records incomplete capture while preserving request terminal status. A disabled recorder with no history creates neither a database nor a worker.
+records incomplete capture while preserving request terminal status. A disabled
+recorder with no history creates neither a database nor a worker.
 Existing history uses a maintenance worker so retention and deletion still apply
 when capture is off.
 
@@ -36,7 +37,8 @@ Defaults: disabled capture, 1,000 terminal requests, seven days, and a 5 GiB
 physical storage budget. Counts and budgets are configurable; 1,000 is not a
 hard ceiling. Internal safety defaults include a 64 MiB request cap, a 16 MiB
 attachment cap, 128 MiB observer memory, a 16 MiB content queue and 1,024 active
-capture slots. Attachments are not implemented by this foundation. Captured
+capture slots. Media normalization is present; attachment bytes/previews are not
+retained yet. Captured
 content is distinct from aggregate serving statistics and reusable KV caches.
 
 ## Source and adoption boundary
@@ -82,6 +84,11 @@ migration. `tests/test_activity_engine.py` exercises actual scheduler/core hook
 paths with mock models, including prepared-token reuse, producer output,
 deferred cancellation and failed insertion. Those need the normal test runtime;
 shared test imports may initialize Metal even though no real model is loaded.
+`tests/test_activity_snapshot.py` checks the actual four request schemas,
+explicit/null/extra fields, large-media text survival, nested references, plain
+file/tool data, immutable ownership, Unicode/chunk/size/depth boundaries,
+disabled behavior and clear/delete/disable/failure reservation races. It also
+checks that JSON encoding executes on the writer thread.
 `tests/test_activity_metrics.py` checks multiple invocations, cumulative-counter
 idempotence/regression, unavailable counts, capture-off fences, scalar evidence
 through queue loss and safe admission-option filtering. The engine integration
@@ -144,6 +151,39 @@ The first event is a `snapshot` with an epoch/sequence ID. Reconnect uses
 authorization is rechecked throughout a stream; `authorization_lost`,
 `unavailable` and `reconnect` are explicit terminal stream events. Data responses
 are marked no-store. This is not a lossless event-log/replay contract.
+
+## Submitted snapshot and media normalization
+
+Submitted input is frozen once before preprocessing into a bounded immutable
+semantic tree. The API admission walk does no JSON encoding, media decoding,
+network fetching or model work. It preserves explicitly set fields and extras
+from the validated request; unused defaults remain absent. JSON encoding and
+compression run on the Activity writer, in bounded chunks even for long escaped
+strings. Prepared model-input observation remains a separate representation.
+
+Recognized inline image/audio/video/file payload fields become ordered
+`_omlx_activity_attachment` references before queue admission. Small surrounding
+text therefore survives media that would have overflowed a whole-JSON snapshot.
+Plain text documents and ordinary tool-result JSON fields named `data` stay
+text. References include source position, kind, encoded size and explicit
+not-retained/submitted-unvalidated status. They do not prove media validation
+or engine acceptance. No attachment bytes or thumbnails are retained yet.
+External references are bounded metadata and are never fetched by Activity.
+
+The snapshot walk has memory/byte limits, an 8,192-node and 32-level traversal
+bound, and at most 128 detailed media references. Omitted values or tails leave
+explicit markers and capture gaps. Strings are shared only as immutable values
+with their storage charged; request/Pydantic objects and mutable containers do
+not cross to the writer. Queue space is reserved before walking and held through
+clear/delete/disable or worker failure until the in-flight snapshot releases it.
+This prevents deleted requests from being resurrected and avoids negative queue
+accounting after a persistence failure. These are bounded structural controls,
+not a completed throughput/overhead qualification.
+
+The readable submitted view shows attachment placeholders. Submitted JSON under
+More evidence exposes the retained normalized structure, including fields that
+the readable message layout does not display. Copy/download reflects the chosen
+view. The page explicitly labels normalized attachment payloads.
 
 ## Live controls
 
@@ -247,8 +287,9 @@ new non-English entries currently use the repository's English fallback.
 - Qualify hot-path overhead, worker memory, faithful raw/parsed output,
   cancellations, all required API modes and optional-engine boundaries.
 - Validate a fully composed private build separately from the focused source.
-- Semantic input export currently runs once at API ingress before preprocessing;
-  its cost on very large payloads and media normalization still need qualification.
+- The bounded semantic walk runs once before preprocessing. Qualify its overhead
+  with concurrent requests, large structures and actual model serving; the current
+  checks prove structural caps and handoff behavior, not serving performance.
 - Attachments and native restart/long-running viewer lifecycle remain to be
   completed or qualified. Image previews are not implemented yet.
 - Actual rendered-browser validation, text selection across virtualized windows,

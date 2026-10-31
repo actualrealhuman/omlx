@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import ActivitySettings
+from .snapshot import SemanticSnapshot, snapshot_request
 from .store import (
     MAX_CHUNK_BYTES,
     REPRESENTATIONS,
@@ -47,10 +48,12 @@ class _Chunk:
     handle: CaptureHandle
     representation: str
     invocation_id: str
-    data: bytes | str | tuple[int, ...]
+    data: bytes | str | tuple[int, ...] | SemanticSnapshot
 
     @property
     def estimated_bytes(self):
+        if isinstance(self.data, SemanticSnapshot):
+            return self.data.estimated_bytes
         if isinstance(self.data, str):
             return len(self.data) * 4
         if isinstance(self.data, tuple):
@@ -59,6 +62,8 @@ class _Chunk:
 
     @property
     def cost(self):
+        if isinstance(self.data, SemanticSnapshot):
+            return self.data.memory_bytes + _CHUNK_OVERHEAD
         if isinstance(self.data, tuple):
             return len(self.data) * 40 + _CHUNK_OVERHEAD
         if isinstance(self.data, str):
@@ -67,7 +72,9 @@ class _Chunk:
 
     def encoded_chunks(self):
         """Encode only on the worker, with a bounded temporary buffer."""
-        if isinstance(self.data, bytes):
+        if isinstance(self.data, SemanticSnapshot):
+            yield from self.data.encoded_chunks(MAX_CHUNK_BYTES)
+        elif isinstance(self.data, bytes):
             yield self.data
         elif isinstance(self.data, str):
             for start in range(0, len(self.data), MAX_CHUNK_BYTES // 4):
@@ -114,6 +121,8 @@ class ActivityRecorder:
         )
         self._pending_bytes = 0
         self._pending_count = 0
+        self._freezing_bytes = 0
+        self._freezing_count = 0
         self._closed = False
         self._stopping = False
         self._available = False
@@ -216,6 +225,82 @@ class ActivityRecorder:
         if type(tokens) not in (list, tuple):
             return False
         return self._offer(handle, "model_tokens", tokens, invocation_id=invocation_id)
+
+    def capture_submitted(self, handle, request):
+        """Reserve first, freeze bounded semantics outside the producer lock.
+
+        The mutable request remains exclusively in the API admission call; only
+        the completed immutable snapshot is handed to the persistence worker.
+        """
+        with self._lock:
+            pending = self._lookup(handle)
+            if (
+                pending is None
+                or self._closed
+                or not self.settings.enabled
+                or pending.metadata["finished_at"] is not None
+            ):
+                return False
+            reservation = self.settings.max_pending_bytes - self._pending_bytes
+            logical = self.settings.max_request_bytes - pending.accepted_bytes
+            if (
+                reservation < 8448
+                or logical < 8192
+                or self._pending_count >= _MAX_PENDING_CHUNKS
+            ):
+                self._gap(pending, "submitted_snapshot_capacity")
+                self._wake.set()
+                return False
+            self._pending_bytes += reservation
+            self._pending_count += 1
+            self._freezing_bytes += reservation
+            self._freezing_count += 1
+        try:
+            snapshot = snapshot_request(
+                request, memory_bytes=reservation - _CHUNK_OVERHEAD, max_bytes=logical
+            )
+            chunk = (
+                _Chunk(handle, "submitted", "0", snapshot)
+                if snapshot is not None
+                else None
+            )
+        except Exception:
+            chunk = None
+        with self._lock:
+            self._pending_bytes -= reservation
+            self._pending_count -= 1
+            self._freezing_bytes -= reservation
+            self._freezing_count -= 1
+            self._wake.set()  # A stopping worker may be waiting for this reservation.
+            pending = self._lookup(handle)
+            if (
+                pending is None
+                or self._closed
+                or not self.settings.enabled
+                or pending.metadata["finished_at"] is not None
+            ):
+                return False
+            if (
+                chunk is None
+                or chunk.cost > reservation
+                or pending.accepted_bytes + chunk.estimated_bytes
+                > self.settings.max_request_bytes
+            ):
+                self._gap(pending, "submitted_snapshot_unavailable")
+                self._wake.set()
+                return False
+            pending.metadata["submitted_normalized"] = bool(snapshot.media_count)
+            pending.metadata["submitted_media_references"] = snapshot.media_count
+            for reason in snapshot.reasons:
+                self._gap(pending, reason)
+            pending.accepted_bytes += chunk.estimated_bytes
+            pending.pending_chunks += 1
+            pending.version += 1
+            self._chunks.append(chunk)
+            self._pending_bytes += chunk.cost
+            self._pending_count += 1
+        self._wake.set()
+        return True
 
     def _offer(self, handle, representation, data, *, invocation_id):
         if handle is None or not self.settings.enabled or self._closed:
@@ -591,6 +676,7 @@ class ActivityRecorder:
                         and not self._pending
                         and not self._chunks
                         and not self._controls
+                        and not self._freezing_count
                     )
                 if done:
                     break
@@ -603,8 +689,8 @@ class ActivityRecorder:
                 self._controls.clear()
                 self._chunks.clear()
                 self._pending.clear()
-                self._pending_bytes = 0
-                self._pending_count = 0
+                self._pending_bytes = self._freezing_bytes
+                self._pending_count = self._freezing_count
             for _, _, future in waiting:
                 if not future.done():
                     future.set_exception(RuntimeError(self._error))

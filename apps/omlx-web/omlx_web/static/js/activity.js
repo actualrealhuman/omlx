@@ -215,7 +215,7 @@
                 }
                 if (loadedVersion === detail.version) return;
                 loadedVersion = detail.version;
-                worker.postMessage({type: 'sync', detail, labels: Object.fromEntries(roles.map(role => [role, label(`role.${role}`)]))});
+                worker.postMessage({type: 'sync', detail, labels: {...Object.fromEntries(roles.map(role => [role, label(`role.${role}`)])), attachment_not_retained: label('attachment_not_retained')}});
             },
             measure() {
                 const el = this.$refs.contextViewport;

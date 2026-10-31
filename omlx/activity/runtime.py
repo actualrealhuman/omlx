@@ -318,16 +318,7 @@ def observe_request(function):
         http_request.state.activity_capture = capture
         token = _current.set(capture)
         try:
-            raw_body = getattr(http_request, "_body", b"")
-            if len(raw_body) > recorder.settings.max_request_bytes:
-                recorder.gap(handle, "submitted_input_size_limit")
-            else:
-                try:
-                    capture.text(
-                        "submitted", request.model_dump_json(exclude_unset=True)
-                    )
-                except Exception:
-                    recorder.gap(handle, "submitted_input_unavailable")
+            recorder.capture_submitted(handle, request)
             recorder.state(handle, "preparing")
             try:
                 response = await function(*args, **kwargs)

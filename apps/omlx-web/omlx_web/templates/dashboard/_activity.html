@@ -75,13 +75,14 @@
                         <button class="segmented__item" :class="mode === 'model' ? 'segmented__item--active' : ''" :aria-pressed="mode === 'model'" @click="mode = 'model'; changeMode()">{{ t('activity.model_view') }}</button>
                     </div>
                     <select aria-label="{{ t('activity.evidence') }}" :value="['submitted', 'model'].includes(mode) ? '' : mode" @change="if ($event.target.value) { mode = $event.target.value; changeMode(); }">
-                        <option value="">{{ t('activity.evidence') }}</option><option value="model_tokens">{{ t('activity.role.model_tokens') }}</option><option value="api_response">{{ t('activity.role.api_response') }}</option><option value="events">{{ t('activity.role.events') }}</option>
+                        <option value="">{{ t('activity.evidence') }}</option><option value="submitted_json">{{ t('activity.submitted_json') }}</option><option value="model_tokens">{{ t('activity.role.model_tokens') }}</option><option value="api_response">{{ t('activity.role.api_response') }}</option><option value="events">{{ t('activity.role.events') }}</option>
                     </select>
                     <button @click="confirmRemoval('delete')" :disabled="controlBusy">{{ t('activity.delete_request') }}</button>
                     <button @click="exportView('copy')" :disabled="exporting || loading || !total">{{ t('activity.copy') }}</button>
                     <button @click="exportView()" :disabled="exporting || loading || !total" x-text="label(exporting ? 'exporting' : 'download')"></button>
                 </div>
                 <p class="activity-fidelity" x-text="label(mode === 'model' ? 'model_fidelity' : mode === 'submitted' ? 'submitted_fidelity' : 'evidence_fidelity')"></p>
+                <p x-show="detail?.submitted_normalized" class="activity-fidelity">{{ t('activity.media_normalized') }}</p>
                 <div class="activity-navigation">
                     <button @click="outlineOpen = !outlineOpen" :aria-expanded="outlineOpen" aria-controls="activity-outline">{{ t('activity.outline') }}</button>
                     <button class="activity-icon-button" @click="navigate(-1)" :disabled="!total" aria-label="{{ t('activity.previous_message') }}">↑</button><button class="activity-icon-button" @click="navigate(1)" :disabled="!total" aria-label="{{ t('activity.next_message') }}">↓</button>

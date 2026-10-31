@@ -2389,5 +2389,8 @@
   "activity.invocations": "Observed invocations",
   "activity.first_token": "First observed token",
   "activity.first_token_hint": "Time from Activity receipt to the first producer update reporting generated tokens. This is not HTTP delivery time.",
-  "activity.counts_scope": "Counts cover observed scheduler invocations only. Missing values are unknown; they are not inferred from text length. Input includes the logical admitted prefix, including cached tokens. Invocation events contain admission settings and terminal reasons."
+  "activity.counts_scope": "Counts cover observed scheduler invocations only. Missing values are unknown; they are not inferred from text length. Input includes the logical admitted prefix, including cached tokens. Invocation events contain admission settings and terminal reasons.",
+  "activity.attachment_not_retained": "payload not retained; preview unavailable",
+  "activity.submitted_json": "Submitted JSON",
+  "activity.media_normalized": "Attachment payloads were replaced with ordered references before capture. Surrounding text is retained where limits allow. Preview bytes are not retained yet; use Submitted JSON for the normalized structure."
 }

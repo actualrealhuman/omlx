@@ -16,24 +16,29 @@
         }
         return end;
     }
-    function textValue(value) {
+    function textValue(value, labels = {}) {
         if (typeof value === 'string') return value;
         if (Array.isArray(value)) return value.map(part => {
             if (typeof part === 'string') return part;
             if (part && typeof part.text === 'string') return part.text;
             // Media stays inert; never render URLs/base64 as HTML or refetch it.
-            if (part && /image|audio|video|file/.test(part.type || '')) {
-                return `[${part.type}: attachment preview unavailable]`;
+            if (part && /image|audio|video|file|document/.test(part.type || '')) {
+                if (part.type === 'document' && part.source?.type === 'text') return String(part.source.data || '');
+                const candidates = [part.image_url?.url, part.image_url, part.input_image, part.url, part.source?.data,
+                    part.source?.url, part.input_audio?.data, part.video_url?.url, part.video_url, part.input_video?.url,
+                    part.input_video, part.file?.file_data, part.file?.data, part.file?.file_id, part.file_data, part.file_id];
+                const reference = candidates.find(item => item?._omlx_activity_attachment)?._omlx_activity_attachment;
+                return `[${part.type}${reference?.id ? ' · ' + reference.id : ''}: ${labels.attachment_not_retained || 'attachment preview unavailable'}]`;
             }
             return JSON.stringify(part, null, 2);
         }).join('\n');
         return value == null ? '' : JSON.stringify(value, null, 2);
     }
-    function submittedSections(text) {
+    function submittedSections(text, labels = {}) {
         try {
             const payload = JSON.parse(text), sections = [];
             const add = (key, role, value) => {
-                const body = textValue(value);
+                const body = textValue(value, labels);
                 if (body) sections.push({key, role, text: body});
             };
             add('instructions', 'system', payload.system ?? payload.instructions);

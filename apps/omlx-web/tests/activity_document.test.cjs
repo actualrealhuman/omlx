@@ -105,4 +105,17 @@ test('actual worker incrementally decodes split UTF-8 and searches retained cont
     context.self.onmessage({data: {type: 'search', query: 'needle', match: -1}});
     assert.equal(outputs.at(-1).search.count, 1);
     assert.equal(outputs.at(-1).search.match, 0);
+    context.self.onmessage({data: {type: 'mode', mode: 'submitted_json'}});
+    const jsonRows = outputs.at(-1).rows.map(row => row.text).join('');
+    assert.match(jsonRows, /"messages"/);
+    assert.ok(!jsonRows.includes('answer 世界'));
+});
+
+test('normalized attachment references remain visible and plain documents stay readable', () => {
+    const sections = submittedSections(JSON.stringify({messages: [{role: 'user', content: [
+        {type: 'image_url', image_url: {url: {_omlx_activity_attachment: {id: 'attachment-1', status: 'not_retained'}}}},
+        {type: 'document', source: {type: 'text', data: 'useful document text'}},
+    ]}]}), {attachment_not_retained: 'not retained'});
+    assert.match(sections[0].text, /attachment-1: not retained/);
+    assert.match(sections[0].text, /useful document text/);
 });
