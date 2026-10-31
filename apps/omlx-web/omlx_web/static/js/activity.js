@@ -7,14 +7,15 @@
     function activityInspector() {
         let stream, worker, resize, controller, retry, searchTimer, frame, invocationController;
         let invocationGeneration = 0;
-        let generation = 0, activation = 0, loadedVersion = '', stopped = true, lastFacets = 0, exportSequence = 0;
+        let generation = 0, activation = 0, loadedVersion = '', stopped = true, lastFacets = 0, exportSequence = 0, programmaticScrollRow = null;
         const positions = new Map();
         const label = key => root.t(`activity.${key}`);
         return {
             active: [], recent: [], older: [], detail: null, selected: '', health: {}, facets: {models: [], sources: []},
             modelFilter: '', sourceFilter: '', connection: 'connecting', error: '', missing: false, authorizationLost: false,
-            mode: 'submitted', follow: true, loading: false, limited: false, rows: [], outline: [], total: 0,
-            outlineOpen: false, outlineTruncated: false, current: null, row: 0, visibleRows: 25, columns: 100,
+            mode: 'submitted', follow: true, loading: false, limited: false, rows: [], outline: [], rail: [], total: 0,
+            outlineOpen: false, outlineOffset: 0, outlineTotal: 0, outlinePageSize: 128, outlineHasPrevious: false, outlineHasNext: false,
+            current: null, row: 0, visibleRows: 25, columns: 100,
             searchQuery: '', searchResult: {count: 0, match: 0, marks: []}, activeMore: false, recentMore: false,
             pageCursor: '', pageScope: 'recent', paging: false, exporting: false, exportError: '', exportContext: null, newOutput: false, viewReady: false, outputBytes: 0,
             settingsOpen: false, settingsDraft: {enabled: false, retain_images: true, max_requests: 1000, max_age_days: 7, storageGiB: 5},
@@ -148,7 +149,7 @@
                             this.missing = !snapshot.detail;
                             this.detail = snapshot.detail;
                             if (snapshot.detail && snapshot.detail.id === this.selected) this.inspect(snapshot.detail);
-                            else if (!snapshot.detail) { this.resetInvocationDetail(); this.exportContext = null; this.exporting = false; this.exportError = ''; this.attachmentsOpen = false; this.previewId = ''; generation++; worker?.terminate(); worker = null; loadedVersion = ''; this.rows = []; this.outline = []; this.current = null; this.total = 0; }
+                            else if (!snapshot.detail) { this.resetInvocationDetail(); this.exportContext = null; this.exporting = false; this.exportError = ''; this.attachmentsOpen = false; this.previewId = ''; generation++; worker?.terminate(); worker = null; loadedVersion = ''; this.rows = []; this.outline = []; this.rail = []; this.current = null; this.total = 0; this.outlineOffset = 0; this.outlineTotal = 0; }
                         }
                         this.loadFacets().catch(() => {});
                     } catch (_) { this.error = label('invalid_snapshot'); }
@@ -178,7 +179,7 @@
                 this.selected = id; this.detail = null; this.missing = false; this.error = '';
                 this.exportContext = null; this.exporting = false; this.exportError = '';
                 this.attachmentsOpen = false; this.previewId = ''; this.previewFailed = false;
-                this.rows = []; this.outline = []; this.total = 0; this.loading = !!id;
+                this.rows = []; this.outline = []; this.rail = []; this.outlineOffset = 0; this.outlineTotal = 0; this.total = 0; this.loading = !!id;
                 this.current = null; this.viewReady = false; this.outputBytes = 0; this.exporting = false;
                 this.projectionState = 'waiting';
                 this.projectionIncomplete = false;
@@ -217,19 +218,22 @@
                             // text nodes when output elsewhere in the document grows.
                             Object.assign(existing, line, {copyContext}); return existing;
                         });
-                        this.outline = data.outline; this.total = data.total;
+                        this.outline = data.outline || []; this.rail = data.rail || []; this.total = data.total;
+                        this.outlineOffset = data.outlineOffset || 0; this.outlineTotal = data.outlineTotal || 0;
+                        this.outlinePageSize = data.outlinePageSize || 128;
+                        this.outlineHasPrevious = !!data.outlineHasPrevious; this.outlineHasNext = !!data.outlineHasNext;
                         this.outputBytes = data.outputBytes || 0;
                         if (!data.loading) this.viewReady = true;
                         this.current = data.current;
                         this.loading = data.loading; this.limited = data.limited;
                         this.projectionState = data.projectionState || 'waiting';
                         this.projectionIncomplete = !!data.projectionIncomplete;
-                        this.outlineTruncated = data.outlineTruncated; this.searchResult = data.search;
+                        this.searchResult = data.search;
                         this.row = data.row;
                         this.$nextTick(() => {
                             if (token !== generation || stopped) return;
                             const el = this.$refs.contextViewport, top = this.scrollPixels(data.row);
-                            if (Math.abs(el.scrollTop - top) > ROW_HEIGHT) el.scrollTop = top;
+                            if (Math.abs(el.scrollTop - top) > ROW_HEIGHT) { programmaticScrollRow = data.row; el.scrollTop = top; }
                         });
                     };
                     worker.onerror = () => { this.error = label('worker_failed'); this.loading = false; };
@@ -269,7 +273,7 @@
                 if (!id) this.allPosition = null;
                 clearTimeout(searchTimer); this.searchQuery = ''; this.searchResult = {count: 0, match: 0, marks: []};
                 generation++; worker?.terminate(); worker = null; loadedVersion = '';
-                this.rows = []; this.outline = []; this.total = 0; this.current = null; this.viewReady = false; this.outputBytes = 0;
+                this.rows = []; this.outline = []; this.rail = []; this.outlineOffset = 0; this.outlineTotal = 0; this.total = 0; this.current = null; this.viewReady = false; this.outputBytes = 0;
                 this.loading = !!this.detail; this.newOutput = false; this.exporting = false;
                 this.exportContext = null; this.exportError = '';
                 if (this.detail) this.inspect(this.detail);
@@ -338,8 +342,8 @@
                 this.visibleRows = Math.ceil(el.clientHeight / ROW_HEIGHT);
                 this.viewport();
             },
-            viewport() {
-                worker?.postMessage({type: 'viewport', row: this.row, count: this.visibleRows + 20, columns: this.columns, follow: this.follow});
+            viewport(revealOutline = false) {
+                worker?.postMessage({type: 'viewport', row: this.row, count: this.visibleRows + 20, columns: this.columns, follow: this.follow, revealOutline});
             },
             onScroll() {
                 cancelAnimationFrame(frame);
@@ -347,6 +351,8 @@
                     const physical = this.$refs.contextViewport.scrollTop / ROW_HEIGHT;
                     const next = this.total <= 200000 ? Math.floor(physical) : Math.round(
                         physical / Math.max(1, 200000 - this.visibleRows) * Math.max(0, this.total - this.visibleRows));
+                    if (programmaticScrollRow !== null && Math.abs(next - programmaticScrollRow) <= 1) { programmaticScrollRow = null; return; }
+                    programmaticScrollRow = null;
                     if (Math.abs(next - this.row) > 1) { this.follow = false; this.row = next; this.viewport(); }
                 });
             },
@@ -363,10 +369,30 @@
                 this.row = 0; this.follow = false; worker?.postMessage({type: 'mode', mode: this.mode});
             },
             jump(row) { this.follow = false; worker?.postMessage({type: 'jump', row}); },
+            jumpSection(key) { this.follow = false; worker?.postMessage({type: 'jump-section', key}); },
+            pageOutline(direction) {
+                const offset = Math.max(0, Math.min(Math.floor(Math.max(0, this.outlineTotal - 1) / this.outlinePageSize) * this.outlinePageSize,
+                    this.outlineOffset + direction * this.outlinePageSize));
+                worker?.postMessage({type: 'outline-page', offset});
+            },
+            outlinePageLabel() {
+                const start = this.outlineTotal ? this.outlineOffset + 1 : 0;
+                const end = Math.min(this.outlineTotal, this.outlineOffset + this.outlinePageSize);
+                return label('outline_page').replace('{start}', start).replace('{end}', end).replace('{total}', this.outlineTotal);
+            },
+            messageOrdinal() {
+                return this.current?.ordinal ? label('message_ordinal').replace('{current}', this.current.ordinal).replace('{total}', this.outlineTotal) : '';
+            },
+            railTitle(bucket) {
+                const range = bucket.from === bucket.to ? `${bucket.from}` : `${bucket.from}–${bucket.to}`;
+                const group = label(bucket.role === 'mixed' ? 'role.mixed' : `role.${bucket.role}`);
+                const preview = String(bucket.preview || '').slice(0, 128);
+                return label('rail_bucket').replace('{start}', range).replace('{count}', bucket.count).replace('{role}', group).replace('{preview}', preview);
+            },
             navigate(direction) {
                 this.follow = false; worker?.postMessage({type: 'navigate', direction});
             },
-            followOutput() { this.follow = true; this.newOutput = false; this.row = Math.max(0, this.total - this.visibleRows); this.viewport(); },
+            followOutput() { this.follow = true; this.newOutput = false; this.row = Math.max(0, this.total - this.visibleRows); this.viewport(true); },
             search(direction = 0) {
                 clearTimeout(searchTimer);
                 searchTimer = setTimeout(() => {

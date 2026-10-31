@@ -112,6 +112,104 @@ test('actual worker incrementally decodes split UTF-8 and searches retained cont
     assert.ok(!jsonRows.includes('answer 世界'));
 });
 
+test('worker pages the complete outline and keeps aggregate rail and stable-key navigation bounded', async () => {
+    const outputs = [], totalMessages = 4105;
+    let submitted = JSON.stringify({messages: Array.from({length: totalMessages}, (_, i) => ({role: i % 2 ? 'assistant' : 'user',
+        content: i === 0 ? `large ${'x'.repeat(2 * 1024 * 1024)}` : `message-${i}`}))});
+    let output = 'tail output';
+    const buffers = () => ({submitted: Buffer.from(submitted), raw_output: Buffer.from(output)});
+    const context = {ActivityDocumentTools: {ActivityDocument, submittedSections}, ActivityOutputTools: require('../omlx_web/static/js/activity_output.js'),
+        importScripts() {}, TextDecoder, URLSearchParams, Blob, self: {}, postMessage: value => outputs.push(value),
+        fetch: async url => {
+            const params = new URL(url, 'http://test.invalid').searchParams, data = buffers()[params.get('representation')];
+            const offset = Number(params.get('offset'));
+            return {ok: true, arrayBuffer: async () => Uint8Array.from(data.subarray(offset, offset + 65536)).buffer};
+        }};
+    vm.createContext(context);
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../omlx_web/static/js/activity_worker.js'), 'utf8'), context);
+    context.self.onmessage({data: {type: 'viewport', row: 0, count: 45, columns: 80, follow: false}});
+    const sync = () => context.self.onmessage({data: {type: 'sync', detail: {id: 'synthetic', endpoint: '/v1/chat/completions',
+        representations: Object.entries(buffers()).map(([representation, data]) => ({representation, bytes: data.length, invocation_id: representation === 'submitted' ? '0' : '1'}))}}});
+    const waitForRender = async () => {
+        for (let attempt = 0; attempt < 100 && !outputs.some(value => value.type === 'render' && !value.loading && value.outlineTotal > 0); attempt++) await new Promise(resolve => setImmediate(resolve));
+        return outputs.filter(value => value.type === 'render').at(-1);
+    };
+    sync();
+    let view = await waitForRender();
+    assert.equal(view.outlineTotal, totalMessages + 1); // The raw output section is included after submitted input.
+    assert.ok(view.outline.length <= 128);
+    assert.ok(view.rail.length <= 256);
+    assert.ok(view.outline.every(item => !('text' in item) && !('checkpoints' in item) && item.label.length <= 256));
+    assert.ok(view.rail.every(item => item.preview.length <= 128));
+    assert.ok(view.rail.some(item => item.role === 'mixed'));
+    assert.ok(Buffer.byteLength(JSON.stringify({outline: view.outline, rail: view.rail})) < 100000);
+    assert.equal(view.rail[0].row, 0);
+    assert.equal(view.rail.at(-1).row + view.rail.at(-1).rows, view.total);
+    const beforeOutlineRow = view.row;
+    context.self.onmessage({data: {type: 'outline-page', offset: 128}});
+    view = outputs.at(-1);
+    assert.equal(view.outlineOffset, 128);
+    assert.equal(view.row, beforeOutlineRow, 'changing outline pages must not move the document');
+    assert.equal(view.outline[0].key, 'submitted:0:message-128');
+    output += ' appended while the outline page is browsed';
+    outputs.length = 0;
+    sync(); view = await waitForRender();
+    assert.equal(view.outlineOffset, 128, 'live sync must preserve the manually browsed outline page');
+    assert.equal(view.row, beforeOutlineRow, 'live sync must preserve the selected document row');
+    context.self.onmessage({data: {type: 'outline-page', offset: 999999}});
+    view = outputs.at(-1);
+    assert.equal(view.outlineOffset, Math.floor((totalMessages - 1) / 128) * 128);
+    context.self.onmessage({data: {type: 'jump', row: 0}});
+    assert.equal(outputs.at(-1).outlineOffset, 0, 'rail jumps reveal the current outline page');
+    context.self.onmessage({data: {type: 'viewport', row: view.total - 1, count: 45, columns: 80, follow: false}});
+    assert.equal(outputs.at(-1).outlineOffset, Math.floor((totalMessages - 1) / 128) * 128,
+        'ordinary scrolling reveals the current outline page without enabling follow');
+    context.self.onmessage({data: {type: 'outline-page', offset: 128}});
+    context.self.onmessage({data: {type: 'viewport', row: view.total - 1, count: 45, columns: 80, follow: true, revealOutline: true}});
+    assert.equal(outputs.at(-1).outlineOffset, Math.floor((totalMessages - 1) / 128) * 128,
+        'explicit Follow reveals the current outline page even when the viewport has not moved');
+    assert.equal(view.outlineHasNext, false);
+    const tailKey = `submitted:0:message-${totalMessages - 1}`;
+    context.self.onmessage({data: {type: 'jump-section', key: tailKey}});
+    view = outputs.at(-1);
+    assert.equal(view.current.key, tailKey);
+    assert.equal(view.current.ordinal, totalMessages);
+    assert.equal(view.outlineOffset, Math.floor((totalMessages - 1) / 128) * 128);
+    context.self.onmessage({data: {type: 'jump-section', key: 'submitted:0:message-127'}});
+    context.self.onmessage({data: {type: 'navigate', direction: 1}});
+    assert.equal(outputs.at(-1).current.ordinal, 129);
+    assert.equal(outputs.at(-1).outlineOffset, 128);
+    context.self.onmessage({data: {type: 'navigate', direction: -1}});
+    assert.equal(outputs.at(-1).current.ordinal, 128);
+    context.self.onmessage({data: {type: 'jump-section', key: tailKey}});
+    const tailRow = view.current.row;
+    context.self.onmessage({data: {type: 'navigate', direction: -1}});
+    assert.equal(outputs.at(-1).current.ordinal, totalMessages - 1);
+    context.self.onmessage({data: {type: 'navigate', direction: 1}});
+    assert.equal(outputs.at(-1).current.ordinal, totalMessages);
+
+    // Output append and a width reflow change the live row mapping. Stable keys still resolve the tail.
+    output += ' more appended output';
+    outputs.length = 0;
+    sync(); view = await waitForRender();
+    assert.equal(view.current.key, tailKey);
+    assert.equal(view.current.row, tailRow);
+    outputs.length = 0;
+    context.self.onmessage({data: {type: 'viewport', row: view.row, count: 45, columns: 24, follow: false}});
+    view = outputs.at(-1);
+    assert.notEqual(view.current.row, tailRow);
+    assert.equal(view.current.key, tailKey);
+    context.self.onmessage({data: {type: 'jump-section', key: tailKey}});
+    assert.equal(outputs.at(-1).row, outputs.at(-1).current.row);
+    assert.equal(outputs.at(-1).current.ordinal, totalMessages);
+
+    // Mode replacement resets the page and ordinal to the start of the new index.
+    context.self.onmessage({data: {type: 'mode', mode: 'model'}});
+    assert.equal(outputs.at(-1).outlineOffset, 0);
+    assert.equal(outputs.at(-1).outlineTotal, 1);
+    assert.equal(outputs.at(-1).current.ordinal, 1);
+});
+
 test('normalized attachment references remain visible and plain documents stay readable', () => {
     const sections = submittedSections(JSON.stringify({messages: [{role: 'user', content: [
         {type: 'image_url', image_url: {url: {_omlx_activity_attachment: {id: 'attachment-1', status: 'not_retained'}}}},

@@ -584,8 +584,20 @@ of combining characters. Only a bounded viewport is mounted, with at most 200
 text rows per worker response. A bounded physical scroll axis avoids browser
 maximum element-height limits for very tall documents. The semantic rail,
 outline and search target logical message/character anchors. Live appends retain
-that anchor unless Follow output is selected. Outline/rail metadata is capped
-at 2,000 sections; search rail marks at 500, with full match counts retained.
+that anchor unless Follow output is selected. The outline pages through the
+whole worker index with at most 128 metadata-only entries at once. Paging does
+not scroll the document; selecting an entry resolves its stable key against the
+current index. Scrolling, rail jumps, search and previous/next navigation reveal
+the corresponding outline page; live appends preserve a manually browsed page.
+A Message/block ordinal names the current position in the full section index,
+which also includes tool definitions, options and raw evidence blocks.
+
+The rail covers all indexed rows with at most 256 aggregate segments. Grouped
+segments report their section range/count and mixed roles explicitly; previews
+are bounded to 128 characters. Full bodies and sparse line indexes stay in the
+worker. Search rail marks remain capped at 500, with full match counts retained.
+Synthetic checks cover over 4,100 sections and a 2 MiB section without full
+bodies in outline/rail updates; rendered-browser interaction remains unqualified.
 
 Observed dashboard waiting/prefill/generation rows link to the parent Activity
 request. Links support modified clicks and browser history. Uncorrelated or
@@ -662,8 +674,8 @@ of model/raw/JSON evidence modes. Rendered-browser behavior remains unqualified.
   large-image throughput and native restart/long-running viewer lifecycle remain
   to be qualified. The first source slice now includes supported inline previews.
 - Actual rendered-browser validation, text selection and message-copy interaction
-  across virtualized windows, complete large-outline
-  navigation and deep-link history polish remain to be qualified or completed.
+  across virtualized windows, paged outline/aggregate rail navigation and
+  deep-link history polish remain to be qualified.
   Native browser Find sees only mounted text; use the inspector search instead.
 
 No source publication, packaged binary, compatibility guarantee or upstream

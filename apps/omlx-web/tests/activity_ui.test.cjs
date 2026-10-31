@@ -91,6 +91,21 @@ test('reading away from the tail disables follow and keeps a stable viewport', a
     await app.activate(false);
 });
 
+test('outline paging is a worker command and invocation replacement clears prior outline position', async () => {
+    const {app, streams, workers} = harness();
+    await app.activate(true);
+    streams.at(-1).events.snapshot({data: JSON.stringify({active: [], recent: [], health: {}, detail: {id: 'first', version: '1', representations: []}})});
+    app.outlineOffset = 128; app.outlineTotal = 4100; app.outlinePageSize = 128;
+    app.pageOutline(1);
+    assert.equal(workers.at(-1).messages.at(-1).type, 'outline-page');
+    assert.equal(workers.at(-1).messages.at(-1).offset, 256);
+    app.detail = {invocations: [{id: '1', state: 'completed'}], representations: []};
+    app.chooseInvocation('1');
+    assert.equal(app.outlineOffset, 0);
+    assert.equal(app.outlineTotal, 0);
+    await app.activate(false);
+});
+
 test('extremely tall documents stay within browser element-height limits', () => {
     const {app} = harness();
     app.total = 10000000; app.visibleRows = 30; app.row = 9000000;

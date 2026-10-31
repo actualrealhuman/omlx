@@ -6,11 +6,16 @@ const {ApiOutput} = ActivityOutputTools;
 const documentView = new ActivityDocument();
 const sources = new Map();
 const MAX_BYTES = 64 * 1024 * 1024;
+const OUTLINE_PAGE_SIZE = 128, MAX_RAIL_BUCKETS = 256;
 let detail, mode = 'submitted', labels = {}, viewport = {row: 0, count: 100, columns: 100};
 let bytes = 0, busy = false, pending = false, loading = false, limited = false;
 let query = '', match = 0, follow = true;
 let searchCache = null;
+let outlineOffset = 0, outlineManual = false, rail = [];
 
+function boundedText(value, limit) {
+    return String(value ?? '').slice(0, limit).replace(/[\uD800-\uDBFF]$/, '');
+}
 function sections() {
     const result = [];
     const hasWire = [...sources.values()].some(source => source.item.representation === 'api_response' && source.projection?.family);
@@ -41,10 +46,24 @@ function projectionState() {
 function projectionIncomplete() {
     return ['submitted', 'parsed_output'].includes(mode) && ['partial', 'limited', 'streaming', 'waiting'].includes(projectionState());
 }
+function buildRail() {
+    const all = documentView.sections, bucketSize = Math.max(1, Math.ceil(all.length / MAX_RAIL_BUCKETS));
+    rail = [];
+    for (let start = 0; start < all.length; start += bucketSize) {
+        const group = all.slice(start, start + bucketSize), first = group[0], last = group[group.length - 1];
+        const roles = new Set(group.map(section => section.role));
+        rail.push({role: roles.size === 1 ? first.role : 'mixed', row: first.start,
+            rows: last.start + last.count + 1 - first.start, from: start + 1, to: start + group.length, count: group.length,
+            preview: boundedText(first.text, 128).replace(/\s+/g, ' ')});
+    }
+}
 function render(reindex = false) {
     if (reindex) {
         const anchor = documentView.anchor(viewport.row);
         documentView.setSections(sections(), viewport.columns);
+        buildRail();
+        outlineOffset = Math.min(Math.floor(outlineOffset / OUTLINE_PAGE_SIZE) * OUTLINE_PAGE_SIZE,
+            Math.max(0, Math.floor((documentView.sections.length - 1) / OUTLINE_PAGE_SIZE) * OUTLINE_PAGE_SIZE));
         if (follow) viewport.row = Math.max(0, documentView.rows - Math.max(1, viewport.count - 20));
         else if (anchor) viewport.row = documentView.rowFor(anchor.key, anchor.offset);
         searchCache = null;
@@ -52,14 +71,21 @@ function render(reindex = false) {
     const search = searchCache || (searchCache = documentView.search(query, match));
     const start = Math.max(0, viewport.row - 10);
     const targetRow = search.target ? documentView.rowFor(search.target.key, search.target.offset) : -1;
-    const current = documentView.sections.find(s => viewport.row >= s.start && viewport.row < s.start + s.count + 1);
+    const currentIndex = documentView.sections.findIndex(s => viewport.row >= s.start && viewport.row < s.start + s.count + 1);
+    const current = currentIndex >= 0 ? documentView.sections[currentIndex] : null;
+    if (!outlineManual && currentIndex >= 0) outlineOffset = Math.floor(currentIndex / OUTLINE_PAGE_SIZE) * OUTLINE_PAGE_SIZE;
+    const outline = documentView.sections.slice(outlineOffset, outlineOffset + OUTLINE_PAGE_SIZE).map((section, index) => ({
+        key: section.key, label: boundedText(section.label || section.role, 256), role: section.role,
+        row: section.start, rows: section.count + 1, ordinal: outlineOffset + index + 1,
+    }));
     postMessage({type: 'render', mode, rows: documentView.window(start, viewport.count).map(line => ({...line, match: line.row === targetRow})), total: documentView.rows,
         row: viewport.row, loading, limited, bytes,
         projectionState: projectionState(), projectionIncomplete: projectionIncomplete(),
         outputBytes: [...sources.values()].filter(source => source.item.representation === 'raw_output' || (['submitted', 'parsed_output', 'api_response'].includes(mode) && source.item.representation === 'api_response')).reduce((sum, source) => sum + source.offset, 0),
-        current: current ? {key: current.key, label: current.label, row: current.start} : null,
-        outline: documentView.sections.slice(0, 2000).map(s => ({key: s.key, label: s.label, role: s.role, row: s.start, rows: s.count + 1})),
-        outlineTruncated: documentView.sections.length > 2000,
+        current: current ? {key: current.key, label: boundedText(current.label || current.role, 256), row: current.start, ordinal: currentIndex + 1} : null,
+        outline, outlineOffset, outlineTotal: documentView.sections.length, outlinePageSize: OUTLINE_PAGE_SIZE,
+        outlineHasPrevious: outlineOffset > 0, outlineHasNext: outlineOffset + OUTLINE_PAGE_SIZE < documentView.sections.length,
+        rail,
         search: {count: search.count, match, marks: search.marks, markersTruncated: search.markersTruncated},
     });
 }
@@ -110,17 +136,33 @@ self.onmessage = ({data}) => {
         sync();
     } else if (data.type === 'viewport') {
         const changed = data.columns !== viewport.columns;
+        const moved = data.row !== undefined && data.row !== viewport.row;
         viewport = {...viewport, ...data}; follow = data.follow;
+        if (moved || data.revealOutline) outlineManual = false;
         render(changed);
     } else if (data.type === 'mode') {
-        mode = data.mode; viewport.row = 0; follow = false; render(true);
+        mode = data.mode; viewport.row = 0; follow = false; outlineOffset = 0; outlineManual = false; render(true);
+    } else if (data.type === 'outline-page') {
+        outlineOffset = Math.max(0, Math.min(Math.floor(Math.max(0, data.offset || 0) / OUTLINE_PAGE_SIZE) * OUTLINE_PAGE_SIZE,
+            Math.floor(Math.max(0, documentView.sections.length - 1) / OUTLINE_PAGE_SIZE) * OUTLINE_PAGE_SIZE));
+        outlineManual = true; render();
+    } else if (data.type === 'jump-section') {
+        const section = documentView.sections.find(item => item.key === data.key);
+        if (section) {
+            follow = false; outlineManual = false;
+            outlineOffset = Math.floor(documentView.sections.indexOf(section) / OUTLINE_PAGE_SIZE) * OUTLINE_PAGE_SIZE;
+            viewport.row = section.start; render();
+        }
     } else if (data.type === 'jump') {
-        follow = false; viewport.row = Math.max(0, data.row); render();
+        follow = false; outlineManual = false; viewport.row = Math.max(0, data.row); render();
     } else if (data.type === 'navigate') {
         const starts = documentView.sections.map(s => s.start);
         viewport.row = data.direction > 0 ? starts.find(row => row > viewport.row + 1) ?? Math.max(0, documentView.rows - 1)
             : starts.reverse().find(row => row < viewport.row - 1) ?? 0;
-        follow = false; render();
+        follow = false; outlineManual = false;
+        const index = documentView.sections.findIndex(section => viewport.row >= section.start && viewport.row < section.start + section.count + 1);
+        if (index >= 0) outlineOffset = Math.floor(index / OUTLINE_PAGE_SIZE) * OUTLINE_PAGE_SIZE;
+        render();
     } else if (data.type === 'search') {
         query = data.query; match = data.match;
         let found = documentView.search(query, match);
@@ -128,7 +170,11 @@ self.onmessage = ({data}) => {
             match = ((match % found.count) + found.count) % found.count;
             found = documentView.search(query, match);
         }
-        if (found.target) { follow = false; viewport.row = documentView.rowFor(found.target.key, found.target.offset); }
+        if (found.target) {
+            follow = false; outlineManual = false; viewport.row = documentView.rowFor(found.target.key, found.target.offset);
+            const index = documentView.sections.findIndex(section => section.key === found.target.key);
+            if (index >= 0) outlineOffset = Math.floor(index / OUTLINE_PAGE_SIZE) * OUTLINE_PAGE_SIZE;
+        }
         searchCache = found;
         render();
     } else if (data.type === 'export') {
