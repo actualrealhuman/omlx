@@ -75,6 +75,104 @@ test('native dashboard deep links preserve modified click and browser navigation
     assert.equal(window.location.searchParams.has('request'), false);
 });
 
+test('filters reconnect the complete query, clear old population and retain selected detail', async () => {
+    const {app, streams} = harness();
+    await app.activate(true);
+    app.active = [{id: 'old-active'}]; app.recent = [{id: 'old-recent'}];
+    app.activityActiveCount = 4; app.selected = 'first';
+    app.scopeFilter = 'recent'; app.modelFilter = 'model-a'; app.sourceFilter = 'source-a';
+    app.stateFilter = 'completed'; app.receivedFrom = '2026-10-31T10:00'; app.receivedUntil = '2026-10-31T11:00';
+    app.filtersChanged();
+    const stream = streams.at(-1), query = new URL(stream.url, 'http://test.invalid').searchParams;
+    assert.equal(query.get('request_id'), 'first');
+    assert.equal(query.get('scope'), 'recent');
+    assert.equal(query.get('model_id'), 'model-a');
+    assert.equal(query.get('source_id'), 'source-a');
+    assert.equal(query.get('state'), 'completed');
+    assert.ok(Number.isFinite(Number(query.get('since'))));
+    assert.ok(Number.isFinite(Number(query.get('until'))));
+    assert.equal(app.selected, 'first');
+    assert.equal(app.active.length + app.recent.length, 0);
+    assert.equal(app.activityActiveCount, null);
+    assert.equal(app.filtersLoading, true);
+    assert.deepEqual(Array.from(app.visibleGroups(), group => group.scope), ['recent']);
+    stream.events.snapshot({data: JSON.stringify({active: [], recent: [], active_more: false, recent_more: false,
+        detail: {id: 'first', version: '1', representations: []}, selected_outside_filters: true, health: {}})});
+    assert.equal(app.selectedOutsideFilters, true);
+    assert.equal(app.filtersLoading, false);
+    assert.equal(app.activityActiveCount, null);
+    const opened = streams.length;
+    app.receivedFrom = '2026-10-31T12:00'; app.receivedUntil = '2026-10-31T11:00';
+    app.filtersChanged();
+    assert.equal(streams.length, opened);
+    assert.equal(app.selected, 'first');
+    assert.ok(app.filterError);
+    assert.equal(stream.closed, true);
+    app.select('second');
+    assert.equal(streams.length, opened);
+    assert.equal(app.selected, 'second');
+    await app.activate(false);
+});
+
+test('selection reconnect preserves same-filter browse pages and cursor', async () => {
+    const {app, streams} = harness();
+    await app.activate(true);
+    app.active = [{id: 'active'}]; app.recent = [{id: 'recent'}];
+    app.older = [{id: 'older'}]; app.pageCursor = 'next-cursor';
+    app.select('another');
+    assert.equal(app.active[0].id, 'active');
+    assert.equal(app.recent[0].id, 'recent');
+    assert.equal(app.older[0].id, 'older');
+    assert.equal(app.pageCursor, 'next-cursor');
+    assert.ok(new URL(streams.at(-1).url, 'http://test.invalid').searchParams.has('request_id'));
+    await app.activate(false);
+});
+
+test('page reads carry every filter and A-B-A stale responses cannot repopulate or clear newer paging', async () => {
+    const {app, context, streams} = harness();
+    await app.activate(true);
+    const pending = [];
+    context.fetch = (url, options) => new Promise(resolve => pending.push({url, options, resolve}));
+    app.modelFilter = 'A'; app.stateFilter = 'error'; app.scopeFilter = 'all';
+    app.receivedFrom = '2026-10-31T10:00'; app.receivedUntil = '2026-10-31T12:00';
+    app.pageCursor = 'cursor-a';
+    const first = app.more('recent');
+    const q1 = new URL(pending[0].url, 'http://test.invalid').searchParams;
+    assert.deepEqual([...['scope', 'state', 'model_id'].map(key => q1.get(key))], ['recent', 'error', 'A']);
+    assert.equal(q1.get('cursor'), 'cursor-a'); assert.ok(q1.has('since') && q1.has('until'));
+    app.modelFilter = 'B'; app.filtersChanged();
+    app.pageCursor = 'cursor-b';
+    const second = app.more('recent');
+    pending[0].resolve({ok: true, json: async () => ({requests: [{id: 'stale-a'}], next_cursor: 'stale-next'})});
+    await first;
+    assert.equal(app.paging, true);
+    app.modelFilter = 'A'; app.filtersChanged();
+    pending[1].resolve({ok: true, json: async () => ({requests: [{id: 'stale-b'}], next_cursor: 'stale-next'})});
+    await second;
+    assert.equal(app.older.length, 0);
+    assert.equal(app.pageCursor, '');
+    assert.equal(app.paging, false);
+    assert.equal(app.active.length + app.recent.length, 0);
+    assert.ok(streams.length >= 3);
+    await app.activate(false);
+});
+
+test('page controls do not read after auth loss, hiding or a stale group click', async () => {
+    const {app, streams, context} = harness();
+    await app.activate(true);
+    const reads = [];
+    context.fetch = async url => { reads.push(url); return {ok: true, json: async () => ({requests: []})}; };
+    app.scopeFilter = 'active';
+    await app.more('recent');
+    assert.equal(reads.length, 0);
+    streams.at(-1).events.authorization_lost();
+    await app.more('active');
+    assert.equal(reads.length, 0);
+    await app.activate(false);
+    await app.more('active');
+    assert.equal(reads.length, 0);
+});
+
 test('reading away from the tail disables follow and keeps a stable viewport', async () => {
     const {app, streams, workers} = harness();
     await app.activate(true);

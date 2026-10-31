@@ -475,6 +475,11 @@ class ActivityReader:
         row = db.execute("SELECT * FROM requests WHERE id=?", (request_id,)).fetchone()
         if row is None:
             return None
+        return self._detail_for_row(db, row, invocation_summary=invocation_summary)
+
+    def _detail_for_row(self, db, row, *, invocation_summary=False):
+        """Build detail from an already selected row in the caller's snapshot."""
+        request_id = row["id"]
         result = self._record(row)
         result["representations"] = [
             {
@@ -730,7 +735,17 @@ class ActivityReader:
         finally:
             db.close()
 
-    def snapshot(self, *, request_id=None, model_id=None, source_id=None):
+    def snapshot(
+        self,
+        *,
+        request_id=None,
+        model_id=None,
+        source_id=None,
+        scope="all",
+        state=None,
+        since=None,
+        until=None,
+    ):
         """One committed metadata/index snapshot; no content BLOBs are read."""
         if not self.path.exists():
             return {
@@ -739,24 +754,63 @@ class ActivityReader:
                 "active_more": False,
                 "recent_more": False,
                 "detail": None,
+                "selected_outside_filters": None,
             }
         db = self._connect()
         try:
             db.execute("BEGIN")
-            active = self._rows(
-                db, active=True, limit=51, model_id=model_id, source_id=source_id
+            shared = dict(
+                model_id=model_id,
+                source_id=source_id,
+                state=state,
+                since=since,
+                until=until,
             )
-            recent = self._rows(
-                db, active=False, limit=51, model_id=model_id, source_id=source_id
+            active = (
+                self._rows(db, active=True, limit=51, **shared)
+                if scope in ("all", "active")
+                else []
             )
+            recent = (
+                self._rows(db, active=False, limit=51, **shared)
+                if scope in ("all", "recent")
+                else []
+            )
+            selected_row = (
+                db.execute(
+                    "SELECT * FROM requests WHERE id=?", (request_id,)
+                ).fetchone()
+                if request_id
+                else None
+            )
+            selected_detail = (
+                self._detail_for_row(db, selected_row, invocation_summary=True)
+                if selected_row is not None
+                else None
+            )
+            if selected_row is None:
+                outside = None
+            else:
+                selected_active = selected_row["finished_at"] is None
+                outside = not (
+                    (
+                        scope == "all"
+                        or (scope == "active" and selected_active)
+                        or (scope == "recent" and not selected_active)
+                    )
+                    and (model_id is None or selected_row["model_id"] == model_id)
+                    and (source_id is None or selected_row["source_id"] == source_id)
+                    and (state is None or selected_row["state"] == state)
+                    and (since is None or selected_row["received_at"] >= since)
+                    and (until is None or selected_row["received_at"] <= until)
+                )
             return {
                 "active": active[:50],
                 "recent": recent[:50],
                 "active_more": len(active) > 50,
                 "recent_more": len(recent) > 50,
-                "detail": self._detail(db, request_id, invocation_summary=True)
-                if request_id
-                else None,
+                "detail": selected_detail,
+                "selected_outside_filters": outside,
             }
         finally:
             db.close()

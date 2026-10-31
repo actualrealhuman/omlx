@@ -169,6 +169,52 @@ class ActivityRouteTests(unittest.TestCase):
             set(self.get("/facets").json()["models"]), {"model-a", "model-b"}
         )
 
+    def test_snapshot_applies_full_filter_set_and_checks_selected_row_independently(
+        self,
+    ):
+        base = time.time() - 100
+        selected = None
+        for index in range(55):
+            handle = self.request(
+                model="model-a",
+                source="source-a",
+                received_at=base + index,
+            )
+            if index == 0:
+                selected = handle
+        reader = self.recorder.reader
+        matching = reader.snapshot(
+            request_id=selected.request_id,
+            scope="recent",
+            model_id="model-a",
+            source_id="source-a",
+            state="completed",
+            since=base,
+            until=base + 54,
+        )
+        self.assertEqual(len(matching["recent"]), 50)
+        self.assertTrue(matching["recent_more"])
+        self.assertFalse(matching["active"])
+        self.assertFalse(matching["selected_outside_filters"])
+        self.assertEqual(matching["detail"]["id"], selected.request_id)
+        for filters in (
+            {"scope": "active"},
+            {"model_id": "other"},
+            {"source_id": "other"},
+            {"state": "error"},
+            {"since": base + 1},
+            {"until": base - 1},
+        ):
+            excluded = reader.snapshot(request_id=selected.request_id, **filters)
+            self.assertTrue(excluded["selected_outside_filters"], filters)
+            self.assertEqual(excluded["detail"]["id"], selected.request_id)
+        self.assertIsNone(
+            reader.snapshot(request_id="missing")["selected_outside_filters"]
+        )
+        defaults = reader.snapshot()
+        self.assertIn("active", defaults)
+        self.assertIn("recent", defaults)
+
     def test_detail_indexes_are_metadata_only_and_versioned(self):
         handle = self.request(terminal=False)
         first = self.get(f"/requests/{handle.request_id}").json()
@@ -261,6 +307,97 @@ class ActivityRouteTests(unittest.TestCase):
             self.assertIn("authorization_lost", await anext(stream))
             with self.assertRaises(StopAsyncIteration):
                 await anext(stream)
+
+        asyncio.run(check())
+
+    def test_sse_and_page_validate_and_apply_matching_filters(self):
+        base = time.time() - 10
+        completed = self.request(received_at=base)
+        self.request(terminal=False, received_at=base + 1)
+        params = {
+            "scope": "recent",
+            "state": "completed",
+            "since": str(base - 1),
+            "until": str(base + 1),
+        }
+        page = self.get("/requests", params=params)
+        self.assertEqual(page.status_code, 200)
+        self.assertEqual(
+            [row["id"] for row in page.json()["requests"]], [completed.request_id]
+        )
+        self.assertEqual(
+            self.get("/events", params={**params, "state": "bad"}).status_code,
+            400,
+        )
+        self.assertEqual(
+            self.get("/events", params={**params, "scope": "bad"}).status_code,
+            422,
+        )
+        self.assertEqual(
+            self.get("/events", params={**params, "since": "nan"}).status_code,
+            400,
+        )
+        self.assertEqual(
+            self.get("/events", params={**params, "until": str(base - 2)}).status_code,
+            400,
+        )
+        with self.client.stream(
+            "GET", "/admin/api/activity/events", params=params, headers=self.headers
+        ) as response:
+            self.assertEqual(response.status_code, 200)
+            lines = response.iter_lines()
+            event = next(line for line in lines if line == "event: snapshot")
+            self.assertEqual(event, "event: snapshot")
+            payload = json.loads(
+                next(line[6:] for line in lines if line.startswith("data: "))
+            )
+            self.assertEqual(
+                [row["id"] for row in payload["recent"]], [completed.request_id]
+            )
+            self.assertEqual(payload["active"], [])
+
+    def test_filtered_sse_refresh_uses_same_predicates_and_reader_admission(self):
+        base = time.time() - 10
+        first = self.request(received_at=base)
+        self.request(model="other", received_at=base)
+        self.service.require_admin = lambda request: None
+        request = Request({"type": "http", "headers": []})
+        filters = dict(scope="recent", state="completed", since=base, until=base + 5)
+
+        async def check():
+            reader = self.service.reader()
+            initial = reader.snapshot(
+                model_id="model-a", source_id="source-a", **filters
+            )
+            reads = []
+            admitted_read = self.service.read
+
+            async def counted_read(function):
+                reads.append(True)
+                return await admitted_read(function)
+
+            with patch.object(self.service, "read", counted_read):
+                stream = self.service.snapshots(
+                    request, reader, None, "model-a", "source-a", initial, **filters
+                )
+                try:
+                    payload = json.loads((await anext(stream)).split("data: ", 1)[1])
+                    self.assertEqual(
+                        [row["id"] for row in payload["recent"]], [first.request_id]
+                    )
+                    second = self.request(received_at=base + 1)
+                    self.request(received_at=base + 8)
+                    self.request(terminal=False, received_at=base + 2)
+                    event = await asyncio.wait_for(anext(stream), 3)
+                    payload = json.loads(event.split("data: ", 1)[1])
+                    self.assertEqual(
+                        {row["id"] for row in payload["recent"]},
+                        {first.request_id, second.request_id},
+                    )
+                    self.assertEqual(payload["active"], [])
+                    self.assertTrue(reads)
+                finally:
+                    await stream.aclose()
 
         asyncio.run(check())
 

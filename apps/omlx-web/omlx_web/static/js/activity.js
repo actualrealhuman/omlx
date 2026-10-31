@@ -5,14 +5,15 @@
     const API = '/admin/api/activity';
     const roles = ['system', 'developer', 'user', 'assistant', 'reasoning', 'output_error', 'output_refusal', 'choice', 'block', 'item', 'tool', 'tool_calls', 'tools', 'options', 'submitted', 'unparsed', 'model_input', 'raw_output', 'api_response', 'model_tokens', 'events'];
     function activityInspector() {
-        let stream, worker, resize, controller, retry, searchTimer, frame, invocationController;
+        let stream, worker, resize, controller, retry, searchTimer, frame, invocationController, pageController;
         let invocationGeneration = 0;
-        let generation = 0, activation = 0, loadedVersion = '', stopped = true, lastFacets = 0, exportSequence = 0, programmaticScrollRow = null;
+        let generation = 0, activation = 0, pageGeneration = 0, loadedVersion = '', stopped = true, lastFacets = 0, exportSequence = 0, programmaticScrollRow = null;
         const positions = new Map();
         const label = key => root.t(`activity.${key}`);
         return {
             active: [], recent: [], older: [], detail: null, selected: '', health: {}, facets: {models: [], sources: []},
-            modelFilter: '', sourceFilter: '', connection: 'connecting', error: '', missing: false, authorizationLost: false,
+            modelFilter: '', sourceFilter: '', scopeFilter: 'all', stateFilter: '', receivedFrom: '', receivedUntil: '',
+            selectedOutsideFilters: null, filtersLoading: false, filterError: '', connection: 'connecting', error: '', missing: false, authorizationLost: false,
             mode: 'submitted', follow: true, loading: false, limited: false, rows: [], outline: [], rail: [], total: 0,
             outlineOpen: false, outlineOffset: 0, outlineTotal: 0, outlinePageSize: 128, outlineHasPrevious: false, outlineHasNext: false,
             current: null, row: 0, visibleRows: 25, columns: 100,
@@ -48,6 +49,7 @@
                     this.resetInvocationDetail();
                     this.exporting = false;
                     this.exportContext = null;
+                    pageGeneration++; pageController?.abort(); pageController = null; this.paging = false;
                     stopped = true; generation++; activation++; stream?.close(); stream = null;
                     worker?.terminate(); worker = null; controller?.abort();
                     clearTimeout(retry); clearTimeout(searchTimer); cancelAnimationFrame(frame);
@@ -128,10 +130,22 @@
             connect() {
                 stream?.close(); clearTimeout(retry);
                 if (stopped) return;
+                this.filterError = this.rangeError();
+                if (this.filterError) {
+                    stream = null; this.filtersLoading = false; this.connection = 'connecting';
+                    return;
+                }
+                this.filtersLoading = true;
+                this.selectedOutsideFilters = null;
                 const params = new URLSearchParams();
                 if (this.selected) params.set('request_id', this.selected);
+                params.set('scope', this.scopeFilter);
                 if (this.modelFilter) params.set('model_id', this.modelFilter);
                 if (this.sourceFilter) params.set('source_id', this.sourceFilter);
+                if (this.stateFilter) params.set('state', this.stateFilter);
+                const since = this.localTimeSeconds(this.receivedFrom), until = this.localTimeSeconds(this.receivedUntil);
+                if (since !== null) params.set('since', since);
+                if (until !== null) params.set('until', until);
                 this.connection = 'connecting';
                 const current = new EventSource(`${API}/events?${params}`);
                 stream = current;
@@ -141,10 +155,12 @@
                         const snapshot = JSON.parse(event.data);
                         this.authorizationLost = false;
                         this.connection = 'live'; this.error = '';
+                        this.filtersLoading = false;
                         this.active = snapshot.active; this.recent = snapshot.recent;
                         this.activeMore = snapshot.active_more; this.recentMore = snapshot.recent_more;
                         this.health = snapshot.health;
-                        this.activityActiveCount = this.modelFilter || this.sourceFilter ? null : snapshot.active_more ? `${snapshot.active.length}+` : snapshot.active.length;
+                        this.activityActiveCount = this.hasPopulationFilters() ? null : snapshot.active_more ? `${snapshot.active.length}+` : snapshot.active.length;
+                        this.selectedOutsideFilters = this.selected ? snapshot.selected_outside_filters : null;
                         if (this.selected) {
                             this.missing = !snapshot.detail;
                             this.detail = snapshot.detail;
@@ -158,13 +174,43 @@
                 for (const type of ['reconnect', 'unavailable', 'authorization_lost']) current.addEventListener(type, () => {
                     if (stream !== current) return;
                     current.close(); stream = null; this.connection = 'disconnected';
-                    if (type === 'authorization_lost') { this.authorizationLost = true; this.resetInvocationDetail(); this.exportContext = null; this.exporting = false; this.exportError = label('sign_in'); this.error = label('sign_in'); this.attachmentsOpen = false; this.previewId = ''; }
+                    this.filtersLoading = false;
+                    if (type === 'authorization_lost') { pageGeneration++; pageController?.abort(); pageController = null; this.paging = false; this.authorizationLost = true; this.resetInvocationDetail(); this.exportContext = null; this.exporting = false; this.exportError = label('sign_in'); this.error = label('sign_in'); this.attachmentsOpen = false; this.previewId = ''; }
                     else { if (type === 'unavailable') this.error = label('unavailable'); retry = setTimeout(() => this.connect(), 3000); }
                 });
-                current.onerror = () => { if (stream === current) this.connection = 'reconnecting'; };
+                current.onerror = () => { if (stream === current) { this.connection = 'reconnecting'; this.filtersLoading = false; } };
             },
             filtersChanged() {
-                this.older = []; this.pageCursor = ''; this.connect();
+                pageGeneration++; pageController?.abort(); pageController = null; this.paging = false;
+                this.older = []; this.pageCursor = ''; this.pageScope = this.scopeFilter === 'active' ? 'active' : 'recent';
+                this.active = []; this.recent = []; this.activeMore = false; this.recentMore = false;
+                this.selectedOutsideFilters = null; this.activityActiveCount = null;
+                this.filterError = this.rangeError();
+                if (this.filterError) {
+                    stream?.close(); stream = null; clearTimeout(retry);
+                    this.filtersLoading = false; this.connection = 'connecting';
+                    return;
+                }
+                this.connect();
+            },
+            localTimeSeconds(value) {
+                if (!value) return null;
+                const milliseconds = new Date(value).getTime();
+                return Number.isFinite(milliseconds) ? milliseconds / 1000 : NaN;
+            },
+            rangeError() {
+                const since = this.localTimeSeconds(this.receivedFrom), until = this.localTimeSeconds(this.receivedUntil);
+                if ((this.receivedFrom && !Number.isFinite(since)) || (this.receivedUntil && !Number.isFinite(until)) || (since !== null && until !== null && since > until)) return label('invalid_received_range');
+                return '';
+            },
+            hasPopulationFilters() {
+                return this.scopeFilter !== 'all' || !!this.stateFilter || !!this.receivedFrom || !!this.receivedUntil || !!this.modelFilter || !!this.sourceFilter;
+            },
+            visibleGroups() {
+                const groups = [];
+                if (this.scopeFilter !== 'recent') groups.push({title: label('active'), rows: this.active, more: this.activeMore, scope: 'active'});
+                if (this.scopeFilter !== 'active') groups.push({title: label('recent'), rows: this.recent, more: this.recentMore, scope: 'recent'});
+                return groups;
             },
             selectFromUrl() {
                 const value = new URLSearchParams(window.location.search).get('request') || '';
@@ -405,19 +451,31 @@
                 this.jump(Math.floor(Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)) * Math.max(0, this.total - this.visibleRows)));
             },
             async more(scope) {
+                if (stopped || this.authorizationLost || this.paging || !['active', 'recent'].includes(scope)
+                    || (this.scopeFilter !== 'all' && scope !== this.scopeFilter)) return;
+                this.filterError = this.rangeError();
+                if (this.filterError) { this.paging = false; return; }
+                const token = ++pageGeneration;
+                pageController?.abort(); pageController = new AbortController();
                 this.paging = true; this.pageScope = scope;
-                const filters = [this.modelFilter, this.sourceFilter].join('\n');
+                const snapshot = {scope: this.scopeFilter, state: this.stateFilter, model: this.modelFilter, source: this.sourceFilter,
+                    from: this.receivedFrom, until: this.receivedUntil, cursor: this.pageCursor};
                 try {
                     const params = new URLSearchParams({scope, limit: 100});
+                    if (this.stateFilter) params.set('state', this.stateFilter);
                     if (this.modelFilter) params.set('model_id', this.modelFilter);
                     if (this.sourceFilter) params.set('source_id', this.sourceFilter);
+                    const since = this.localTimeSeconds(this.receivedFrom), until = this.localTimeSeconds(this.receivedUntil);
+                    if (since !== null) params.set('since', since);
+                    if (until !== null) params.set('until', until);
                     if (this.pageCursor) params.set('cursor', this.pageCursor);
-                    const data = await this.read(`/requests?${params}`);
-                    if (filters !== [this.modelFilter, this.sourceFilter].join('\n')) return;
+                    const data = await this.read(`/requests?${params}`, pageController.signal);
+                    if (token !== pageGeneration || stopped || this.authorizationLost || this.filterError || Object.entries(snapshot).some(([key, value]) => ({scope: this.scopeFilter, state: this.stateFilter, model: this.modelFilter, source: this.sourceFilter, from: this.receivedFrom, until: this.receivedUntil, cursor: this.pageCursor}[key] !== value))) return;
                     const shownIds = new Set([...this.active, ...this.recent].map(record => record.id));
                     this.older = data.requests.filter(record => !shownIds.has(record.id));
                     this.pageCursor = data.next_cursor || '';
-                } catch (error) { this.error = error.message; } finally { this.paging = false; }
+                } catch (error) { if (token === pageGeneration && error.name !== 'AbortError') this.error = error.message; }
+                finally { if (token === pageGeneration) this.paging = false; }
             },
             exportIdentity() {
                 return {requestId: this.selected, view: this.mode, invocationId: this.invocationId,

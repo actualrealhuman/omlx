@@ -84,6 +84,15 @@ def _decode_cursor(value):
         raise HTTPException(400, "Invalid Activity page cursor") from exc
 
 
+def _validate_activity_filters(state, since, until):
+    if state is not None and state not in STATES:
+        raise HTTPException(400, "Unknown Activity state")
+    if any(value is not None and not math.isfinite(value) for value in (since, until)):
+        raise HTTPException(400, "Invalid Activity time range")
+    if since is not None and until is not None and since > until:
+        raise HTTPException(400, "Invalid Activity time range")
+
+
 class _StreamResponse(StreamingResponse):
     """Release admission even if the body iterator never starts."""
 
@@ -347,7 +356,19 @@ class ActivityAdmin:
 
         return release
 
-    async def snapshots(self, request, reader, selection, model_id, source_id, initial):
+    async def snapshots(
+        self,
+        request,
+        reader,
+        selection,
+        model_id,
+        source_id,
+        initial,
+        scope="all",
+        state=None,
+        since=None,
+        until=None,
+    ):
         epoch, sequence, previous = uuid.uuid4().hex, 0, None
         generation = self._generation
         started, last_sent = time.monotonic(), time.monotonic()
@@ -389,7 +410,13 @@ class ActivityAdmin:
             try:
                 snapshot = await self.read(
                     lambda: reader.snapshot(
-                        request_id=selection, model_id=model_id, source_id=source_id
+                        request_id=selection,
+                        model_id=model_id,
+                        source_id=source_id,
+                        scope=scope,
+                        state=state,
+                        since=since,
+                        until=until,
                     )
                 )
             except HTTPException:
@@ -492,14 +519,7 @@ def create_activity_router(
         since: float | None = None,
         until: float | None = None,
     ):
-        if state is not None and state not in STATES:
-            raise HTTPException(400, "Unknown Activity state")
-        if any(
-            value is not None and not math.isfinite(value) for value in (since, until)
-        ):
-            raise HTTPException(400, "Invalid Activity time range")
-        if since is not None and until is not None and since > until:
-            raise HTTPException(400, "Invalid Activity time range")
+        _validate_activity_filters(state, since, until)
         before, reader = _decode_cursor(cursor), service.reader()
         rows = await service.read(
             lambda: reader.list_requests(
@@ -596,20 +616,40 @@ def create_activity_router(
     async def events(
         request: Request,
         request_id: str | None = Query(None, max_length=128),
+        scope: Literal["all", "active", "recent"] = "all",
         model_id: str | None = Query(None, max_length=256),
         source_id: str | None = Query(None, max_length=256),
+        state: str | None = Query(None, max_length=32),
+        since: float | None = None,
+        until: float | None = None,
     ):
+        _validate_activity_filters(state, since, until)
         release = service.reserve_stream()
         try:
             reader = service.reader()
             initial = await service.read(
                 lambda: reader.snapshot(
-                    request_id=request_id, model_id=model_id, source_id=source_id
+                    request_id=request_id,
+                    model_id=model_id,
+                    source_id=source_id,
+                    scope=scope,
+                    state=state,
+                    since=since,
+                    until=until,
                 )
             )
             return _StreamResponse(
                 service.snapshots(
-                    request, reader, request_id, model_id, source_id, initial
+                    request,
+                    reader,
+                    request_id,
+                    model_id,
+                    source_id,
+                    initial,
+                    scope,
+                    state,
+                    since,
+                    until,
                 ),
                 release,
             )

@@ -166,6 +166,20 @@ jobs, including work for disconnected callers. No browser queue or reader is
 on the inference producer path. List and selected-content indexes in each live
 snapshot come from one committed read transaction.
 
+Live snapshots and history pages accept the same `scope` (`all`, `active` or
+`recent`), model/source, state and received-time (`since`/`until`, Unix seconds)
+filters. The inspector exposes scope, terminal outcome and a local-time received
+range alongside model/source. Invalid or reversed time ranges prevent live-feed
+and history-page requests. Changing filters clears old list pages and fences late responses;
+selecting a request under unchanged filters preserves the browsed page/cursor.
+The global active badge is hidden for a filtered population.
+
+Selected detail remains independent of list filters. A nullable
+`selected_outside_filters` flag is evaluated from that exact request row in the
+same read transaction; it does not infer exclusion from absence on the first
+page. An outside-filter hint appears in the selected inspector, including mobile.
+Missing/deleted selection remains distinct from a filtered selection.
+
 The first event is a `snapshot` with an epoch/sequence ID. Reconnect uses
 `resync_required` followed by a fresh snapshot; replay is explicitly
 `snapshot_only`. Clients fetch new text ranges from retained content. Session
