@@ -30,6 +30,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from .activity.config import ActivitySettings
 from .config import parse_size
 
 if TYPE_CHECKING:
@@ -1078,6 +1079,7 @@ class GlobalSettings:
     integrations: IntegrationSettings = field(default_factory=IntegrationSettings)
     ui: UISettings = field(default_factory=UISettings)
     usage: UsageSettings = field(default_factory=UsageSettings)
+    activity: ActivitySettings = field(default_factory=ActivitySettings)
     idle_timeout: ModelIdleTimeoutSettings = field(
         default_factory=ModelIdleTimeoutSettings
     )
@@ -1176,6 +1178,8 @@ class GlobalSettings:
                 self.ui = UISettings.from_dict(data["ui"])
             if "usage" in data:
                 self.usage = UsageSettings.from_dict(data["usage"])
+            if "activity" in data:
+                self.activity = ActivitySettings.from_dict(data["activity"])
             if "idle_timeout" in data:
                 self.idle_timeout = ModelIdleTimeoutSettings.from_dict(
                     data["idle_timeout"]
@@ -1555,6 +1559,7 @@ class GlobalSettings:
             "integrations": self.integrations.to_dict(),
             "ui": self.ui.to_dict(),
             "usage": self.usage.to_dict(),
+            "activity": self.activity.to_dict(),
             "idle_timeout": self.idle_timeout.to_dict(),
         }
 
@@ -1985,6 +1990,7 @@ class GlobalSettings:
             "integrations": self.integrations.to_dict(),
             "ui": self.ui.to_dict(),
             "usage": self.usage.to_dict(),
+            "activity": self.activity.to_dict(),
             "idle_timeout": self.idle_timeout.to_dict(),
         }
 
