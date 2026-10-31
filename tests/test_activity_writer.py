@@ -299,6 +299,10 @@ def test_failed_batch_releases_owned_reservations_and_preserves_fail_open(
     )
     recorder.append_text(handle, "raw_output", "a")
     recorder.append_text(handle, "raw_output", "b")
+    recorder.append_text(handle, "raw_output", "c", invocation_id="2")
+    recorder.append_text(handle, "raw_output", "d", invocation_id="2")
+    with recorder._lock:
+        refs.extend(weakref.ref(chunk) for chunk in recorder._chunks)
     assert not recorder.flush(3)
     assert recorder.close(3)
     assert recorder.health()["error"] is not None
@@ -369,3 +373,115 @@ def test_storage_refusal_drops_group_with_gap_but_preserves_terminal_metadata(
         == recorder.health()["writer_scratch_bytes"]
         == 0
     )
+
+
+@pytest.mark.parametrize("count", [64, 256])
+def test_unique_channels_have_linear_planning_work_not_repeated_window_scans(
+    writer, monkeypatch, count
+):
+    accesses = []
+    original = module._Chunk
+
+    class CountedChunk(original):
+        def __getattribute__(self, name):
+            if name == "representation":
+                accesses.append(1)
+            return super().__getattribute__(name)
+
+    monkeypatch.setattr(module, "_Chunk", CountedChunk)
+    recorder, handle = writer()
+    for index in range(1, count + 1):
+        assert recorder.append_text(
+            handle, "raw_output", str(index), invocation_id=str(index)
+        )
+    accesses.clear()
+    assert recorder.flush(3)
+    # Includes planner and persistence property access; independent of a timer.
+    assert len(accesses) < count * 12
+    for index in (1, count // 2, count):
+        assert recorder.reader.content(
+            handle.request_id, "raw_output", invocation_id=str(index)
+        )["data"].decode() == str(index)
+
+
+def test_prepared_groups_fall_back_if_memory_is_consumed_after_planning(
+    writer, monkeypatch
+):
+    settings = ActivitySettings(
+        enabled=True,
+        max_pending_bytes=65536,
+        max_active_requests=64,
+        max_memory_bytes=589824,
+    )
+    recorder, handle = writer(settings)
+    entered, resume = threading.Event(), threading.Event()
+    next_chunk = recorder._next_chunk
+    steps = []
+
+    def pause(chunks):
+        steps.append(1)
+        if len(steps) == 2:
+            entered.set()
+            assert resume.wait(3)
+        return next_chunk(chunks)
+
+    monkeypatch.setattr(recorder, "_next_chunk", pause)
+    recorder.append_text(handle, "raw_output", "a", invocation_id="1")
+    recorder.append_text(handle, "raw_output", "B", invocation_id="2")
+    recorder.append_text(handle, "raw_output", "C", invocation_id="2")
+    append = ActivityStore.append
+    writes = []
+
+    def record(store, *args):
+        writes.append(args)
+        return append(store, *args)
+
+    monkeypatch.setattr(ActivityStore, "append", record)
+    flush = recorder._control("flush")
+    try:
+        assert entered.wait(3)
+        assert recorder.health()["writer_scratch_bytes"] == 0
+        assert recorder.health()["prepared_group_bytes"] == module._GROUP_METADATA_BYTES
+        while recorder.begin(model_id="extra", endpoint="chat") is not None:
+            pass
+        with recorder._lock:
+            assert (
+                recorder._memory_used() + module._MERGE_SCRATCH_BYTES
+                > settings.max_memory_bytes
+            )
+    finally:
+        resume.set()
+    flush.result(3)
+    assert len(writes) == 3
+    assert recorder.health()["prepared_group_bytes"] == 0
+    assert (
+        recorder.reader.content(handle.request_id, "raw_output", invocation_id="1")[
+            "data"
+        ]
+        == b"a"
+    )
+    assert (
+        recorder.reader.content(handle.request_id, "raw_output", invocation_id="2")[
+            "data"
+        ]
+        == b"BC"
+    )
+    assert (
+        recorder.health()["pending_bytes"]
+        == recorder.health()["writer_scratch_bytes"]
+        == 0
+    )
+
+
+def test_largest_prepared_descriptor_fits_reserved_metadata_without_instance_dict():
+    import sys
+
+    handle = module.CaptureHandle("example", "epoch")
+    parts = tuple(
+        module._Chunk(handle, "raw_output", "1", "x")
+        for _ in range(module._COALESCE_ITEMS)
+    )
+    group = module._ChunkBatch(parts)
+    assert not hasattr(group, "__dict__")
+    assert sys.getsizeof(group) + sys.getsizeof(parts) < module._GROUP_METADATA_BYTES
+    assert weakref.ref(group)() is group

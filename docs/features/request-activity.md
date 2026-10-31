@@ -385,7 +385,7 @@ to bypass that delay. They still wait for an already running SQLite operation;
 this is not an absolute I/O deadline. Decode/API producers only offer immutable
 observations and never wait for the collection window, compression or storage.
 
-The worker examines at most 64 queued pieces at a time and joins matching
+The worker plans each window of at most 64 queued pieces once and joins matching
 `raw_output` or `api_response` pieces up to a conservative 64 KiB encoded bound.
 The key includes capture handle/epoch, representation, invocation and payload
 type. Independent channels may interleave in the queue, but each channel keeps
@@ -394,22 +394,35 @@ types in the same channel are merge barriers. Large pieces use the existing
 bounded encoder. SQLite sequence numbers describe stored chunks, not one-to-one
 producer callbacks or global cross-channel causal order.
 
+Planned singleton descriptors prevent repeated scans of the same unique channels.
+A deterministic 256-channel case reproduced 42,848 representation-property reads
+before this planning rule; its regression bound is now fewer than 3,072, without
+using elapsed-time assertions. This is a planner-work check, not a serving benchmark.
+
 Original byte/item/request reservations remain charged while a group is in
 flight. A separate conservative 320 KiB scratch reservation covers merge/encoding/
 compression buffers; new capture, content, submitted-snapshot and invocation
 admission include it in the memory ledger. Without scratch capacity, ordinary
 writes proceed without merging. Clear/delete and persistence failure do not
 release buffer credits while a valid write still owns them. `writer_scratch_bytes`
-in capture health exposes the current reservation. Queue and memory settings,
+in capture health exposes the current buffer reservation. Prepared descriptors
+are slotted/weak-referenceable and retain a separate 2 KiB credit each after the
+buffer reservation ends; at most 64 exist per window. `prepared_group_bytes`
+exposes those credits. They share the 320 KiB reservation while planning/merging
+and remain included in every ingress memory guard afterward. A prepared group
+rechecks buffer capacity before joining; if capacity has gone, it writes its
+original pieces without replanning, new split descriptors or content loss.
+Queue and memory settings,
 request-byte admission, retained logical-byte totals and capture defaults are
 unchanged.
 
 This coalesces payloads before existing storage admission, rather than placing
 pruning, vacuum or checkpoint calls inside a long outer transaction. Existing
-physical/page-budget and terminal metadata rules still apply. Sixteen deterministic
+physical/page-budget and terminal metadata rules still apply. Twenty deterministic
 writer checks cover interleaved channel/request/invocation isolation, byte/item/
 type limits, semantic barriers, no-memory fallback, urgent controls/shutdown,
-in-flight clear, scratch-aware admission and failed-writer reference release.
+in-flight clear, scratch-aware admission, prepared-capacity changes, descriptor
+size/weak-reference lifetime and failed-writer reference release.
 A refused combined write records a gap for that group; gap counts do not count
 producer pieces. A small burst fixture reduces ten pieces to two actual writes with identical
 retained bytes. This establishes fewer writes in that fixture, not measured

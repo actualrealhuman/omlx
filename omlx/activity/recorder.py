@@ -37,6 +37,7 @@ _COLLECT_SECONDS = 0.05
 _COALESCE_ITEMS = 64
 _COALESCE_BYTES = 64 * 1024
 _MERGE_SCRATCH_BYTES = 5 * _COALESCE_BYTES
+_GROUP_METADATA_BYTES = 2048
 
 
 @dataclass(frozen=True)
@@ -118,9 +119,14 @@ class _Chunk:
                 yield "".join(parts).encode("ascii")
 
 
-@dataclass(frozen=True)
-class _ChunkBatch:
+class _WeakBatch:
+    __slots__ = ("__weakref__",)
+
+
+@dataclass(frozen=True, slots=True)
+class _ChunkBatch(_WeakBatch):
     chunks: tuple[_Chunk, ...]
+    merge: bool = True
     data = None  # No semantic snapshot/image/invocation payload.
 
     @property
@@ -148,6 +154,10 @@ class _ChunkBatch:
         return sum(chunk.estimated_bytes for chunk in self.chunks)
 
     def encoded_chunks(self):
+        if not self.merge:
+            for chunk in self.chunks:
+                yield from chunk.encoded_chunks()
+            return
         yield b"".join(
             chunk.data.encode("utf-8") if type(chunk.data) is str else chunk.data
             for chunk in self.chunks
@@ -183,6 +193,7 @@ class ActivityRecorder:
         self._pending_bytes = 0
         self._invocation_live_bytes = 0
         self._writer_scratch_bytes = 0
+        self._prepared_group_bytes = 0
         self._pending_count = 0
         self._freezing_bytes = 0
         self._freezing_count = 0
@@ -212,6 +223,7 @@ class ActivityRecorder:
                 "pending_bytes": self._pending_bytes,
                 "invocation_live_bytes": self._invocation_live_bytes,
                 "writer_scratch_bytes": self._writer_scratch_bytes,
+                "prepared_group_bytes": self._prepared_group_bytes,
                 "dropped_events": self._dropped_events,
                 "skipped_requests": self._skipped_requests,
             }
@@ -380,7 +392,7 @@ class ActivityRecorder:
         return (
             self._pending_bytes
             + self._invocation_live_bytes
-            + self._writer_scratch_bytes
+            + max(self._writer_scratch_bytes, self._prepared_group_bytes)
             + pending_bytes
             + invocation_bytes
             + (len(self._pending) + capture_slots) * 8192
@@ -735,61 +747,69 @@ class ActivityRecorder:
         return controls, chunks, metadata
 
     def _next_chunk(self, chunks):
-        """Worker only: coalesce independent payloads across a bounded window.
-
-        Each representation keeps its byte order; semantic/lifecycle chunks are
-        barriers. Original reservations remain held through write completion.
-        """
+        """Worker only: plan each bounded window once, including unique channels."""
         first = chunks.popleft()
-        if (
-            first.representation not in {"raw_output", "api_response"}
-            or type(first.data) not in (str, bytes)
-            or first.estimated_bytes > _COALESCE_BYTES
-        ):
-            return first
-        with self._lock:
-            if self._lookup(first.handle) is None or (
-                self._memory_used() + _MERGE_SCRATCH_BYTES
-                > self.settings.max_memory_bytes
-            ):
-                return first
-        window, chosen, size = [], [first], first.estimated_bytes
-        for _ in range(min(len(chunks), _COALESCE_ITEMS - 1)):
-            candidate = chunks.popleft()
-            if candidate.representation not in {"raw_output", "api_response"} or type(
-                candidate.data
-            ) not in (str, bytes):
-                chunks.appendleft(candidate)
-                break
-            same = (
-                candidate.handle,
-                candidate.representation,
-                candidate.invocation_id,
-            ) == (first.handle, first.representation, first.invocation_id)
-            if same and (
-                type(candidate.data) is not type(first.data)
-                or size + candidate.estimated_bytes > _COALESCE_BYTES
-            ):
-                chunks.appendleft(candidate)
-                break
-            window.append(candidate)
-            if same:
-                chosen.append(candidate)
-                size += candidate.estimated_bytes
-        batch = False
-        if len(chosen) > 1:
+        if isinstance(first, _ChunkBatch):
+            if first.item_count == 1:
+                return first  # A planned singleton must not rescan.
             with self._lock:
+                if self._lookup(first.handle) is None:
+                    return first  # Drop the whole invalid group without encoding.
                 if (
-                    self._memory_used() + _MERGE_SCRATCH_BYTES
+                    self._memory_used()
+                    - self._prepared_group_bytes
+                    + _MERGE_SCRATCH_BYTES
                     <= self.settings.max_memory_bytes
                 ):
                     self._writer_scratch_bytes = _MERGE_SCRATCH_BYTES
-                    batch = True
-        selected = {id(chunk) for chunk in chosen[1:]} if batch else set()
-        for candidate in reversed(window):
-            if id(candidate) not in selected:
+                    return first
+            # Capacity may have changed since this window was planned. Keep
+            # every original piece and avoid replanning the refused group.
+            return _ChunkBatch(first.chunks, merge=False)
+
+        def eligible(chunk):
+            return (
+                chunk.representation in {"raw_output", "api_response"}
+                and type(chunk.data) in (str, bytes)
+                and chunk.estimated_bytes <= _COALESCE_BYTES
+            )
+
+        if not chunks or not eligible(first):
+            return first
+        with self._lock:
+            if (
+                self._lookup(first.handle) is None
+                or self._memory_used() + _MERGE_SCRATCH_BYTES
+                > self.settings.max_memory_bytes
+            ):
+                return first
+            # Covers temporary planning maps as well as encoding/merge buffers.
+            self._writer_scratch_bytes = _MERGE_SCRATCH_BYTES
+        key = (first.handle, first.representation, first.invocation_id)
+        groups, sizes = {key: [first]}, {key: first.estimated_bytes}
+        for _ in range(min(len(chunks), _COALESCE_ITEMS - 1)):
+            candidate = chunks.popleft()
+            if not eligible(candidate):
                 chunks.appendleft(candidate)
-        return _ChunkBatch(tuple(chosen)) if batch else first
+                break
+            key = (candidate.handle, candidate.representation, candidate.invocation_id)
+            previous = groups.get(key)
+            if previous and (
+                type(candidate.data) is not type(previous[0].data)
+                or sizes[key] + candidate.estimated_bytes > _COALESCE_BYTES
+            ):
+                chunks.appendleft(candidate)
+                break
+            groups.setdefault(key, []).append(candidate)
+            sizes[key] = sizes.get(key, 0) + candidate.estimated_bytes
+        planned = [_ChunkBatch(tuple(parts)) for parts in groups.values()]
+        with self._lock:
+            # At most64 slotted descriptors/tuples remain after planning.
+            # They share the scratch credit while buffers are active, then
+            # retain their own smaller reservation until each write ends.
+            self._prepared_group_bytes += len(planned) * _GROUP_METADATA_BYTES
+        chunks.extendleft(reversed(planned[1:]))
+        return planned[0]
 
     def _run(self):
         store = None
@@ -881,11 +901,12 @@ class ActivityRecorder:
                     else:
                         saved = True  # Explicit deletion/clear, not a capture gap.
                         encoded_bytes = chunk.estimated_bytes
-                    handle, cost, estimate, item_count = (
+                    handle, cost, estimate, item_count, group_credit = (
                         chunk.handle,
                         chunk.cost,
                         chunk.estimated_bytes,
                         chunk.item_count,
+                        _GROUP_METADATA_BYTES if isinstance(chunk, _ChunkBatch) else 0,
                     )
                     del chunk  # Release payload before advertising free capacity.
                     with self._lock:
@@ -893,6 +914,7 @@ class ActivityRecorder:
                         self._pending_bytes -= cost
                         self._pending_count -= item_count
                         self._writer_scratch_bytes = 0
+                        self._prepared_group_bytes -= group_credit
                         if current is not None:
                             current.pending_chunks -= item_count
                             if saved:
@@ -950,6 +972,7 @@ class ActivityRecorder:
                 self._pending.clear()
                 self._pending_bytes = self._freezing_bytes
                 self._writer_scratch_bytes = 0
+                self._prepared_group_bytes = 0
                 self._pending_count = self._freezing_count
             for _, _, future in waiting:
                 if not future.done():

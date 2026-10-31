@@ -6,6 +6,13 @@ window. Coalesce matching small output/API pieces on the worker, keeping byte
 order per request/epoch/representation/invocation and semantic chunk barriers.
 Do not assign callback or cross-channel causal meaning to persisted chunk IDs.
 
+Plan each bounded window once, marking prepared singletons so unique channels
+do not repeatedly scan the same queued work. Prepared groups recheck scratch
+capacity and fall back to original writes if needed, without replanning or
+allocating split descriptors. Keep slotted descriptors covered by explicit
+metadata credits until release; those credits share active scratch and survive
+after buffers drain.
+
 Bound the scan, encoded group size and temporary buffers. Retain every original
 reservation until the group is released, and separately reserve merge scratch
 against total observer memory. All ingress paths account for that reservation.
