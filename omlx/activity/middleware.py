@@ -36,6 +36,11 @@ class ActivityTransportMiddleware:
                         )
                     )
                     message = {**message, "headers": headers}
+            elif message["type"] == "http.response.body" and capture is not None:
+                # Capture the actual ASGI bytes, including handled exceptions
+                # produced after an observed endpoint raises. Delivery to a
+                # client is still a separate transport outcome.
+                capture.wire(message.get("body", b""))
             await send(message)
             if message["type"] == "http.response.body" and not message.get(
                 "more_body", False

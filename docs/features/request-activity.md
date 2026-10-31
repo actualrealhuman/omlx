@@ -103,10 +103,19 @@ frozen/bounded options, coalescing, observation-ended state, resource admission,
 writer failure, clear/delete/off fences and transactional v1/v2 migration. Actual
 core fixtures additionally check default/overridden parameters without loading
 a model or retaining grammar objects.
+`tests/test_activity_api_paths.py` reuses the four production APIRoute objects,
+original schemas/authentication and exception/response formatters in an isolated
+in-memory app. It replaces engine resolution/generation and explicitly emulates
+observer callbacks; it does not qualify real engine preprocessing, scheduling,
+app lifespan, full middleware composition or real model execution. Cases cover
+both response modes, named/main/x-api-key/anonymous-opt-in sources, invalid auth/
+JSON/schema exclusion, accepted preflight rejection, multiple completion prompts,
+capture-off behavior and generation failures with partial producer output.
 `tests/test_activity_routes.py` covers actual admin authorization, bounded reads,
 pagination/filtering, snapshot consistency, reconnect/session revalidation,
 reader cancellation and stream admission. `tests/test_activity_transport.py`
-covers handled exceptions and responses whose iterators never begin.
+covers handled exceptions, exact/split UTF-8 ASGI body fragments, failed sends
+and responses whose iterators never begin.
 `tests/test_activity_controls.py` covers live disable/resume without engine
 cancellation, atomic section-only persistence, stale versions, invalid settings,
 save failures, disabled-history maintenance, clear/delete fences, shared-lock
@@ -367,6 +376,31 @@ route checks reject unauthenticated/inference-only keys, deny context/attachment
 table reads during the single-row query, and cover disabled/deleted history and
 malformed IDs. Template expressions/rendering pass; browser visual/runtime review
 is still required.
+
+## API body observation boundary
+
+With the Activity transport middleware present, `api_response` is captured once
+from HTTP body messages at its ASGI send boundary. This includes handled
+preflight exceptions whose response is constructed after the endpoint raises.
+The endpoint wrapper supplies body capture only when no transport observer is
+present, preserving direct-use behavior without duplicate capture. Both valid
+JSON and streamed production routes are checked byte-for-byte against client
+responses in the isolated protocol fixture.
+
+These are outgoing body attempts at the observation layer, not proof of client
+receipt or a physical/compressed network trace. A failed send preserves observed
+bytes but reports interrupted transport. Existing bounds, capture-off/delete
+fences and protected lifecycle rules remain. Auth failures and malformed schema/
+JSON bodies never create a capture in the first place.
+
+Starlette's outer unhandled-error response can bypass user middleware after it
+has finalized the failed request. That body's evidence remains unavailable; the
+observer does not reopen terminal/deleted captures to append it. The production
+outer error handler preserves an existing Activity request ID in its response
+header for correlation. Sanitized generic 500 content and capture-off behavior
+remain unchanged. Handled errors and streamed formatter failures have actual
+wire evidence; this is not a promise that every framework-generated response is
+visible. See [the body-observation decision](../decisions/request-activity-api-body-observation.md).
 
 ## Backend and evidence coverage
 

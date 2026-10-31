@@ -445,7 +445,8 @@ def observe_request(function):
                     body_outcome = outcome
                     try:
                         async for chunk in iterator:
-                            capture.wire(chunk)
+                            if not capture._require_transport:
+                                capture.wire(chunk)
                             yield chunk
                     except BaseException as exc:
                         body_outcome = (
@@ -469,7 +470,8 @@ def observe_request(function):
 
                 response.body_iterator = observed_body()
             else:
-                capture.wire(response.body)
+                if not capture._require_transport:
+                    capture.wire(response.body)
                 capture.api_done(outcome)
             return response
         finally:

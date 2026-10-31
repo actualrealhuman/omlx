@@ -145,6 +145,75 @@ class TransportTests(unittest.TestCase):
         self.assertNotIn("state", scope)
         self.assertEqual(calls, [True])
 
+    def test_actual_asgi_body_fragments_are_retained_once_even_when_utf8_is_split(self):
+        async def check():
+            handle = self.recorder.begin(model_id="a", endpoint="chat")
+            capture = RequestCapture(self.recorder, handle, require_transport=True)
+            content = "wire 世界".encode()
+            fragments = [content[:6], content[6:8], content[8:]]
+            sent = []
+
+            async def app(scope, receive, send):
+                scope["state"]["activity_capture"] = capture
+                capture.api_done("completed")
+                await send(
+                    {"type": "http.response.start", "status": 200, "headers": []}
+                )
+                for index, fragment in enumerate(fragments):
+                    await send(
+                        {
+                            "type": "http.response.body",
+                            "body": fragment,
+                            "more_body": index < 2,
+                        }
+                    )
+
+            async def send(message):
+                if message["type"] == "http.response.body":
+                    sent.append(message["body"])
+
+            await ActivityTransportMiddleware(app)({"type": "http"}, None, send)
+            self.assertEqual(self.rows()[0]["state"], "completed")
+            self.assertEqual(
+                self.recorder.reader.content(handle.request_id, "api_response")["data"],
+                b"".join(sent),
+            )
+
+        asyncio.run(check())
+
+    def test_retained_wire_attempt_is_not_claimed_as_successful_client_delivery(self):
+        async def check():
+            handle = self.recorder.begin(model_id="a", endpoint="chat")
+            capture = RequestCapture(self.recorder, handle, require_transport=True)
+
+            async def app(scope, receive, send):
+                scope["state"]["activity_capture"] = capture
+                capture.api_done("completed")
+                await send(
+                    {"type": "http.response.start", "status": 200, "headers": []}
+                )
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": b"attempted",
+                        "more_body": False,
+                    }
+                )
+
+            async def send(message):
+                if message["type"] == "http.response.body":
+                    raise OSError("synthetic send failure")
+
+            with self.assertRaises(OSError):
+                await ActivityTransportMiddleware(app)({"type": "http"}, None, send)
+            self.assertEqual(self.rows()[0]["state"], "interrupted")
+            self.assertEqual(
+                self.recorder.reader.content(handle.request_id, "api_response")["data"],
+                b"attempted",
+            )
+
+        asyncio.run(check())
+
 
 if __name__ == "__main__":
     unittest.main()

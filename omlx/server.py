@@ -1261,7 +1261,15 @@ async def unhandled_exception_handler(request: FastAPIRequest, exc: Exception):
         content = _openai_error_body("Internal server error", 500)
     else:
         content = {"detail": "Internal server error"}
-    return JSONResponse(status_code=500, content=content)
+    # Starlette's outer error handler runs outside user middleware. Preserve
+    # correlation without reopening a terminal/deleted Activity capture.
+    capture = getattr(request.state, "activity_capture", None)
+    headers = (
+        {"X-oMLX-Request-ID": capture.handle.request_id}
+        if capture is not None
+        else None
+    )
+    return JSONResponse(status_code=500, content=content, headers=headers)
 
 
 _TEXTUAL_BODY_CONTENT_TYPES = (
