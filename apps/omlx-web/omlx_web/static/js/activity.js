@@ -16,6 +16,8 @@
             outlineOpen: false, outlineTruncated: false, current: null, row: 0, visibleRows: 25, columns: 100,
             searchQuery: '', searchResult: {count: 0, match: 0, marks: []}, activeMore: false, recentMore: false,
             pageCursor: '', pageScope: 'recent', paging: false, exporting: false, newOutput: false, viewReady: false, outputBytes: 0,
+            settingsOpen: false, settingsDraft: {enabled: false, max_requests: 1000, max_age_days: 7, storageGiB: 5},
+            configVersion: '', controlBusy: false, pendingAction: '', pendingDeleteId: '',
             boot() {
                 this._visibility = () => this.activate(this.mainTab === 'activity' && !document.hidden);
                 this._navigation = () => { if (this.mainTab === 'activity') this.selectFromUrl(); };
@@ -35,6 +37,7 @@
             },
             async activate(value) {
                 if (!value) {
+                    this.pendingAction = '';
                     stopped = true; generation++; activation++; stream?.close(); stream = null;
                     worker?.terminate(); worker = null; controller?.abort();
                     clearTimeout(retry); clearTimeout(searchTimer); cancelAnimationFrame(frame);
@@ -49,6 +52,7 @@
                     const status = await this.read('/status');
                     if (stopped || token !== activation) return;
                     this.health = status.health;
+                    this.configVersion = status.config_version || '';
                     await this.loadFacets();
                     if (!stopped && token === activation && !stream) this.connect();
                 } catch (error) { if (!stopped && token === activation && error.name !== 'AbortError') this.error = error.message; }
@@ -62,6 +66,53 @@
                 if (Date.now() - lastFacets < 15000) return;
                 lastFacets = Date.now();
                 this.facets = await this.read('/facets');
+            },
+            async openSettings() {
+                try {
+                    const status = await this.read('/status');
+                    this.health = status.health; this.configVersion = status.config_version;
+                    this.settingsDraft = {...status.settings, storageGiB: status.settings.max_storage_bytes / 1024 ** 3};
+                    this.settingsOpen = !this.settingsOpen;
+                } catch (error) { this.error = error.message; }
+            },
+            async write(path, method, action, body) {
+                const response = await fetch(API + path, {method, credentials: 'same-origin', cache: 'no-store', signal: controller?.signal,
+                    headers: {'Content-Type': 'application/json', 'X-Activity-Action': action,
+                        ...(action === 'settings' && this.configVersion ? {'If-Match': this.configVersion} : {})},
+                    body: JSON.stringify(body)});
+                if (!response.ok) {
+                    const data = await response.json().catch(() => ({}));
+                    throw new Error(typeof data.detail === 'string' ? data.detail : `${label('control_failed')} (${response.status})`);
+                }
+                return response.json();
+            },
+            async saveSettings() {
+                this.controlBusy = true; this.error = '';
+                try {
+                    const draft = this.settingsDraft;
+                    const status = await this.write('/settings', 'PUT', 'settings', {enabled: draft.enabled,
+                        max_requests: Number(draft.max_requests), max_age_days: Number(draft.max_age_days),
+                        max_storage_bytes: Math.round(Number(draft.storageGiB) * 1024 ** 3)});
+                    this.health = status.health; this.configVersion = status.config_version;
+                    this.settingsOpen = false; this.connect();
+                } catch (error) { if (error.name !== 'AbortError') this.error = error.message; }
+                finally { this.controlBusy = false; }
+            },
+            confirmRemoval(action) {
+                this.pendingAction = action; this.pendingDeleteId = this.selected;
+            },
+            async removeConfirmed() {
+                const action = this.pendingAction, id = this.pendingDeleteId;
+                if (!['clear', 'delete'].includes(action) || (action === 'delete' && !id)) return;
+                this.controlBusy = true; this.error = '';
+                try {
+                    await this.write(action === 'clear' ? '/clear' : `/requests/${encodeURIComponent(id)}`,
+                        action === 'clear' ? 'POST' : 'DELETE', action, {confirm: action});
+                    this.pendingAction = ''; this.older = []; this.pageCursor = ''; lastFacets = 0;
+                    if (action === 'clear' || this.selected === id) this.select(''); else this.connect();
+                    this.loadFacets().catch(() => {});
+                } catch (error) { if (error.name !== 'AbortError') this.error = error.message; }
+                finally { this.controlBusy = false; }
             },
             connect() {
                 stream?.close(); clearTimeout(retry);
@@ -86,7 +137,7 @@
                             this.missing = !snapshot.detail;
                             this.detail = snapshot.detail;
                             if (snapshot.detail && snapshot.detail.id === this.selected) this.inspect(snapshot.detail);
-                            else if (!snapshot.detail) { worker?.terminate(); worker = null; this.rows = []; this.outline = []; this.total = 0; }
+                            else if (!snapshot.detail) { generation++; worker?.terminate(); worker = null; loadedVersion = ''; this.rows = []; this.outline = []; this.current = null; this.total = 0; }
                         }
                         this.loadFacets().catch(() => {});
                     } catch (_) { this.error = label('invalid_snapshot'); }
@@ -219,8 +270,8 @@
                     if (this.pageCursor) params.set('cursor', this.pageCursor);
                     const data = await this.read(`/requests?${params}`);
                     if (filters !== [this.modelFilter, this.sourceFilter].join('\n')) return;
-                    const visible = new Set([...this.active, ...this.recent].map(record => record.id));
-                    this.older = data.requests.filter(record => !visible.has(record.id));
+                    const shownIds = new Set([...this.active, ...this.recent].map(record => record.id));
+                    this.older = data.requests.filter(record => !shownIds.has(record.id));
                     this.pageCursor = data.next_cursor || '';
                 } catch (error) { this.error = error.message; } finally { this.paging = false; }
             },

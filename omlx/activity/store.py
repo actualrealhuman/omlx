@@ -14,7 +14,7 @@ SCHEMA_VERSION = 1
 MAX_CHUNK_BYTES = 256 * 1024
 MAX_READ_BYTES = 1024 * 1024
 TERMINAL_STATES = frozenset(
-    {"completed", "rejected", "cancelled", "error", "interrupted"}
+    {"completed", "rejected", "cancelled", "error", "interrupted", "capture_stopped"}
 )
 STATES = TERMINAL_STATES | {
     "received",
@@ -63,10 +63,7 @@ class ActivityStore:
             db.execute("PRAGMA journal_mode=WAL")
             db.execute("PRAGMA synchronous=NORMAL")
             db.execute("PRAGMA wal_autocheckpoint=64")
-            page_size = db.execute("PRAGMA page_size").fetchone()[0]
-            # Leave space for a WAL of similar size plus sidecars/maintenance.
-            page_limit = (settings.max_storage_bytes - 256 * 1024) // (2 * page_size)
-            db.execute(f"PRAGMA max_page_count={max(32, page_limit)}")
+            self._limit_pages()
             db.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS requests (
@@ -115,7 +112,17 @@ class ActivityStore:
 
     def save_metadata(self, record: dict):
         metadata = json.dumps(record, ensure_ascii=True)
-        if not self._make_room(len(metadata) * 2 + 32768):
+        terminal_update = (
+            record.get("finished_at") is not None
+            and self.db.execute(
+                "SELECT 1 FROM requests WHERE id=?", (record["id"],)
+            ).fetchone()
+            is not None
+        )
+        # A budget reduction can leave only active records above the new limit.
+        # Permit their bounded terminal metadata update before pruning: otherwise
+        # they could never become eligible for reclamation. No content is added.
+        if not terminal_update and not self._make_room(len(metadata) * 2 + 32768):
             raise RuntimeError("Activity metadata storage budget exhausted")
         values = (
             record["id"],
@@ -194,22 +201,34 @@ class ActivityStore:
 
     def _reclaim(self):
         self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        self.db.execute("PRAGMA incremental_vacuum(128)")
+        # SQLite yields a row per reclaimed page. Drain the bounded operation;
+        # executing without consuming the cursor can stop after the first page.
+        self.db.execute("PRAGMA incremental_vacuum(128)").fetchall()
         self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    def _limit_pages(self):
+        page_size = self.db.execute("PRAGMA page_size").fetchone()[0]
+        # Leave space for a WAL of similar size plus sidecars/maintenance.
+        page_limit = (self.settings.max_storage_bytes - 256 * 1024) // (2 * page_size)
+        self.db.execute(f"PRAGMA max_page_count={max(32, page_limit)}")
 
     def _make_room(self, extra: int):
         if self.physical_bytes() + extra <= self.settings.max_storage_bytes:
             return True
-        self._reclaim()
         while self.physical_bytes() + extra > self.settings.max_storage_bytes:
+            before = self.physical_bytes()
+            self._reclaim()
+            if self.physical_bytes() + extra <= self.settings.max_storage_bytes:
+                return True
             row = self.db.execute(
                 "SELECT id FROM requests WHERE finished_at IS NOT NULL "
                 "ORDER BY finished_at,id LIMIT 1"
             ).fetchone()
             if row is None:
+                if self.physical_bytes() < before:
+                    continue  # More free pages can be reclaimed in bounded steps.
                 return False
             self.delete(row[0])
-            self._reclaim()
         return True
 
     def prune(self, now=None):
@@ -228,6 +247,7 @@ class ActivityStore:
                 (self.settings.max_requests,),
             )
         self._make_room(0)
+        self._limit_pages()
 
     def delete(self, request_id: str):
         with self.db:

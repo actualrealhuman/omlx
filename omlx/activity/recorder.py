@@ -97,7 +97,9 @@ class ActivityRecorder:
     flush/wait_ready/close only at admin/test/shutdown boundaries, never decode.
     """
 
-    def __init__(self, path: Path, settings: ActivitySettings | None = None):
+    def __init__(
+        self, path: Path, settings: ActivitySettings | None = None, *, maintenance=False
+    ):
         self.path = Path(path)
         self.settings = settings or ActivitySettings()
         self.reader = ActivityReader(self.path)
@@ -107,7 +109,9 @@ class ActivityRecorder:
         self._epoch = uuid.uuid4().hex
         self._pending: dict[str, _Pending] = {}
         self._chunks: deque[_Chunk] = deque()
-        self._controls: deque[tuple[str, str | None, Future]] = deque()
+        self._controls: deque[tuple[str, str | ActivitySettings | None, Future]] = (
+            deque()
+        )
         self._pending_bytes = 0
         self._pending_count = 0
         self._closed = False
@@ -117,7 +121,7 @@ class ActivityRecorder:
         self._dropped_events = 0
         self._skipped_requests = 0
         self._thread = None
-        if self.settings.enabled:
+        if self.settings.enabled or (maintenance and self.path.exists()):
             self._thread = threading.Thread(
                 target=self._run, name="omlx-activity", daemon=True
             )
@@ -130,6 +134,7 @@ class ActivityRecorder:
             return {
                 "enabled": self.settings.enabled and not self._closed,
                 "available": self._available,
+                "stopping": self._closed,
                 "error": self._error,
                 "active_captures": len(self._pending),
                 "pending_bytes": self._pending_bytes,
@@ -159,6 +164,7 @@ class ActivityRecorder:
         with self._lock:
             if (
                 self._closed
+                or not self.settings.enabled
                 or self._error
                 or len(self._pending) >= self.settings.max_active_requests
             ):
@@ -220,7 +226,11 @@ class ActivityRecorder:
             return False
         with self._lock:
             pending = self._lookup(handle)
-            if pending is None or pending.metadata["finished_at"] is not None:
+            if (
+                pending is None
+                or not self.settings.enabled
+                or pending.metadata["finished_at"] is not None
+            ):
                 return False
             if type(data) in (list, tuple):
                 logical_size, cost = (
@@ -309,7 +319,7 @@ class ActivityRecorder:
     def _control(self, kind, request_id=None):
         future = Future()
         with self._lock:
-            if self._closed or not self.settings.enabled or self._error:
+            if self._closed or self._thread is None or self._error:
                 future.set_exception(RuntimeError("Activity writer unavailable"))
                 return future
             if len(self._controls) >= _MAX_CONTROLS:
@@ -317,7 +327,11 @@ class ActivityRecorder:
                     RuntimeError("Activity admin operation queue full")
                 )
                 return future
-            if kind == "clear":
+            if kind == "settings":
+                self.settings = request_id
+                if not request_id.enabled:
+                    self._stop_pending("capture_disabled")
+            elif kind == "clear":
                 self._epoch = uuid.uuid4().hex
                 self._pending.clear()
             elif kind == "delete":
@@ -335,6 +349,25 @@ class ActivityRecorder:
         self._wake.set()
         return future
 
+    def _stop_pending(self, reason):
+        """Caller holds the metadata lock. Does not interact with inference."""
+        now = time.time()
+        for pending in self._pending.values():
+            if pending.metadata["finished_at"] is None:
+                pending.metadata.update(state="capture_stopped", finished_at=now)
+                self._gap(pending, reason)
+
+    def update_settings(self, settings):
+        if not isinstance(settings, ActivitySettings):
+            raise ValueError("Invalid Activity settings")
+        with self._lock:
+            if self._error and not settings.enabled:
+                self.settings = settings
+                future = Future()
+                future.set_result(None)
+                return future
+        return self._control("settings", settings)
+
     def clear(self):
         """Return an admin future; its completion fences prior in-flight writes."""
         return self._control("clear")
@@ -344,7 +377,7 @@ class ActivityRecorder:
 
     def flush(self, timeout=5):
         """Admin/test barrier. Does not end active requests."""
-        if not self.settings.enabled:
+        if self._thread is None:
             return True
         try:
             self._control("flush").result(timeout)
@@ -409,6 +442,11 @@ class ActivityRecorder:
                         store.clear()
                     elif kind == "delete":
                         store.delete(request_id)
+                    elif kind == "settings":
+                        store.settings = request_id
+                        if not store._make_room(0):
+                            with self._lock:
+                                self._stop_pending("storage_budget_reduced")
                 for key, record, _version, persisted in metadata:
                     if persisted:
                         continue
@@ -483,7 +521,7 @@ class ActivityRecorder:
                                 and pending.pending_chunks == 0
                             ):
                                 self._pending.pop(key)
-                if final or time.monotonic() - last_prune >= 60:
+                if final or controls or time.monotonic() - last_prune >= 60:
                     store.prune()
                     last_prune = time.monotonic()
                 for _, _, future in controls:

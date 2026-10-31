@@ -19,8 +19,9 @@ qualification remain pending.
 The foundation uses one background SQLite writer and separately bounded content
 and lifecycle metadata. Producer methods enqueue immutable CPU observations;
 encoding, compression and persistence happen on the worker. Queue saturation
-records incomplete capture while preserving request terminal status. A disabled
-recorder creates neither a database nor a worker.
+records incomplete capture while preserving request terminal status. A disabled recorder with no history creates neither a database nor a worker.
+Existing history uses a maintenance worker so retention and deletion still apply
+when capture is off.
 
 Request identity begins before model loading/preflight. Engine invocations have
 separate identifiers under the request. Streaming completion waits for the body
@@ -85,6 +86,11 @@ shared test imports may initialize Metal even though no real model is loaded.
 pagination/filtering, snapshot consistency, reconnect/session revalidation,
 reader cancellation and stream admission. `tests/test_activity_transport.py`
 covers handled exceptions and responses whose iterators never begin.
+`tests/test_activity_controls.py` covers live disable/resume without engine
+cancellation, atomic section-only persistence, stale versions, invalid settings,
+save failures, disabled-history maintenance, clear/delete fences, shared-lock
+ownership after caller cancellation, slow-writer replacement guards, and physical-
+budget reduction/reclamation.
 `tests/test_activity_dashboard.py` checks parent identity correlation for actual
 waiting/prefill/generation row construction. Web tests compile the Alpine
 expressions and render the real dashboard template. Run the standalone behavior
@@ -135,6 +141,39 @@ authorization is rechecked throughout a stream; `authorization_lost`,
 `unavailable` and `reconnect` are explicit terminal stream events. Data responses
 are marked no-store. This is not a lossless event-log/replay contract.
 
+## Live controls
+
+Capture settings on Activity apply without restarting inference. The configurable
+1,000-record/seven-day/5-GiB defaults remain unchanged. Turning capture off closes
+active records as `capture_stopped`, preserves partial content and records the
+reason; it neither cancels inference nor invents a successful request completion.
+Turning it back on captures only newly admitted requests. Retention reductions
+apply promptly; completed history is removed first. If an active store cannot
+fit a reduced byte allowance, its captures stop and become eligible for retention.
+
+`PUT /admin/api/activity/settings` accepts `enabled`, `max_requests`,
+`max_age_days`, and `max_storage_bytes`; unknown fields, nulls and inconsistent
+limits are rejected. Send `X-Activity-Action: settings` and optionally `If-Match`
+with the `config_version` from status to reject stale saves. Only the Activity
+section is saved, preserving stored values versus unrelated runtime overrides.
+Credential-ID migration uses the same serialized settings-save boundary.
+
+`DELETE /admin/api/activity/requests/{id}` requires JSON `{"confirm":"delete"}`
+and `X-Activity-Action: delete`. `POST /admin/api/activity/clear` requires JSON
+`{"confirm":"clear"}` and `X-Activity-Action: clear`. The browser asks for local
+confirmation with the exact scope. These remove Activity data and fence late
+writes; they do not clear chat history/KV caches or cancel inference. Clearing
+also stops capture of requests already admitted, while later requests can still
+be captured. No forensic erasure is promised.
+
+Mutations require the existing admin authority, an explicit action header and
+bounded control admission. A task retains the shared settings-save lock through
+its worker result even if the HTTP caller disconnects. On a failed or timed-out
+response, reload settings/history before deciding whether to retry; a save can
+have succeeded even if its later live application did not finish. The API
+reports that saved/live distinction explicitly. A replacement writer cannot
+start while the previous writer is still stopping.
+
 ## Browser inspector
 
 The Activity tab opens independently of capture being enabled. The list reads
@@ -172,9 +211,9 @@ new non-English entries currently use the repository's English fallback.
 - `raw_output` currently means engine-producer text before API formatting.
   Engines with their own native parsers may already have transformed it;
   universal pre-parser raw generation is not yet qualified.
-- Implement the inspector, long-context rail/navigation/search, dashboard links,
-  translations and admin settings. Assess image support without delaying the
-  core text MVP unnecessarily.
+- Qualify the initial inspector, navigation, dashboard links and live controls
+  in an actual browser. Assess image support without delaying the core text MVP
+  unnecessarily; current media placeholders are inert.
 - Qualify physical-budget behavior under disk-full conditions, pinned SQLite
   readers, reclamation/migration and very large histories. Current page limits
   conservatively reserve part of the budget for WAL/sidecars; configured disk
@@ -184,9 +223,8 @@ new non-English entries currently use the repository's English fallback.
 - Validate a fully composed private build separately from the focused source.
 - Semantic input export currently runs once at API ingress before preprocessing;
   its cost on very large payloads and media normalization still need qualification.
-- Live settings, clear/delete HTTP controls, attachments and the native restart/
-  long-running viewer lifecycle remain to be completed or qualified. The current
-  admin interface is read-only. Images are inert placeholders, not previews.
+- Attachments and native restart/long-running viewer lifecycle remain to be
+  completed or qualified. Image previews are not implemented yet.
 - Actual rendered-browser validation, text selection across virtualized windows,
   per-message copying, richer parsed reasoning/tool output, complete large-outline
   navigation and deep-link history polish remain to be qualified or completed.

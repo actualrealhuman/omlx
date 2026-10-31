@@ -3,7 +3,7 @@
 
 import asyncio
 
-from .runtime import get_recorder
+from .runtime import capture_enabled
 
 
 class ActivityTransportMiddleware:
@@ -11,7 +11,7 @@ class ActivityTransportMiddleware:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or get_recorder() is None:
+        if scope["type"] != "http" or not capture_enabled():
             await self.app(scope, receive, send)
             return
         state = scope.setdefault("state", {})

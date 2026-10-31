@@ -72,8 +72,8 @@ from .activity import ActivityRecorder, ActivitySettings
 from .activity.identity import credential_source
 from .activity.middleware import ActivityTransportMiddleware
 from .activity.runtime import (
+    capture_enabled as activity_capture_enabled,
     configure_recorder,
-    get_recorder as get_activity_recorder,
     inference_request_id as activity_request_id,
     observe_request,
     phase as activity_phase,
@@ -392,7 +392,7 @@ async def verify_api_key(
     # A missing key is accepted only when the configured bind is loopback-only.
     if _server_state.api_key is None:
         if loopback_only:
-            if get_activity_recorder() is not None:
+            if activity_capture_enabled():
                 request.state.activity_source = ("anonymous", "Unauthenticated")
             return True
         raise HTTPException(status_code=401, detail="API key required")
@@ -403,7 +403,7 @@ async def verify_api_key(
         and global_settings.auth.skip_api_key_verification
         and loopback_only
     ):
-        if get_activity_recorder() is not None:
+        if activity_capture_enabled():
             request.state.activity_source = ("bypass", "Verification bypassed")
         return True
 
@@ -429,7 +429,7 @@ async def verify_api_key(
         logger.warning("Rejected API key (fp=%s)", fingerprint_key(api_key_value))
         raise HTTPException(status_code=401, detail="Invalid API key")
 
-    if get_activity_recorder() is not None:
+    if activity_capture_enabled():
         request.state.activity_source = credential_source(
             api_key_value, _server_state.api_key, sub_keys
         )
@@ -450,7 +450,7 @@ async def verify_inference_api_key(
 ) -> bool:
     """Allow the manual inference opt-in without changing management auth."""
     if allows_unauthenticated_inference():
-        if get_activity_recorder() is not None:
+        if activity_capture_enabled():
             request.state.activity_source = ("anonymous", "Unauthenticated")
         return True
     return await verify_api_key(request, credentials)
@@ -2605,14 +2605,21 @@ def init_server(
     )
 
     previous_activity = configure_recorder(None)
-    if previous_activity is not None:
-        previous_activity.close()
+    previous_activity_stopped = previous_activity is None or previous_activity.close()
+    if not previous_activity_stopped:
+        configure_recorder(previous_activity)
+        logger.warning("Previous Activity writer is still stopping; capture remains unavailable")
     activity_settings = getattr(global_settings, "activity", None)
-    if isinstance(activity_settings, ActivitySettings) and activity_settings.enabled:
+    if previous_activity_stopped and isinstance(activity_settings, ActivitySettings) and (
+        activity_settings.enabled or (base_path / "activity.sqlite3").exists()
+    ):
         try:
-            global_settings.ensure_activity_source_ids()
+            if activity_settings.enabled:
+                global_settings.ensure_activity_source_ids()
             configure_recorder(
-                ActivityRecorder(base_path / "activity.sqlite3", activity_settings)
+                ActivityRecorder(
+                    base_path / "activity.sqlite3", activity_settings, maintenance=True
+                )
             )
         except Exception:
             logger.warning("Activity capture unavailable; serving continues")

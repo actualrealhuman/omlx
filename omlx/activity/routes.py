@@ -20,14 +20,36 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
-from .runtime import get_recorder
+from .config import ActivitySettings
+from .recorder import ActivityRecorder
+from .runtime import configure_recorder, get_recorder
 from .store import MAX_READ_BYTES, REPRESENTATIONS, STATES, ActivityReader
 
 _NO_STORE = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
 _MAX_READERS = 4
 _MAX_STREAMS = 8
 _MAX_EVENT_BYTES = 1024 * 1024
+
+
+class ActivityUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: StrictBool | None = None
+    max_requests: StrictInt | None = Field(None, gt=0, le=2**63 - 1)
+    max_age_days: StrictInt | None = Field(None, gt=0, le=2**31 - 1)
+    max_storage_bytes: StrictInt | None = Field(None, gt=0, le=2**63 - 1)
+
+
+class ActivityConfirmation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirm: Literal["delete", "clear"]
+
+
+def _settings_version(settings):
+    return hashlib.sha256(
+        json.dumps(settings.to_dict(), sort_keys=True).encode()
+    ).hexdigest()
 
 
 def _encode_cursor(record):
@@ -79,7 +101,9 @@ class _StreamResponse(StreamingResponse):
 
 
 class ActivityAdmin:
-    def __init__(self, get_settings, require_admin, *, poll_seconds=0.5):
+    def __init__(
+        self, get_settings, require_admin, *, poll_seconds=0.5, settings_lock=None
+    ):
         self.get_settings, self.require_admin = get_settings, require_admin
         self.poll_seconds = poll_seconds
         self._executor = ThreadPoolExecutor(
@@ -91,6 +115,9 @@ class ActivityAdmin:
         self._generation = 0
         self._streams = set()
         self._stream_lock = threading.Lock()
+        self._settings_lock = settings_lock or asyncio.Lock()
+        self._controls = 0
+        self._control_tasks = set()
 
     def start(self):
         with self._read_lock:
@@ -144,6 +171,140 @@ class ActivityAdmin:
             return await asyncio.shield(asyncio.wrap_future(future))
         except (sqlite3.Error, OSError, ValueError, zlib.error) as exc:
             raise HTTPException(503, "Activity history unavailable") from exc
+
+    async def control(self, operation):
+        # A task owns the shared settings lock through the actual worker result,
+        # even when its HTTP caller disconnects. Admission bounds queued tasks.
+        if self._controls >= 8:
+            raise HTTPException(429, "Activity control capacity reached")
+        self._controls += 1
+
+        async def run():
+            try:
+                async with self._settings_lock:
+                    return await self.read(operation)
+            finally:
+                self._controls -= 1
+
+        task = asyncio.create_task(run())
+        self._control_tasks.add(task)
+
+        def finished(task):
+            self._control_tasks.discard(task)
+            if not task.cancelled():
+                task.exception()  # Observe errors if the HTTP caller disconnected.
+
+        task.add_done_callback(finished)
+        return await asyncio.shield(task)
+
+    def _writer(self):
+        recorder = get_recorder()
+        if recorder is not None:
+            return recorder
+        settings = self.get_settings()
+        if settings is None:
+            raise HTTPException(503, "Server not initialized")
+        path = Path(settings.base_path) / "activity.sqlite3"
+        if not path.exists():
+            return None
+        recorder = ActivityRecorder(path, settings.activity, maintenance=True)
+        if not recorder.wait_ready():
+            if not recorder.close():
+                configure_recorder(recorder)
+            raise HTTPException(
+                503, "Activity history unavailable; existing store preserved"
+            )
+        configure_recorder(recorder)
+        return recorder
+
+    def apply_settings(self, update, version):
+        settings = self.get_settings()
+        if settings is None:
+            raise HTTPException(503, "Server not initialized")
+        if version and version != _settings_version(settings.activity):
+            raise HTTPException(409, "Activity settings changed; reload before saving")
+        try:
+            candidate = ActivitySettings.from_dict(
+                {**settings.activity.to_dict(), **update}
+            )
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        recorder, staged = get_recorder(), None
+        if recorder is not None and (
+            recorder.health().get("stopping")
+            or (recorder.health()["error"] and candidate.enabled)
+        ):
+            if not recorder.close():
+                raise HTTPException(503, "Previous Activity writer is still stopping")
+            recorder = None
+        if candidate.enabled:
+            settings.ensure_activity_source_ids()
+        if recorder is None and (
+            candidate.enabled
+            or (Path(settings.base_path) / "activity.sqlite3").exists()
+        ):
+            path = Path(settings.base_path) / "activity.sqlite3"
+            # Readiness must not prune history under an uncommitted proposal.
+            # Use current policy until the section save succeeds. A new empty
+            # store needs an enabled bootstrap writer, never published to hooks.
+            bootstrap = (
+                settings.activity
+                if path.exists()
+                else ActivitySettings.from_dict(
+                    {**settings.activity.to_dict(), "enabled": True}
+                )
+            )
+            staged = ActivityRecorder(
+                path,
+                bootstrap,
+                maintenance=True,
+            )
+            if not staged.wait_ready():
+                if not staged.close():
+                    configure_recorder(staged)
+                raise HTTPException(
+                    503, "Activity capture unavailable; existing store preserved"
+                )
+        try:
+            settings.save_activity_settings(candidate)
+        except (OSError, ValueError):
+            if staged is not None and not staged.close():
+                configure_recorder(staged)
+            raise HTTPException(503, "Activity settings could not be saved") from None
+        if staged is not None:
+            recorder = staged
+        if recorder is not None:
+            try:
+                recorder.update_settings(candidate).result(5)
+            except (RuntimeError, TimeoutError):
+                raise HTTPException(
+                    503, "Activity settings saved; live change did not complete"
+                ) from None
+            finally:
+                if staged is not None:
+                    configure_recorder(staged)
+        return {
+            "settings": candidate.to_dict(),
+            "config_version": _settings_version(candidate),
+            "health": self.health(),
+        }
+
+    def remove(self, request_id=None):
+        recorder = self._writer()
+        if recorder is None:
+            if request_id:
+                raise HTTPException(404, "Activity request not retained")
+            return {"cleared": True}
+        if request_id and recorder.reader.get(request_id) is None:
+            raise HTTPException(404, "Activity request not retained")
+        try:
+            future = recorder.delete(request_id) if request_id else recorder.clear()
+            future.result(5)
+        except (RuntimeError, TimeoutError):
+            raise HTTPException(
+                503, "Activity history change did not complete"
+            ) from None
+        return {"deleted": request_id} if request_id else {"cleared": True}
 
     def health(self):
         recorder = get_recorder()
@@ -234,8 +395,15 @@ class ActivityAdmin:
                 return
 
 
-def create_activity_router(*, get_settings, require_admin, poll_seconds=0.5):
-    service = ActivityAdmin(get_settings, require_admin, poll_seconds=poll_seconds)
+def create_activity_router(
+    *, get_settings, require_admin, poll_seconds=0.5, settings_lock=None
+):
+    service = ActivityAdmin(
+        get_settings,
+        require_admin,
+        poll_seconds=poll_seconds,
+        settings_lock=settings_lock,
+    )
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -243,6 +411,8 @@ def create_activity_router(*, get_settings, require_admin, poll_seconds=0.5):
         try:
             yield
         finally:
+            if service._control_tasks:
+                await asyncio.gather(*service._control_tasks, return_exceptions=True)
             service.close()
 
     router = APIRouter(
@@ -257,7 +427,56 @@ def create_activity_router(*, get_settings, require_admin, poll_seconds=0.5):
         settings = get_settings()
         if settings is None:
             raise HTTPException(503, "Server not initialized")
-        return {"health": service.health(), "settings": settings.activity.to_dict()}
+        return {
+            "health": service.health(),
+            "settings": settings.activity.to_dict(),
+            "config_version": _settings_version(settings.activity),
+        }
+
+    @router.put("/settings")
+    async def update_settings(
+        update: ActivityUpdate, request: Request, response: Response
+    ):
+        if request.headers.get("x-activity-action") != "settings":
+            raise HTTPException(400, "Explicit Activity action header required")
+        values = update.model_dump(exclude_unset=True)
+        if any(value is None for value in values.values()):
+            raise HTTPException(400, "Activity settings cannot be null")
+        version = request.headers.get("if-match")
+        result = await service.control(lambda: service.apply_settings(values, version))
+        response.headers.update(_NO_STORE)
+        return result
+
+    @router.delete("/requests/{request_id}")
+    async def delete_request(
+        request_id: str,
+        confirmation: ActivityConfirmation,
+        request: Request,
+        response: Response,
+    ):
+        if (
+            confirmation.confirm != "delete"
+            or request.headers.get("x-activity-action") != "delete"
+        ):
+            raise HTTPException(400, "Explicit delete confirmation required")
+        if len(request_id) > 128:
+            raise HTTPException(404, "Activity request not retained")
+        result = await service.control(lambda: service.remove(request_id))
+        response.headers.update(_NO_STORE)
+        return result
+
+    @router.post("/clear")
+    async def clear(
+        confirmation: ActivityConfirmation, request: Request, response: Response
+    ):
+        if (
+            confirmation.confirm != "clear"
+            or request.headers.get("x-activity-action") != "clear"
+        ):
+            raise HTTPException(400, "Explicit clear confirmation required")
+        result = await service.control(service.remove)
+        response.headers.update(_NO_STORE)
+        return result
 
     @router.get("/requests")
     async def requests_page(

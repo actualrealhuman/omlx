@@ -1588,6 +1588,19 @@ class GlobalSettings:
         self.base_path.mkdir(parents=True, exist_ok=True)
         self._save_data(data)
 
+    def save_activity_settings(self, settings: ActivitySettings) -> None:
+        """Persist this section only; callers serialize with other settings saves."""
+        if not isinstance(settings, ActivitySettings):
+            raise ValueError("Invalid Activity settings")
+        path = self.base_path / "settings.json"
+        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        if not isinstance(data, dict):
+            raise ValueError("Invalid saved settings")
+        data["activity"] = settings.to_dict()
+        self.base_path.mkdir(parents=True, exist_ok=True)
+        self._save_data(data)
+        self.activity = settings
+
     def ensure_activity_source_ids(self) -> None:
         """Persist opaque IDs for legacy keys without writing runtime overrides."""
         path = self.base_path / "settings.json"

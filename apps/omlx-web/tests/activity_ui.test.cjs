@@ -119,3 +119,63 @@ test('live updates preserve mounted text identities and distinguish new output f
     assert.equal(app.newOutput, true);
     await app.activate(false);
 });
+
+test('capture controls use versioned settings writes and pin deletion to the confirmed record', async () => {
+    const {app, context} = harness();
+    const writes = [];
+    context.fetch = async (url, init = {}) => {
+        if (init.method) {
+            writes.push({url, ...init});
+            return {ok: true, json: async () => ({health: {enabled: true}, config_version: 'new-version'})};
+        }
+        return {ok: true, json: async () => url.endsWith('/status')
+            ? {health: {enabled: false}, settings: {enabled: false, max_requests: 1000, max_age_days: 7, max_storage_bytes: 5 * 1024 ** 3}, config_version: 'old-version'}
+            : {models: [], sources: []}};
+    };
+    await app.activate(true);
+    await app.openSettings();
+    assert.equal(app.settingsDraft.storageGiB, 5);
+    app.settingsDraft.enabled = true; app.settingsDraft.max_requests = 10000;
+    await app.saveSettings();
+    assert.equal(writes[0].headers['X-Activity-Action'], 'settings');
+    assert.equal(writes[0].headers['If-Match'], 'old-version');
+    assert.equal(JSON.parse(writes[0].body).max_requests, 10000);
+    assert.equal(JSON.parse(writes[0].body).max_storage_bytes, 5 * 1024 ** 3);
+    app.selected = 'confirmed'; app.confirmRemoval('delete'); app.selected = 'other';
+    await app.removeConfirmed();
+    assert.ok(writes[1].url.endsWith('/requests/confirmed'));
+    assert.equal(writes[1].method, 'DELETE');
+    assert.equal(JSON.parse(writes[1].body).confirm, 'delete');
+    assert.equal(app.selected, 'other');
+    app.confirmRemoval('clear');
+    await app.activate(false);
+    assert.equal(app.pendingAction, '');
+});
+
+test('failed settings writes retain the draft and do not blindly retry', async () => {
+    const {app, context} = harness();
+    let calls = 0;
+    context.fetch = async () => { calls++; return {ok: false, status: 409, json: async () => ({detail: 'reload before saving'})}; };
+    app.settingsOpen = true; app.settingsDraft.max_requests = 42;
+    await app.saveSettings();
+    assert.equal(calls, 1);
+    assert.equal(app.settingsOpen, true);
+    assert.equal(app.settingsDraft.max_requests, 42);
+    assert.equal(app.error, 'reload before saving');
+    assert.equal(app.controlBusy, false);
+});
+
+test('cleared or expired selections invalidate already queued worker responses', async () => {
+    const {app, streams, workers} = harness();
+    await app.activate(true);
+    const stream = streams.at(-1);
+    stream.events.snapshot({data: JSON.stringify({active: [], recent: [], health: {}, detail: {id: 'first', version: '1', representations: []}})});
+    const old = workers.at(-1);
+    stream.events.snapshot({data: JSON.stringify({active: [], recent: [], health: {}, detail: null})});
+    assert.equal(old.terminated, true);
+    assert.equal(app.missing, true);
+    old.onmessage({data: {type: 'error', message: 'stale worker'}});
+    assert.notEqual(app.error, 'stale worker');
+    assert.equal(app.rows.length, 0);
+    await app.activate(false);
+});

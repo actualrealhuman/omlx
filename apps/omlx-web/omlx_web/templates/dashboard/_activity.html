@@ -2,10 +2,21 @@
          x-data="activityInspector()" x-init="boot()" data-worker-url="{{ static('js/activity_worker.js') }}" class="activity-panel">
     <header class="activity-heading">
         <div><p class="activity-eyebrow">{{ t('activity.eyebrow') }}</p><h1>{{ t('navbar.tab.activity') }}</h1><p class="activity-muted">{{ t('activity.subtitle') }}</p></div>
-        <div class="activity-signal" :data-state="connection"><span></span><span x-text="label('connection.' + connection)"></span></div>
+        <div class="activity-heading-actions"><button @click="openSettings()" :aria-expanded="settingsOpen" aria-controls="activity-settings">{{ t('activity.capture_settings') }}</button><div class="activity-signal" :data-state="connection"><span></span><span x-text="label('connection.' + connection)"></span></div></div>
     </header>
+    <form id="activity-settings" x-show="settingsOpen" @submit.prevent="saveSettings()" class="activity-settings">
+        <div class="activity-settings-fields">
+            <label class="activity-settings-enabled"><span>{{ t('activity.capture_enabled') }}</span><button type="button" role="switch" :aria-checked="settingsDraft.enabled" @click="settingsDraft.enabled = !settingsDraft.enabled" :disabled="controlBusy" class="activity-capture-switch" :class="settingsDraft.enabled ? 'is-on' : ''" aria-label="{{ t('activity.capture_enabled') }}"><span></span></button></label>
+            <label><span>{{ t('activity.request_limit') }}</span><input type="number" min="1" step="1" required x-model.number="settingsDraft.max_requests" :disabled="controlBusy"></label>
+            <label><span>{{ t('activity.age_limit') }}</span><input type="number" min="1" step="1" required x-model.number="settingsDraft.max_age_days" :disabled="controlBusy"></label>
+            <label><span>{{ t('activity.storage_limit') }}</span><input type="number" min="0.0625" step="any" required x-model.number="settingsDraft.storageGiB" :disabled="controlBusy"></label>
+        </div>
+        <p>{{ t('activity.settings_hint') }}</p>
+        <div class="activity-settings-actions"><button type="button" @click="confirmRemoval('clear')" :disabled="controlBusy">{{ t('activity.clear_history') }}</button><button type="button" @click="settingsOpen = false" :disabled="controlBusy">{{ t('activity.cancel') }}</button><button type="submit" :disabled="controlBusy">{{ t('activity.save_settings') }}</button></div>
+    </form>
     <div x-show="error" class="activity-notice" role="alert"><span x-text="error"></span> <a x-show="connection === 'disconnected'" href="/admin/login">{{ t('activity.sign_in_link') }}</a></div>
     <div x-show="!health.enabled" class="activity-notice">{{ t('activity.capture_disabled') }}</div>
+    <div x-show="health.stopping" class="activity-notice" role="status">{{ t('activity.capture_stopping') }}</div>
     <div x-show="health.error" class="activity-notice" role="status">{{ t('activity.capture_degraded') }}</div>
     <div class="activity-workspace">
         <aside class="activity-requests" :class="selected ? 'activity-mobile-hidden' : ''" aria-label="{{ t('activity.requests') }}">
@@ -59,6 +70,7 @@
                     <select aria-label="{{ t('activity.evidence') }}" :value="['submitted', 'model'].includes(mode) ? '' : mode" @change="if ($event.target.value) { mode = $event.target.value; changeMode(); }">
                         <option value="">{{ t('activity.evidence') }}</option><option value="model_tokens">{{ t('activity.role.model_tokens') }}</option><option value="api_response">{{ t('activity.role.api_response') }}</option><option value="events">{{ t('activity.role.events') }}</option>
                     </select>
+                    <button @click="confirmRemoval('delete')" :disabled="controlBusy">{{ t('activity.delete_request') }}</button>
                     <button @click="exportView('copy')" :disabled="exporting || loading || !total">{{ t('activity.copy') }}</button>
                     <button @click="exportView()" :disabled="exporting || loading || !total" x-text="label(exporting ? 'exporting' : 'download')"></button>
                 </div>
@@ -89,4 +101,10 @@
             </div>
         </div>
     </div>
+    <dialog x-effect="pendingAction ? $el.showModal() : $el.close()" @cancel.prevent="if (!controlBusy) pendingAction = ''" class="activity-confirm" aria-labelledby="activity-confirm-title">
+        <h2 id="activity-confirm-title" x-text="label(pendingAction === 'clear' ? 'clear_history' : 'delete_request')"></h2>
+        <p x-text="label(pendingAction === 'clear' ? 'clear_confirmation' : 'delete_confirmation')"></p>
+        <p class="activity-id" x-show="pendingAction === 'delete'" x-text="pendingDeleteId"></p>
+        <div><button @click="pendingAction = ''" :disabled="controlBusy">{{ t('activity.cancel') }}</button><button @click="removeConfirmed()" :disabled="controlBusy" x-text="label(controlBusy ? 'working' : 'confirm_remove')"></button></div>
+    </dialog>
 </section>

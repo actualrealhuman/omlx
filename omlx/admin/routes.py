@@ -1598,15 +1598,16 @@ _ms_downloader = None
 _oq_manager = None
 _hf_uploader = None
 
+# One save at a time: _save_data writes through a pid-named temp file.
+_settings_save_lock = asyncio.Lock()
+
 router.include_router(
     create_activity_router(
         get_settings=lambda: _get_global_settings() if _get_global_settings else None,
         require_admin=require_admin,
+        settings_lock=_settings_save_lock,
     )
 )
-
-# One save at a time: _save_data writes through a pid-named temp file.
-_settings_save_lock = asyncio.Lock()
 
 
 async def _save_global_settings_async(global_settings) -> None:

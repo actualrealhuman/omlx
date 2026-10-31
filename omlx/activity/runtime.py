@@ -21,8 +21,13 @@ def get_recorder():
     return _recorder
 
 
+def capture_enabled():
+    recorder = _recorder
+    return recorder is not None and recorder.settings.enabled
+
+
 def configure_recorder(recorder):
-    """Startup/shutdown only; callers close the replaced writer explicitly."""
+    """Startup/shutdown or serialized admin control; close replaced writers explicitly."""
     global _recorder
     previous, _recorder = _recorder, recorder
     return previous
