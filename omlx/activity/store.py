@@ -389,6 +389,23 @@ class ActivityReader:
         result["capture_status"] = (
             "gaps_recorded" if result["capture_gaps"] else "no_gaps_recorded"
         )
+        retained = {item["representation"] for item in result["representations"]}
+        result["observation"] = {
+            "invocations_observed": result.get("observed_invocations", 0),
+            "counts_scope": "observed_scheduler_invocations_only",
+            "input_count_source": "admitted_token_ids"
+            if "observed_input_tokens" in result
+            else "unavailable",
+            "generated_count_source": "engine_cumulative_counter"
+            if "observed_generated_tokens" in result
+            else "unavailable",
+            "prefill_callback_observed": bool(result.get("prefilling_invocations")),
+            "prepared_text_retained": "model_input" in retained,
+            "prepared_token_ids_retained": "model_tokens" in retained,
+            "producer_output_retained": "raw_output" in retained,
+            "api_wire_retained": "api_response" in retained,
+            "preparser_output_guaranteed": False,
+        }
         result["version"] = hashlib.sha256(
             json.dumps(result, sort_keys=True, ensure_ascii=True).encode()
         ).hexdigest()

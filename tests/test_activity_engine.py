@@ -64,6 +64,11 @@ async def test_actual_prepared_tokens_and_core_output_are_observed(observed_engi
         await core.add_request(
             [11, 12, 13], request_id=rid, activity_prompt="<user>actual<assistant>"
         )
+        core.scheduler.uid_to_request_id[73] = rid
+        with patch("omlx.scheduler.get_prefill_tracker"):
+            core.scheduler._on_prompt_progress([(73, 1, 3)])
+        assert recorder.flush()
+        assert recorder.reader.get(rid)["state"] == "prefilling"
 
         def step():
             core._running = False
@@ -92,6 +97,19 @@ async def test_actual_prepared_tokens_and_core_output_are_observed(observed_engi
     assert recorder.flush()
     rid = response.headers["x-omlx-request-id"]
     assert recorder.reader.get(rid)["state"] == "completed"
+    detail = recorder.reader.detail(rid)
+    assert detail["observed_input_tokens"] == 3
+    assert detail["observed_generated_tokens"] == 7
+    assert detail["observed_invocations"] == 1
+    assert detail["prefilling_invocations"] == 1
+    assert detail["first_observed_token_ms"] >= 0
+    assert detail["observation"]["preparser_output_guaranteed"] is False
+    events = [
+        json.loads(line)
+        for line in recorder.reader.content(rid, "events")["data"].splitlines()
+    ]
+    assert events[0]["sampling_subset"]["max_tokens"] == 256
+    assert events[-1]["finish_reason"] == "stop"
     assert (
         recorder.reader.content(rid, "model_input", invocation_id="1")["data"]
         == b"<user>actual<assistant>"

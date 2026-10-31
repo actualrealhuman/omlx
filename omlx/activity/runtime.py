@@ -3,7 +3,9 @@
 
 import asyncio
 import json
+import math
 import threading
+import time
 import uuid
 from contextvars import ContextVar
 from functools import wraps
@@ -64,6 +66,7 @@ class RequestCapture:
         self._finalized = False
         self._require_transport = require_transport
         self._transport_done = False
+        self._started = time.monotonic()
 
     def text(self, representation, value, *, invocation_id="0"):
         if value:
@@ -81,7 +84,7 @@ class RequestCapture:
                 ):
                     break
 
-    def invocation(self, engine_request_id, *, prepared_text=None):
+    def invocation(self, engine_request_id, *, prepared_text=None, options=None):
         with self._lock:
             if self._next_invocation >= 256 or self._api_outcome is not None:
                 self.recorder.gap(self.handle, "invocation_limit_or_closed_request")
@@ -89,13 +92,27 @@ class RequestCapture:
             self._next_invocation += 1
             self._active += 1
             result = InvocationCapture(self, str(self._next_invocation), prepared_text)
+            self.recorder.metrics(self.handle, counts={"observed_invocations": 1})
         self.text(
             "events",
             json.dumps(
                 {
                     "type": "invocation",
                     "invocation_id": result.id,
-                    "engine_request_id": engine_request_id,
+                    "engine_request_id": engine_request_id[:128]
+                    if isinstance(engine_request_id, str)
+                    else None,
+                    "backend": "local_scheduler_core",
+                    "sampling_subset": {
+                        key: value
+                        for key, value in (options or ())
+                        if (
+                            value is None
+                            or type(value) is bool
+                            or (type(value) is int and -(2**63) < value < 2**63)
+                            or (type(value) is float and math.isfinite(value))
+                        )
+                    },
                 }
             )
             + "\n",
@@ -143,23 +160,101 @@ class InvocationCapture:
         self.request, self.id = request, invocation_id
         self.prepared_text = prepared_text
         self.done = False
+        self._prepared = False
+        self._output_tokens = 0
+        self._counter_seen = False
+        self._counter_regressed = False
+        self._prefill_seen = False
+
+    def _event(self, kind, **values):
+        self.request.text(
+            "events",
+            json.dumps(
+                {
+                    "type": kind,
+                    "invocation_id": self.id,
+                    "since_receipt_ms": round(
+                        (time.monotonic() - self.request._started) * 1000, 3
+                    ),
+                    **values,
+                }
+            )
+            + "\n",
+        )
 
     def prepared(self, prompt, token_ids):
-        text = self.prepared_text if self.prepared_text is not None else prompt
-        if isinstance(text, str):
-            self.request.text("model_input", text, invocation_id=self.id)
-        self.request.recorder.append_tokens(
-            self.request.handle, token_ids, invocation_id=self.id
-        )
-        self.prepared_text = None
-        self.request.recorder.state(self.request.handle, "queued")
+        with self.request._lock:
+            if self.done:
+                return
+            if self._prepared:
+                self.request.recorder.gap(
+                    self.request.handle, "prepared_input_repeated"
+                )
+                return
+            self._prepared = True
+            text = self.prepared_text if self.prepared_text is not None else prompt
+            if isinstance(text, str):
+                self.request.text("model_input", text, invocation_id=self.id)
+            self.request.recorder.append_tokens(
+                self.request.handle, token_ids, invocation_id=self.id
+            )
+            self.request.recorder.metrics(
+                self.request.handle,
+                counts={
+                    "prepared_invocations": 1,
+                    "prepared_text_invocations": int(isinstance(text, str)),
+                    "observed_input_tokens": len(token_ids),
+                },
+            )
+            self.prepared_text = None
+            self.request.recorder.state(self.request.handle, "queued")
+            self._event(
+                "prepared",
+                input_tokens=len(token_ids),
+                prepared_text=isinstance(text, str),
+            )
+
+    def prefill(self):
+        with self.request._lock:
+            if not self.done:
+                if not self._prefill_seen:
+                    self._prefill_seen = True
+                    self.request.recorder.metrics(
+                        self.request.handle, counts={"prefilling_invocations": 1}
+                    )
+                self.request.recorder.state(self.request.handle, "prefilling")
 
     def output(self, output):
         # Observe every producer output, before stream-interval aggregation and
         # API parser cleanup. No cumulative-output comparison or token decoding.
-        if output.new_text and not output.error:
-            self.request.text("raw_output", output.new_text, invocation_id=self.id)
-            self.request.recorder.state(self.request.handle, "generating")
+        with self.request._lock:
+            if self.done:
+                return
+            tokens = getattr(output, "completion_tokens", None)
+            counts, times = {}, {}
+            elapsed = (time.monotonic() - self.request._started) * 1000
+            known_counter = type(tokens) is int and 0 <= tokens < 2**63
+            if known_counter:
+                self._counter_seen = True
+                if tokens < self._output_tokens and not self._counter_regressed:
+                    self._counter_regressed = True
+                    self.request.recorder.gap(
+                        self.request.handle, "output_counter_regressed"
+                    )
+                counts["observed_generated_tokens"] = max(
+                    0, tokens - self._output_tokens
+                )
+                self._output_tokens = max(tokens, self._output_tokens)
+                if tokens:
+                    times["first_observed_token_ms"] = elapsed
+            if output.new_text and not output.error:
+                self.request.text("raw_output", output.new_text, invocation_id=self.id)
+                times["first_observed_text_ms"] = elapsed
+            if (known_counter and tokens) or (output.new_text and not output.error):
+                self.request.recorder.state(self.request.handle, "generating")
+            self.request.recorder.metrics(
+                self.request.handle, counts=counts, times=times
+            )
         if output.finished:
             outcome = (
                 "cancelled"
@@ -168,9 +263,9 @@ class InvocationCapture:
                 if output.error
                 else "completed"
             )
-            self.end(outcome)
+            self.end(outcome, finish_reason=output.finish_reason)
 
-    def end(self, outcome="interrupted"):
+    def end(self, outcome="interrupted", *, finish_reason=None):
         with self.request._lock:
             if self.done:
                 return
@@ -178,6 +273,14 @@ class InvocationCapture:
             self.prepared_text = None
             self.request._active -= 1
             self.request._engine_outcomes.add(outcome)
+            self._event(
+                "invocation_end",
+                outcome=outcome,
+                generated_tokens=self._output_tokens if self._counter_seen else None,
+                finish_reason=finish_reason[:128]
+                if isinstance(finish_reason, str)
+                else None,
+            )
             final = self.request._final_outcome()
         if final is not None:
             self.request.recorder.finish(self.request.handle, final)

@@ -282,6 +282,10 @@ class ActivityRecorder:
             pending = self._lookup(handle)
             if pending is None or pending.metadata["finished_at"] is not None:
                 return False
+            if pending.metadata["state"] == state and (
+                model_id is None or pending.metadata["model_id"] == model_id
+            ):
+                return True
             pending.metadata["state"] = state
             if model_id is not None:
                 pending.metadata["model_id"] = model_id
@@ -303,6 +307,59 @@ class ActivityRecorder:
             )
             pending.version += 1
         self._wake.set()
+        return True
+
+    def metrics(self, handle, *, counts=None, times=None):
+        """Bounded CPU scalar observations; never derive tokens from text length."""
+        counts, times = counts or {}, times or {}
+        if set(counts) - {
+            "observed_invocations",
+            "prepared_invocations",
+            "prepared_text_invocations",
+            "prefilling_invocations",
+            "observed_input_tokens",
+            "observed_generated_tokens",
+        }:
+            return False
+        if set(times) - {"first_observed_token_ms", "first_observed_text_ms"}:
+            return False
+        if any(
+            type(value) is not int or not 0 <= value < 2**63
+            for value in counts.values()
+        ):
+            return False
+        if any(
+            type(value) not in (int, float)
+            or not math.isfinite(value)
+            or not 0 <= value <= 1e12
+            for value in times.values()
+        ):
+            return False
+        with self._lock:
+            pending = self._lookup(handle)
+            if (
+                pending is None
+                or not self.settings.enabled
+                or pending.metadata["finished_at"] is not None
+            ):
+                return False
+            changed = False
+            for name, delta in counts.items():
+                value = pending.metadata.get(name, 0) + delta
+                if value >= 2**63:
+                    self._gap(pending, "observed_counter_overflow")
+                    continue
+                if pending.metadata.get(name) != value:
+                    pending.metadata[name] = value
+                    changed = True
+            for name, value in times.items():
+                if name not in pending.metadata or value < pending.metadata[name]:
+                    pending.metadata[name] = value
+                    changed = True
+            if changed:
+                pending.version += 1
+        if changed:
+            self._wake.set()
         return True
 
     def gap(self, handle, reason):

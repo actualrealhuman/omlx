@@ -3642,6 +3642,9 @@ class Scheduler:
             if request_id is None:
                 continue
             request = self.requests.get(request_id)
+            observation = getattr(request, "activity", None)
+            if observation is not None:
+                observation.prefill()
             tracker.update(
                 request_id=request_id,
                 processed=processed,

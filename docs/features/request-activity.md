@@ -82,6 +82,10 @@ migration. `tests/test_activity_engine.py` exercises actual scheduler/core hook
 paths with mock models, including prepared-token reuse, producer output,
 deferred cancellation and failed insertion. Those need the normal test runtime;
 shared test imports may initialize Metal even though no real model is loaded.
+`tests/test_activity_metrics.py` checks multiple invocations, cumulative-counter
+idempotence/regression, unavailable counts, capture-off fences, scalar evidence
+through queue loss and safe admission-option filtering. The engine integration
+check invokes the actual prefill callback without re-tokenizing prepared input.
 `tests/test_activity_routes.py` covers actual admin authorization, bounded reads,
 pagination/filtering, snapshot consistency, reconnect/session revalidation,
 reader cancellation and stream admission. `tests/test_activity_transport.py`
@@ -174,6 +178,28 @@ have succeeded even if its later live application did not finish. The API
 reports that saved/live distinction explicitly. A replacement writer cannot
 start while the previous writer is still stopping.
 
+## Observed execution evidence
+
+Metadata includes scalar counts for observed scheduler invocations, admitted
+input token IDs and increases in each invocation's cumulative generated-token
+counter. Repeated output snapshots do not add tokens twice. A regressing
+counter records a capture gap; no count is derived from character or byte length.
+Absent counters stay unknown, including in terminal invocation events. Counts
+can remain available when bounded payload capture drops token/text evidence;
+retained-representation flags distinguish that case.
+
+The existing scheduler prefill callback supplies the Prefilling label where
+observed. First observed token/text times use monotonic elapsed time since
+Activity receipt, persisted as durations. They describe producer updates and
+are not HTTP first-byte latency or a measurement of GPU execution time.
+
+Invocation events include a bounded subset of scalar sampling values at core
+admission, prepared-input counts, terminal outcome and the observed finish reason.
+This is not a complete effective-options snapshot. Detail responses explicitly
+report the evidence sources and retained representations. Engine-producer text
+is still not universally pre-parser text; unobserved backends and later sparse/
+requeue/attention transformations remain qualification work.
+
 ## Browser inspector
 
 The Activity tab opens independently of capture being enabled. The list reads
@@ -205,8 +231,8 @@ new non-English entries currently use the repository's English fallback.
 
 ## Limitations and remaining work
 
-- Complete richer capability reporting, invocation metadata/timings,
-  precise prefill/paused state and all backend/endpoint qualification. Current
+- Complete per-invocation query summaries, full effective options, richer timing/
+  cache/paused-state evidence and all backend/endpoint qualification. Current
   generation hooks are covered by mock-model checks, not real-model validation.
 - `raw_output` currently means engine-producer text before API formatting.
   Engines with their own native parsers may already have transformed it;

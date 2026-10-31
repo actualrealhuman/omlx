@@ -790,7 +790,18 @@ class EngineCore:
         )
         capture = current_capture()
         if capture is not None:
-            observation = capture.invocation(request_id, prepared_text=activity_prompt)
+            observation = capture.invocation(
+                request_id,
+                prepared_text=activity_prompt,
+                options=tuple(
+                    (name, getattr(sampling_params, name, None))
+                    for name in (
+                        "max_tokens", "temperature", "top_p", "top_k", "min_p",
+                        "repetition_penalty", "presence_penalty", "frequency_penalty",
+                        "seed", "thinking_budget",
+                    )
+                ),
+            )
             if observation is not None:
                 if getattr(self, "_activity_invocations", None) is None:
                     self._activity_invocations = {}

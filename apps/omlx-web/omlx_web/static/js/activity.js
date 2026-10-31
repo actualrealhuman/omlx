@@ -289,6 +289,8 @@
             },
             label, stateLabel(value) { return label(`state.${value}`); },
             bytes(value) { if (!value) return '0 B'; const unit = Math.min(3, Math.floor(Math.log(value) / Math.log(1024))); return `${(value / 1024 ** unit).toFixed(unit ? 1 : 0)} ${['B', 'KiB', 'MiB', 'GiB'][unit]}`; },
+            count(value) { return Number.isFinite(value) ? value.toLocaleString() : '—'; },
+            milliseconds(value) { return Number.isFinite(value) ? `${Math.round(value).toLocaleString()} ms` : '—'; },
             time(value) { return value ? new Date(value * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'}) : '—'; },
             duration(record) { return record?.finished_at ? `${Math.max(0, record.finished_at - record.received_at).toFixed(1)} s` : '—'; },
             currentSection() { return this.current || this.outline[0]; },

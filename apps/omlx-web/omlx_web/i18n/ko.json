@@ -2383,5 +2383,11 @@
   "activity.clear_confirmation": "Remove all retained Activity records and stop capture of requests already running. New requests may still be captured. This does not clear chat history or KV caches and does not cancel inference. This cannot be undone.",
   "activity.delete_confirmation": "Remove this Activity record and stop observing it if it is still running. Inference continues. This cannot be undone.",
   "activity.state.capture_stopped": "Capture stopped",
-  "activity.capture_stopping": "The capture worker is stopping. Retry after shutdown completes; inference is unaffected."
+  "activity.capture_stopping": "The capture worker is stopping. Retry after shutdown completes; inference is unaffected.",
+  "activity.input_tokens": "Observed input tokens",
+  "activity.generated_tokens": "Observed generated tokens",
+  "activity.invocations": "Observed invocations",
+  "activity.first_token": "First observed token",
+  "activity.first_token_hint": "Time from Activity receipt to the first producer update reporting generated tokens. This is not HTTP delivery time.",
+  "activity.counts_scope": "Counts cover observed scheduler invocations only. Missing values are unknown; they are not inferred from text length. Input includes the logical admitted prefix, including cached tokens. Invocation events contain admission settings and terminal reasons."
 }
