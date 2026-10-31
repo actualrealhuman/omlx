@@ -10,7 +10,11 @@ from pathlib import Path
 
 from .config import ActivitySettings
 from .coverage import evidence_coverage
-from .invocations import MAX_INVOCATION_BYTES, MAX_INVOCATIONS
+from .invocations import (
+    INVOCATION_SUMMARY_FIELDS,
+    MAX_INVOCATION_BYTES,
+    MAX_INVOCATIONS,
+)
 
 SCHEMA_VERSION = 3
 MAX_CHUNK_BYTES = 256 * 1024
@@ -553,15 +557,7 @@ class ActivityReader:
         if row["root_type"] != "object":
             raise TypeError("Activity invocation metadata must be an object")
         record = {"id": row["invocation_id"]}
-        for key in (
-            "state",
-            "last_observed_state",
-            "input_tokens",
-            "generated_tokens",
-            "first_token_ms",
-            "first_text_ms",
-            "counter_regressed",
-        ):
+        for key in INVOCATION_SUMMARY_FIELDS:
             value_type = row[f"{key}_type"]
             if value_type is None:
                 continue
@@ -575,12 +571,19 @@ class ActivityReader:
                 value = json.loads(value)
             record[key] = value
         record["scope"] = "observed_scheduler_invocation_snapshot"
+        return ActivityReader._mark_invocation_observation_ended(record, request)
+
+    @staticmethod
+    def _mark_invocation_observation_ended(record, request):
         if (
             request["finished_at"] is not None
             and record.get("state") not in TERMINAL_STATES
         ):
             record["last_observed_state"] = record.get("state")
             record["state"] = "observation_ended"
+            if "currently_paused" in record:
+                record["last_observed_paused"] = record["currently_paused"]
+                record["currently_paused"] = None
         return record
 
     @staticmethod
@@ -590,17 +593,8 @@ class ActivityReader:
         result = []
         projected = summary and ActivityReader._json_functions_available(db)
         if projected:
-            fields = (
-                "state",
-                "last_observed_state",
-                "input_tokens",
-                "generated_tokens",
-                "first_token_ms",
-                "first_text_ms",
-                "counter_regressed",
-            )
             columns = ["invocation_id", "json_type(metadata, '$') AS root_type"]
-            for key in fields:
+            for key in INVOCATION_SUMMARY_FIELDS:
                 path = f"$.{key}"
                 columns.extend(
                     (
@@ -630,29 +624,13 @@ class ActivityReader:
             record = json.loads(row["metadata"])
             record["id"] = row["invocation_id"]
             record["scope"] = "observed_scheduler_invocation_snapshot"
-            if (
-                request["finished_at"] is not None
-                and record.get("state") not in TERMINAL_STATES
-            ):
-                record["last_observed_state"] = record.get("state")
-                record["state"] = "observation_ended"
             if summary:
                 record = {
                     key: value
                     for key, value in record.items()
-                    if key
-                    in {
-                        "id",
-                        "state",
-                        "last_observed_state",
-                        "input_tokens",
-                        "generated_tokens",
-                        "first_token_ms",
-                        "first_text_ms",
-                        "counter_regressed",
-                        "scope",
-                    }
+                    if key in {"id", "scope", *INVOCATION_SUMMARY_FIELDS}
                 }
+            record = ActivityReader._mark_invocation_observation_ended(record, request)
             result.append(record)
         return result
 

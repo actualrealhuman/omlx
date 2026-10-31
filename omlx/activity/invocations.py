@@ -8,6 +8,22 @@ from dataclasses import dataclass
 MAX_INVOCATION_BYTES = 16384
 INVOCATION_MEMORY_BYTES = 131072
 MAX_INVOCATIONS = 256
+INVOCATION_SUMMARY_FIELDS = (
+    "state",
+    "last_observed_state",
+    "input_tokens",
+    "generated_tokens",
+    "first_token_ms",
+    "first_text_ms",
+    "counter_regressed",
+    "currently_paused",
+    "last_observed_paused",
+    "pause_count",
+    "resume_count",
+    "last_pause_reason",
+    "last_pause_ms",
+    "last_resume_ms",
+)
 SAMPLING_FIELDS = (
     "max_tokens",
     "temperature",
@@ -41,10 +57,23 @@ SCALAR_FIELDS = frozenset(
         "prepared_at_ms",
         "prefill_at_ms",
         "finished_at_ms",
+        "currently_paused",
+        "last_observed_paused",
+        "pause_count",
+        "resume_count",
+        "last_pause_ms",
+        "last_resume_ms",
     }
 )
 STRING_FIELDS = frozenset(
-    {"engine_request_id", "state", "outcome", "finish_reason", "model_id"}
+    {
+        "engine_request_id",
+        "state",
+        "outcome",
+        "finish_reason",
+        "model_id",
+        "last_pause_reason",
+    }
 )
 
 

@@ -140,6 +140,42 @@ test('invalid and unobserved model times stay unknown and auth loss stops the cl
     await app.activate(false);
 });
 
+test('scheduler pause labels stay scoped to the selected invocation while siblings generate', () => {
+    const {app, window} = harness();
+    const translations = require('../omlx_web/i18n/en.json');
+    window.t = key => translations[key] || key;
+    app.detail = {invocations: [
+        {id: '1', state: 'prefilling', currently_paused: true, pause_count: 2, last_pause_reason: 'prefill_eviction'},
+        {id: '2', state: 'generating', currently_paused: false, pause_count: 0},
+    ]};
+    app.invocationId = '1';
+    assert.ok(app.invocationPauseSummary().includes('2 pauses'));
+    assert.ok(app.invocationLabel('1').includes(translations['activity.invocation.paused']));
+    assert.ok(!app.invocationLabel('2').includes(translations['activity.invocation.paused']));
+    app.invocationId = '2';
+    assert.equal(app.invocationPauseSummary(), translations['activity.invocation.no_pauses']);
+    assert.equal(app.detail.invocations[0].currently_paused, true);
+    assert.equal(app.detail.invocations[1].state, 'generating');
+});
+
+test('observation-ended and terminal pause summaries do not claim a current engine pause', () => {
+    const {app, window} = harness();
+    const translations = require('../omlx_web/i18n/en.json');
+    window.t = key => translations[key] || key;
+    app.invocationId = '1';
+    app.invocationDetail = {id: '1', state: 'prefilling', currently_paused: true};
+    app.detail = {invocations: [{id: '1', state: 'observation_ended', currently_paused: null,
+        last_observed_paused: true, pause_count: 1, last_pause_reason: 'batch_reset'}]};
+    let parts = app.invocationPauseSummary().split(' · ');
+    assert.ok(parts.includes(translations['activity.invocation.last_observed_paused']));
+    assert.ok(!parts.includes(translations['activity.invocation.paused']));
+    app.detail.invocations[0] = {id: '1', state: 'completed', currently_paused: true,
+        pause_count: 1, last_pause_reason: '<untrusted-reason>'};
+    parts = app.invocationPauseSummary().split(' · ');
+    assert.ok(!parts.includes(translations['activity.invocation.paused']));
+    assert.ok(!parts.join(' ').includes('<untrusted-reason>'));
+});
+
 test('native dashboard deep links preserve modified click and browser navigation', () => {
     const {context, window} = harness();
     const dashboard = context.dashboard();

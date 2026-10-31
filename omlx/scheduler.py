@@ -643,6 +643,7 @@ class _PrefillChunkPlan:
     qwen4_accounting: bool
     throttled: bool
     started: float
+    activity_observed: bool = False
 
 
 @dataclass
@@ -1418,6 +1419,23 @@ def _request_count(request: Any, name: str) -> int:
     """An integer requeue field, or 0 for duck-typed requests."""
     value = getattr(request, name, 0)
     return value if isinstance(value, int) else 0
+
+
+def _notify_activity(request: Any, method: str | None = None, *args: Any) -> bool:
+    """Best-effort CPU-only lifecycle observation; never affect scheduling."""
+    try:
+        observation = getattr(request, "activity", None)
+        if observation is None:
+            return False
+        if method is None:
+            return True
+        callback = getattr(observation, method, None)
+        if callable(callback):
+            callback(*args)
+        return True
+    except Exception:
+        # Activity is an observer and cannot change inference semantics.
+        return False
 
 
 def _requeue_row_state(request: Any) -> tuple | None:
@@ -6680,6 +6698,7 @@ class Scheduler:
             qwen4_accounting=qwen4_accounting,
             throttled=n < min(unthrottled, remaining),
             started=started,
+            activity_observed=_notify_activity(state.request),
         )
 
     def _run_prefill_chunks(self, plans: list[_PrefillChunkPlan]) -> list[bool]:
@@ -7033,6 +7052,7 @@ class Scheduler:
                 request.generation_started_at = now
                 request.last_activity_at = now
                 self.running[request.request_id] = request
+                _notify_activity(request, "resume")
                 scheduled.append(request)
                 self.total_prompt_tokens += request.num_prompt_tokens
                 logger.debug(
@@ -7095,6 +7115,7 @@ class Scheduler:
             request.status = RequestStatus.RUNNING
             _mark_generation_resumed(request, now)
             request.last_activity_at = now
+            _notify_activity(request, "resume")
 
             self.total_prompt_tokens += request.num_prompt_tokens
             cache_info = (
@@ -7419,6 +7440,8 @@ class Scheduler:
             contended = packing and bool(Scheduler._contended_prefill_cap(self))
 
             plans: list[_PrefillChunkPlan] = []
+            observe_progress = _notify_activity(request)
+            progress_before = state.tokens_processed
             try:
                 if not packing:
                     done = [self._step_prefill_chunk(state)]
@@ -7449,6 +7472,7 @@ class Scheduler:
                 continue
             except _PrefillEvictionNeeded as e:
                 self._pending_prefill_eviction_request = e.request
+                _notify_activity(request, "pause", "prefill_eviction")
                 still_prefilling.append(request)
                 still_prefilling.extend(pending_prefills[index + 1 :])
                 logger.info(
@@ -7488,6 +7512,10 @@ class Scheduler:
                 )
                 continue
 
+            if observe_progress and state.tokens_processed > progress_before:
+                _notify_activity(request, "prefill")
+                _notify_activity(request, "resume")
+
             packed = len(plans) > 1
             if not done[0]:
                 still_prefilling.append(request)
@@ -7501,6 +7529,9 @@ class Scheduler:
             # Companions stay queued in their own FCFS position; finished
             # ones are inserted now so their slot is skipped later.
             for plan, finished in zip(plans[1:], done[1:]):
+                if plan.activity_observed and plan.tokens > 0:
+                    _notify_activity(plan.state.request, "prefill")
+                    _notify_activity(plan.state.request, "resume")
                 if finished:
                     companion = plan.state.request
                     _mtp_priming.activate_request(self.model, companion.request_id)
@@ -13148,6 +13179,8 @@ class Scheduler:
                         continue
 
                     try:
+                        observe_progress = _notify_activity(request)
+                        progress_before = state.tokens_processed
                         done = self._step_prefill_chunk(state)
                     except _PrefillAbortedError:
                         Scheduler._clear_cache(self)
@@ -13212,6 +13245,9 @@ class Scheduler:
                         )
                         continue
 
+                    if observe_progress and state.tokens_processed > progress_before:
+                        _notify_activity(request, "prefill")
+                        _notify_activity(request, "resume")
                     if done:
                         self._emit_final_boundary_if_needed(state)
                         Scheduler._clear_cache(self)
@@ -13363,6 +13399,7 @@ class Scheduler:
                     request.last_activity_at = now
                     self.running[request.request_id] = request
                     scheduled.append(request)
+                    _notify_activity(request, "resume")
                     self.total_prompt_tokens += request.num_prompt_tokens
                     logger.debug(
                         f"Scheduled request {request.request_id} via vlm_mtp "
@@ -13409,6 +13446,7 @@ class Scheduler:
                 if hasattr(self.model, "register_rope_delta"):
                     self.model.register_rope_delta(uid, request.rope_deltas)
                 _mark_text_positions(self.model, request, uid)
+                _notify_activity(request, "resume")
 
                 self.total_prompt_tokens += request.num_prompt_tokens
                 cache_info = (
@@ -14556,6 +14594,9 @@ class Scheduler:
 
             # Move to waiting queue (at front for priority)
             self.waiting.appendleft(request)
+            _notify_activity(
+                request, "pause", "cache_recovery" if is_corruption else "batch_reset"
+            )
             self.running.pop(request_id, None)
             count += 1
 
@@ -14631,6 +14672,7 @@ class Scheduler:
 
         for request in reversed(retryable):
             self.waiting.appendleft(request)
+            _notify_activity(request, "pause", "generation_overflow")
 
         if retryable:
             logger.info(
@@ -14731,6 +14773,7 @@ class Scheduler:
         # EWMA, so it is strictly better-informed than this attempt.
         self.requests[request.request_id] = request
         self.waiting.appendleft(request)
+        _notify_activity(request, "pause", "oom_retry")
 
     # Requeues per request before a memory-pressure abort.
     _MAX_MEMORY_REQUEUES = 2
@@ -14855,6 +14898,7 @@ class Scheduler:
             self._detach_for_memory_requeue(request)
         for request in reversed(live):
             self.waiting.appendleft(request)
+            _notify_activity(request, "pause", "memory_requeue")
         self._memory_requeue_ids.update(r.request_id for r in live)
         Scheduler._clear_cache(self)
         logger.warning(
@@ -15037,6 +15081,7 @@ class Scheduler:
         only the uncached suffix instead of recomputing the prompt cold
         (#2180).
         """
+        _notify_activity(request, "pause", "prefill_eviction")
         self._pending_prefill_eviction_request = eviction
         request.status = RequestStatus.WAITING
         request.batch_uid = None

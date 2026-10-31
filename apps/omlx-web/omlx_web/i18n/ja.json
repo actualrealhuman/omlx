@@ -2489,5 +2489,16 @@
   "activity.invocation.retry": "Retry detail read",
   "activity.invocation.engine_id": "Engine request ID",
   "activity.invocation.omitted": "Omitted or truncated option fields",
-  "activity.invocation.unavailable": "Admission options are unavailable."
+  "activity.invocation.unavailable": "Admission options are unavailable.",
+  "activity.invocation.scheduler_pauses": "Scheduler pauses",
+  "activity.invocation.no_pauses": "No pauses observed",
+  "activity.invocation.pause_count": "{count} pauses",
+  "activity.invocation.paused": "Paused",
+  "activity.invocation.last_observed_paused": "Last observed paused",
+  "activity.invocation.pause_reason.prefill_eviction": "Prefill eviction",
+  "activity.invocation.pause_reason.memory_requeue": "Memory requeue",
+  "activity.invocation.pause_reason.generation_overflow": "Generation overflow",
+  "activity.invocation.pause_reason.cache_recovery": "Cache recovery",
+  "activity.invocation.pause_reason.oom_retry": "Memory retry",
+  "activity.invocation.pause_reason.batch_reset": "Batch reset requeue"
 }

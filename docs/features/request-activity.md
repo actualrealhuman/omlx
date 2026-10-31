@@ -370,6 +370,25 @@ terminal state is budgeted rather than promised lossless. The existing producer
 text path has its own content cadence; controlled serving overhead is unqualified.
 See [the snapshot decision](../decisions/request-activity-invocation-snapshots.md).
 
+Known scheduler pauses and retries annotate the existing observed generation.
+Reasons are bounded to prefill eviction, memory requeue, generation overflow,
+cache recovery, batch-reset requeue and bounded memory retry. A repeated pause
+within one outstanding cycle is idempotent. Resume is observed at successful
+admission/insertion or actual prefill advancement, including packed companions;
+queue membership and eviction callback completion do not count as resumed work.
+Annotation failures are ignored by scheduling, and disabled/unobserved requests
+add no progress maps or scans. Existing scheduler decisions and caches are unchanged.
+
+Details and compact summaries retain the last known phase, observed pause/resume
+counts, a fixed reason and receipt-relative monotonic timing. Terminal completion
+closes the paused flag without inventing a resume. Stopped observation exposes a
+last-observed pause with current state unknown. The selector and selected-generation
+readout scope these facts to that generation, so a paused sibling never labels
+the entire request as paused. Retry keeps the same invocation ID; repeated prompt
+preparation still reports its existing capture gap rather than fabricating a new
+effective context. Fixed observer/snapshot resource fixtures and synthetic scheduler
+transition checks cover this source boundary; real-backend qualification remains.
+
 SSE includes only compact phase/count/timing summaries and declares
 `invocation_options_included:false`; full detail declares it true. Engine IDs,
 stop strings and option payloads are excluded from SSE/list delivery. Detail reads
@@ -680,9 +699,6 @@ of model/raw/JSON evidence modes. Rendered-browser behavior remains unqualified.
 
 ## Limitations and remaining work
 
-- Record actual scheduler pause, resume and requeue annotations with known
-  reasons on the existing invocation. These accepted lifecycle details are
-  still missing; a stalled phase must not be treated as observed preemption.
 - Implement bounded sequenced live-event replay and cursor invalidation.
   Current delivery explicitly resynchronizes with committed snapshots; the
   accepted replay contract still needs implementation and race/resource checks.

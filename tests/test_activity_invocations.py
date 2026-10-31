@@ -4,6 +4,7 @@
 import gc
 import json
 import sqlite3
+import sys
 import threading
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -121,6 +122,182 @@ def test_empty_progress_does_not_invent_generating_or_zero_tokens(observed):
     assert row["first_token_ms"] is None
 
 
+def test_pause_cycles_preserve_phase_and_terminal_close_does_not_resume(observed):
+    recorder, capture = observed
+    invocation = capture.invocation("engine")
+    invocation.prepared("input", [1, 2])
+    invocation.prefill()
+
+    assert invocation.pause("prefill_eviction") is True
+    assert invocation.pause("prefill_eviction") is False
+    row = detail(recorder, capture)["invocations"][0]
+    assert row["state"] == "prefilling"
+    assert row["currently_paused"] is True
+    assert row["pause_count"] == 1 and row["resume_count"] == 0
+    assert row["last_pause_reason"] == "prefill_eviction"
+    assert row["last_pause_ms"] >= 0 and row["last_resume_ms"] is None
+
+    assert invocation.resume() is True
+    assert invocation.resume() is False
+    assert invocation.pause("memory_requeue") is True
+    invocation.end("interrupted")
+    capture.api_done("completed")
+
+    row = detail(recorder, capture)["invocations"][0]
+    assert row["state"] == "interrupted"
+    assert row["currently_paused"] is False
+    assert row["pause_count"] == 2 and row["resume_count"] == 1
+    assert row["last_pause_reason"] == "memory_requeue"
+    assert row["last_resume_ms"] is not None
+    assert invocation.resume() is False
+    events = recorder.reader.content(
+        capture.handle.request_id, "events", invocation_id="0"
+    )["data"].decode("utf-8")
+    lifecycle = [json.loads(line) for line in events.splitlines()]
+    lifecycle = [
+        event
+        for event in lifecycle
+        if event["type"] in {"scheduler_paused", "scheduler_resumed"}
+    ]
+    assert [event["type"] for event in lifecycle] == [
+        "scheduler_paused",
+        "scheduler_resumed",
+        "scheduler_paused",
+    ]
+    assert [event["state"] for event in lifecycle] == [
+        "prefilling",
+        "prefilling",
+        "prefilling",
+    ]
+
+
+def test_pause_is_scoped_to_one_invocation_when_sibling_is_active(observed):
+    recorder, capture = observed
+    first = capture.invocation("engine-one")
+    second = capture.invocation("engine-two")
+    first.pause("memory_requeue")
+    rows = {row["id"]: row for row in detail(recorder, capture)["invocations"]}
+    assert rows[first.id]["currently_paused"] is True
+    assert rows[first.id]["pause_count"] == 1
+    assert rows[second.id]["currently_paused"] is False
+    assert rows[second.id]["pause_count"] == 0
+
+
+def test_terminal_empty_error_output_closes_pause_without_resume(observed):
+    recorder, capture = observed
+    invocation = capture.invocation("engine")
+    invocation.pause("oom_retry")
+    invocation.output(output(0, finished=True, reason="error", error="failed"))
+    capture.api_done("error")
+    row = detail(recorder, capture)["invocations"][0]
+    assert row["state"] == "error"
+    assert row["currently_paused"] is False
+    assert row["pause_count"] == 1 and row["resume_count"] == 0
+    assert invocation.resume() is False
+
+
+@pytest.mark.parametrize("force_fallback", [False, True], ids=["projected", "fallback"])
+def test_pause_summary_projection_preserves_boolean_null_and_observation_end(
+    observed, monkeypatch, force_fallback
+):
+    recorder, capture = observed
+    invocation = capture.invocation("engine")
+    invocation.prepared("input", [1])
+    invocation.prefill()
+    invocation.pause("generation_overflow")
+    assert recorder.flush()
+    if force_fallback:
+        monkeypatch.setattr(
+            ActivityReader,
+            "_json_functions_available",
+            staticmethod(lambda _db: False),
+        )
+
+    live = recorder.reader.snapshot(request_id=capture.handle.request_id)["detail"][
+        "invocations"
+    ][0]
+    full = recorder.reader.detail(capture.handle.request_id)["invocations"][0]
+    for key in (
+        "currently_paused",
+        "last_observed_paused",
+        "pause_count",
+        "resume_count",
+        "last_pause_reason",
+        "last_pause_ms",
+        "last_resume_ms",
+    ):
+        assert live.get(key) == full.get(key)
+    assert live["currently_paused"] is True
+    assert live["last_observed_paused"] is None
+    assert live["pause_count"] == 1 and live["resume_count"] == 0
+    assert live["last_pause_reason"] == "generation_overflow"
+
+    from dataclasses import replace
+
+    recorder.update_settings(replace(recorder.settings, enabled=False)).result(3)
+    ended = recorder.reader.snapshot(request_id=capture.handle.request_id)["detail"][
+        "invocations"
+    ][0]
+    assert ended["state"] == "observation_ended"
+    assert ended["last_observed_state"] == "prefilling"
+    assert ended["currently_paused"] is None
+    assert ended["last_observed_paused"] is True
+
+
+def test_pause_metadata_stays_inside_fixed_snapshot_and_live_observer_reservations(
+    observed,
+):
+    recorder, capture = observed
+    invocation = capture.invocation(
+        "engine",
+        options=(("stop", ["x" * 1000 for _ in range(32)]), ("max_tokens", 4096)),
+    )
+    invocation.pause("oom_retry")
+    record = detail(recorder, capture)["invocations"][0]
+    encoded = InvocationSnapshot.freeze(record, "resolved-example").encode()
+    assert len(encoded) <= MAX_INVOCATION_BYTES
+    assert recorder.health()["invocation_live_bytes"] == 2048
+
+
+def test_expanded_live_invocation_fixed_storage_fits_two_kib_reservation(observed):
+    recorder, capture = observed
+    invocation = capture.invocation("engine")
+    invocation.pause("oom_retry")
+    with capture._lock:
+        invocation._phase = "generating"
+        invocation._last_pause_reason = "generation_overflow"
+        invocation._pause_count = int("2147483647")
+        invocation._resume_count = int("2147483647")
+        invocation._output_tokens = int("9223372036854775807")
+        invocation._prepared = True
+        invocation._counter_seen = True
+        invocation._counter_regressed = True
+        invocation._prefill_seen = True
+        for name in (
+            "_last_snapshot",
+            "_first_token_ms",
+            "_first_text_ms",
+            "_last_pause_ms",
+            "_last_resume_ms",
+        ):
+            setattr(invocation, name, float("1000000000000"))
+    values = vars(invocation)
+    # The RequestCapture and prepared prompt are shared/variable payloads;
+    # count the observer, dict table, and unique fixed-value objects it owns.
+    owned_values = {
+        id(value): value
+        for name, value in values.items()
+        if name not in {"request", "prepared_text"}
+    }
+    fixed_live_bytes = (
+        sys.getsizeof(invocation)
+        + sys.getsizeof(values)
+        + sum(sys.getsizeof(value) for value in owned_values.values())
+    )
+    assert fixed_live_bytes <= 2048
+    assert recorder.health()["invocation_live_bytes"] == 2048
+
+
 def test_live_snapshots_coalesce_and_terminal_flush_preserves_regression(
     observed, monkeypatch
 ):
@@ -180,6 +357,8 @@ def test_live_observer_memory_survives_capture_controls_until_object_release(
     invocation = capture.invocation("engine")
     assert detail(recorder, capture)["invocations"]
     assert recorder.health()["invocation_live_bytes"] == 2048
+    assert invocation.pause("prefill_eviction") is True
+    assert recorder.flush()
     if action == "clear":
         recorder.clear().result(3)
     elif action == "delete":
@@ -189,6 +368,8 @@ def test_live_observer_memory_survives_capture_controls_until_object_release(
 
         recorder.update_settings(replace(recorder.settings, enabled=False)).result(3)
     assert recorder.health()["invocation_live_bytes"] == 2048
+    invocation.pause("memory_requeue")
+    invocation.resume()
     invocation.output(output(8, "late", finished=True))
     result = detail(recorder, capture)
     if action != "disable":
@@ -196,11 +377,16 @@ def test_live_observer_memory_survives_capture_controls_until_object_release(
     else:
         assert result["invocations"][0]["state"] == "observation_ended"
         assert result["invocations"][0]["last_observed_state"] == "admitted"
+        assert result["invocations"][0]["last_observed_paused"] is True
+        assert result["invocations"][0]["pause_count"] == 1
+        assert result["invocations"][0]["resume_count"] == 0
         summary = recorder.reader.snapshot(request_id=capture.handle.request_id)[
             "detail"
         ]["invocations"][0]
         assert summary["state"] == "observation_ended"
         assert summary["last_observed_state"] == "admitted"
+        assert summary["currently_paused"] is None
+        assert summary["last_observed_paused"] is True
     del invocation
     gc.collect()
     assert recorder.health()["invocation_live_bytes"] == 0
@@ -441,6 +627,10 @@ def test_summary_projection_skips_python_decode_and_preserves_scalar_semantics(
         "generated_tokens": None,
         "first_token_ms": False,
         "counter_regressed": True,
+        "currently_paused": False,
+        "last_observed_paused": None,
+        "pause_count": 0,
+        "resume_count": 0,
         "scope": "observed_scheduler_invocation_snapshot",
     }
     assert "admission_options" not in row

@@ -3,6 +3,8 @@
     'use strict';
     const ROW_HEIGHT = 22;
     const API = '/admin/api/activity';
+    const pauseReasons = ['prefill_eviction', 'memory_requeue', 'generation_overflow', 'cache_recovery', 'batch_reset', 'oom_retry'];
+    const invocationActiveStates = ['admitted', 'queued', 'prefilling', 'generating'];
     const roles = ['system', 'developer', 'user', 'assistant', 'reasoning', 'output_error', 'output_refusal', 'choice', 'block', 'item', 'tool', 'tool_calls', 'tools', 'options', 'submitted', 'unparsed', 'model_input', 'raw_output', 'api_response', 'model_tokens', 'events'];
     function activityInspector() {
         let stream, worker, resize, controller, retry, searchTimer, frame, invocationController, pageController;
@@ -313,6 +315,38 @@
             },
             invocationSummary() {
                 return {...this.invocationDetail, ...(this.detail?.invocations || []).find(item => item.id === this.invocationId)};
+            },
+            invocationLabel(id) {
+                const item = (this.detail?.invocations || []).find(value => value.id === id);
+                const parts = [`#${id}`, this.invocationState(id)];
+                if (Number.isInteger(item?.pause_count) && item.pause_count > 0) {
+                    parts.push(label('invocation.pause_count').replace('{count}', item.pause_count));
+                    const reason = item.last_pause_reason;
+                    if (typeof reason === 'string' && pauseReasons.includes(reason)) {
+                        parts.push(label(`invocation.pause_reason.${reason}`));
+                    }
+                    if (item.state === 'observation_ended' && item.last_observed_paused === true) {
+                        parts.push(label('invocation.last_observed_paused'));
+                    } else if (invocationActiveStates.includes(item.state) && item.currently_paused === true) {
+                        parts.push(label('invocation.paused'));
+                    }
+                }
+                return parts.join(' · ');
+            },
+            invocationPauseSummary() {
+                const item = this.invocationSummary() || {};
+                if (!Number.isInteger(item.pause_count) || item.pause_count <= 0) return label('invocation.no_pauses');
+                const parts = [label('invocation.pause_count').replace('{count}', item.pause_count)];
+                const reason = item.last_pause_reason;
+                if (typeof reason === 'string' && pauseReasons.includes(reason)) {
+                    parts.push(label(`invocation.pause_reason.${reason}`));
+                }
+                if (item.state === 'observation_ended') {
+                    if (item.last_observed_paused === true) parts.push(label('invocation.last_observed_paused'));
+                } else if (invocationActiveStates.includes(item.state) && item.currently_paused === true) {
+                    parts.push(label('invocation.paused'));
+                }
+                return parts.join(' · ');
             },
             invocationState(id = this.invocationId) {
                 const state = (this.detail?.invocations || []).find(item => item.id === id)?.state

@@ -19,6 +19,16 @@ _recorder: ActivityRecorder | None = None
 _current: ContextVar["RequestCapture | None"] = ContextVar(
     "omlx_activity", default=None
 )
+_SCHEDULER_PAUSE_REASONS = frozenset(
+    {
+        "prefill_eviction",
+        "memory_requeue",
+        "generation_overflow",
+        "cache_recovery",
+        "batch_reset",
+        "oom_retry",
+    }
+)
 
 
 def get_recorder():
@@ -123,6 +133,10 @@ class RequestCapture:
                 admitted_at_ms=admitted_ms,
                 engine_request_id=engine_request_id,
                 options=options or (),
+                currently_paused=False,
+                last_observed_paused=None,
+                pause_count=0,
+                resume_count=0,
             )
         self.text(
             "events",
@@ -210,6 +224,13 @@ class InvocationCapture:
         self._counter_seen = False
         self._counter_regressed = False
         self._prefill_seen = False
+        self._phase = "admitted"
+        self._currently_paused = False
+        self._pause_count = 0
+        self._resume_count = 0
+        self._last_pause_reason = None
+        self._last_pause_ms = None
+        self._last_resume_ms = None
         self._last_snapshot = float("-inf")
         self._first_token_ms = None
         self._first_text_ms = None
@@ -217,6 +238,13 @@ class InvocationCapture:
 
     def _event(self, kind, **values):
         elapsed = round((time.monotonic() - self.request._started) * 1000, 3)
+        phase = {"prepared": "queued", "prefilling": "prefilling"}.get(kind)
+        if phase is not None:
+            self._phase = phase
+        elif kind == "invocation_end":
+            phase = values.get("outcome", self._phase)
+        else:
+            phase = self._phase
         timing = {
             "prepared": "prepared_at_ms",
             "prefilling": "prefill_at_ms",
@@ -225,9 +253,7 @@ class InvocationCapture:
         self.request.recorder.invocation_snapshot(
             self.request.handle,
             self.id,
-            state={"prepared": "queued", "prefilling": "prefilling"}.get(
-                kind, values.get("outcome", kind)
-            ),
+            state=phase,
             since_receipt_ms=elapsed,
             **({timing: elapsed} if timing else {}),
             **values,
@@ -238,12 +264,58 @@ class InvocationCapture:
                 {
                     "type": kind,
                     "invocation_id": self.id,
+                    "state": phase,
                     "since_receipt_ms": elapsed,
                     **values,
                 }
             )
             + "\n",
         )
+
+    def pause(self, reason):
+        """Record one bounded scheduler pause without changing invocation phase."""
+        if type(reason) is not str or reason not in _SCHEDULER_PAUSE_REASONS:
+            return False
+        with self.request._lock:
+            if self.done or self._currently_paused:
+                return False
+            self._currently_paused = True
+            self._pause_count = min(self._pause_count + 1, 2**31 - 1)
+            self._last_pause_reason = reason
+            self._last_pause_ms = round(
+                (time.monotonic() - self.request._started) * 1000, 3
+            )
+            self._event(
+                "scheduler_paused",
+                currently_paused=True,
+                pause_count=self._pause_count,
+                resume_count=self._resume_count,
+                last_pause_reason=self._last_pause_reason,
+                last_pause_ms=self._last_pause_ms,
+                last_resume_ms=self._last_resume_ms,
+            )
+            return True
+
+    def resume(self):
+        """Record resumed work only when a scheduler hook observes real progress."""
+        with self.request._lock:
+            if self.done or not self._currently_paused:
+                return False
+            self._currently_paused = False
+            self._resume_count = min(self._resume_count + 1, 2**31 - 1)
+            self._last_resume_ms = round(
+                (time.monotonic() - self.request._started) * 1000, 3
+            )
+            self._event(
+                "scheduler_resumed",
+                currently_paused=False,
+                pause_count=self._pause_count,
+                resume_count=self._resume_count,
+                last_pause_reason=self._last_pause_reason,
+                last_pause_ms=self._last_pause_ms,
+                last_resume_ms=self._last_resume_ms,
+            )
+            return True
 
     def prepared(self, prompt, token_ids):
         with self.request._lock:
@@ -319,6 +391,7 @@ class InvocationCapture:
                 if self._first_text_ms is None:
                     self._first_text_ms = elapsed
             if (known_counter and tokens) or (output.new_text and not output.error):
+                self._phase = "generating"
                 self.request.recorder.state(self.request.handle, "generating")
             self.request.recorder.metrics(
                 self.request.handle, counts=counts, times=times
@@ -359,6 +432,7 @@ class InvocationCapture:
             if self.done:
                 return
             self.done = True
+            self._currently_paused = False
             self.prepared_text = None
             self.request._active -= 1
             self.request._engine_outcomes.add(outcome)
@@ -372,6 +446,12 @@ class InvocationCapture:
                 first_token_ms=self._first_token_ms,
                 first_text_ms=self._first_text_ms,
                 counter_regressed=self._counter_regressed,
+                currently_paused=False,
+                pause_count=self._pause_count,
+                resume_count=self._resume_count,
+                last_pause_reason=self._last_pause_reason,
+                last_pause_ms=self._last_pause_ms,
+                last_resume_ms=self._last_resume_ms,
             )
             final = self.request._final_outcome()
         if final is not None:
