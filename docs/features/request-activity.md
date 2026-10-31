@@ -290,6 +290,23 @@ report the evidence sources and retained representations. Engine-producer text
 is still not universally pre-parser text; unobserved backends and later sparse/
 requeue/attention transformations remain qualification work.
 
+## Internal work and background scope
+
+Only the four generation endpoints create ordinary Activity records. The
+inspected admin throughput/context/accuracy/tuning entry points run outside
+those observed routes; no benchmark prompts are intentionally archived by
+Activity. This is a source-audited boundary, not real benchmark qualification.
+Known GPU keep-warm upkeep detaches the initiating Activity context when its
+long-lived task is created during lazy model loading. Other context variables
+are preserved, and the foreground capture is restored even after an exception.
+No GPU work or timer behavior is changed by this detachment.
+
+`tests/test_activity_scope.py` exercises the actual task-creation method with
+its GPU loop replaced by a synthetic coroutine, plus nested/error restoration.
+Optional engines, future internal callers and additional background tasks still
+need explicit coverage. Internal work must not inherit a user's capture merely
+because it runs in a task descended from that API request.
+
 ## API errors and request outcomes
 
 A completed HTTP200 stream is not necessarily successful inference. The four

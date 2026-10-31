@@ -503,9 +503,14 @@ class EnginePool:
         task = self._gpu_keep_warm_task
         if task is not None and not task.done():
             return
-        self._gpu_keep_warm_task = asyncio.get_running_loop().create_task(
-            self._gpu_keep_warm_loop(), name="gpu-keep-warm"
-        )
+        from .activity.runtime import without_capture
+
+        # A lazily loaded model can start this task inside a generation request.
+        # Background upkeep must not inherit that request's Activity capture.
+        with without_capture():
+            self._gpu_keep_warm_task = asyncio.get_running_loop().create_task(
+                self._gpu_keep_warm_loop(), name="gpu-keep-warm"
+            )
 
     def _gpu_keep_warm_needed(self) -> bool:
         """True when a model is resident, idle, and used within the idle window."""

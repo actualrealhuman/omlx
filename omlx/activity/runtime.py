@@ -7,6 +7,7 @@ import math
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
 
@@ -37,6 +38,16 @@ def configure_recorder(recorder):
 
 def current_capture():
     return _current.get()
+
+
+@contextmanager
+def without_capture():
+    """Detach internal work from the caller's observation; preserve other context."""
+    token = _current.set(None)
+    try:
+        yield
+    finally:
+        _current.reset(token)
 
 
 def api_failure(outcome="error"):
