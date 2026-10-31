@@ -49,7 +49,7 @@ def phase(state, *, model_id=None):
 class RequestCapture:
     """Small request/invocation state; owns no engine, lease or device arrays."""
 
-    def __init__(self, recorder, handle):
+    def __init__(self, recorder, handle, *, require_transport=False):
         self.recorder, self.handle = recorder, handle
         self._next_invocation = 0
         self._active = 0
@@ -57,6 +57,8 @@ class RequestCapture:
         self._engine_outcomes = set()
         self._lock = threading.Lock()
         self._finalized = False
+        self._require_transport = require_transport
+        self._transport_done = False
 
     def text(self, representation, value, *, invocation_id="0"):
         if value:
@@ -102,8 +104,21 @@ class RequestCapture:
         if final is not None:
             self.recorder.finish(self.handle, final)
 
+    def transport_done(self, outcome):
+        with self._lock:
+            self._transport_done = True
+            self._api_outcome = outcome
+            final = self._final_outcome()
+        if final is not None:
+            self.recorder.finish(self.handle, final)
+
     def _final_outcome(self):
-        if self._api_outcome is None or self._active or self._finalized:
+        if (
+            self._api_outcome is None
+            or self._active
+            or self._finalized
+            or (self._require_transport and not self._transport_done)
+        ):
             return
         self._finalized = True
         outcomes = self._engine_outcomes | {self._api_outcome}
@@ -185,7 +200,13 @@ def observe_request(function):
         )
         if handle is None:
             return await function(*args, **kwargs)
-        capture = RequestCapture(recorder, handle)
+        capture = RequestCapture(
+            recorder,
+            handle,
+            require_transport=bool(
+                getattr(http_request.state, "activity_transport_observed", False)
+            ),
+        )
         http_request.state.activity_capture = capture
         token = _current.set(capture)
         try:

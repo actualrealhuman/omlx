@@ -9,8 +9,9 @@ bounded recent context history. The current source contains the capture/storage
 foundation, settings persistence, request lifecycle and initial engine hooks.
 The four generation API families capture accepted semantic input and their API
 response stream when explicitly enabled. Local scheduler/core hooks additionally
-capture prepared input/tokens and producer output. Admin endpoints and the
-Activity browser interface are not available yet. This is not a complete feature
+capture prepared input/tokens and producer output. Admin read endpoints and
+snapshot-based live delivery are present; the Activity browser interface is not
+available yet. This is not a complete feature
 or an independently qualified adoption snapshot.
 
 The foundation uses one background SQLite writer and separately bounded content
@@ -25,7 +26,8 @@ and observed invocation terminal states, with partial output retained on
 interruption. Named credentials use opaque IDs and historical label snapshots;
 legacy IDs are persisted when capture is enabled without writing unrelated
 runtime overrides back into saved settings. Normal authentication remains the
-authority; Activity never stores authentication headers or bearer keys.
+authority; credentials and HTTP authentication headers are not copied from
+authentication into Activity records.
 
 Defaults: disabled capture, 1,000 terminal requests, seven days, and a 5 GiB
 physical storage budget. Counts and budgets are configurable; 1,000 is not a
@@ -44,7 +46,8 @@ content is distinct from aggregate serving statistics and reusable KV caches.
 - Current boundary: `omlx/activity/`, Activity settings and credential IDs in
   `omlx/settings.py`, generation endpoint/startup/auth hooks in `omlx/server.py`,
   input/output/lifecycle hooks in `omlx/engine_core.py`, `omlx/scheduler.py`,
-  `omlx/request.py` and `omlx/engine/batched.py`, plus `tests/test_activity*.py`.
+  `omlx/request.py` and `omlx/engine/batched.py`, the admin router inclusion,
+  plus `tests/test_activity*.py`.
 - Foundation dependencies: Python standard library only. Server and UI wiring
   will use the application's existing packages. No dependency on downstream
   scheduling controls or browser chat storage is intended; full isolation
@@ -75,10 +78,49 @@ migration. `tests/test_activity_engine.py` exercises actual scheduler/core hook
 paths with mock models, including prepared-token reuse, producer output,
 deferred cancellation and failed insertion. Those need the normal test runtime;
 shared test imports may initialize Metal even though no real model is loaded.
+`tests/test_activity_routes.py` covers actual admin authorization, bounded reads,
+pagination/filtering, snapshot consistency, reconnect/session revalidation,
+reader cancellation and stream admission. `tests/test_activity_transport.py`
+covers handled exceptions and responses whose iterators never begin.
+
+## Admin read interface
+
+The existing `/admin/api/activity` dashboard summary is preserved. New endpoints
+under that prefix require the existing admin session or main API key; named
+inference keys do not grant access:
+
+| Endpoint | Data |
+| --- | --- |
+| `/status` | Capture health and Activity settings, without local paths |
+| `/requests` | Metadata-only keyset pages; active/recent, model, source, state and time filters |
+| `/facets` | Bounded model and historical credential-label choices |
+| `/requests/{id}` | Metadata, retained representation indexes and a version fingerprint |
+| `/requests/{id}/content` | Bounded raw byte ranges for a representation/invocation |
+| `/events` | Committed metadata snapshots with optional selected-request indexes |
+
+Content is never embedded in list or live snapshot responses. Content ranges
+use UTF-8 byte offsets and `application/octet-stream`; the response supplies
+offset/next-offset/total-byte headers. Consumers reading sequential ranges must
+use an incremental decoder rather than decode incomplete character fragments
+independently. Reads use separate short-lived SQLite snapshots and do not create
+a missing database. Existing history can be inspected with capture disabled.
+
+Live delivery polls committed metadata at 500 ms, with a maximum of eight
+viewers. A dedicated two-thread reader pool admits at most four outstanding
+jobs, including work for disconnected callers. No browser queue or reader is
+on the inference producer path. List and selected-content indexes in each live
+snapshot come from one committed read transaction.
+
+The first event is a `snapshot` with an epoch/sequence ID. Reconnect uses
+`resync_required` followed by a fresh snapshot; replay is explicitly
+`snapshot_only`. Clients fetch new text ranges from retained content. Session
+authorization is rechecked throughout a stream; `authorization_lost`,
+`unavailable` and `reconnect` are explicit terminal stream events. Data responses
+are marked no-store. This is not a lossless event-log/replay contract.
 
 ## Limitations and remaining work
 
-- Complete capability reporting, admin delivery, invocation metadata/timings,
+- Complete richer capability reporting, invocation metadata/timings,
   precise prefill/paused state and all backend/endpoint qualification. Current
   generation hooks are covered by mock-model checks, not real-model validation.
 - `raw_output` currently means engine-producer text before API formatting.
@@ -96,6 +138,9 @@ shared test imports may initialize Metal even though no real model is loaded.
 - Validate a fully composed private build separately from the focused source.
 - Semantic input export currently runs once at API ingress before preprocessing;
   its cost on very large payloads and media normalization still need qualification.
+- Live settings, clear/delete HTTP controls, attachments, inspector search and
+  the native restart/long-running viewer lifecycle remain to be completed or
+  qualified. The current admin interface is read-only.
 
 No source publication, packaged binary, compatibility guarantee or upstream
 submission is implied by this in-progress recipe.

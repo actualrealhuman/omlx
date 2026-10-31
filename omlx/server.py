@@ -70,6 +70,7 @@ from omlx._version import __version__
 
 from .activity import ActivityRecorder, ActivitySettings
 from .activity.identity import credential_source
+from .activity.middleware import ActivityTransportMiddleware
 from .activity.runtime import (
     configure_recorder,
     get_recorder as get_activity_recorder,
@@ -1418,6 +1419,7 @@ class ClientDisconnectTrackingMiddleware:
 
 # Keep this outside response middleware so every consumer of ASGI ``receive``
 # passes through the same one-shot disconnect fan-out.
+app.add_middleware(ActivityTransportMiddleware)
 app.add_middleware(ClientDisconnectTrackingMiddleware)
 app.add_middleware(DebugRequestLoggingMiddleware)
 # Outermost so oversized bodies are rejected before any buffering below

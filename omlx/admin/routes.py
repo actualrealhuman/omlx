@@ -41,6 +41,7 @@ from pydantic import (
 
 from .. import gguf
 from .._version import __version__ as _omlx_version
+from ..activity.routes import create_activity_router
 from ..api.markitdown import MARKITDOWN_MODEL_ID, markitdown_model_visible
 from ..api.openai_models import _coerce_tool_call_arguments
 from ..api.utils import _try_parse_json
@@ -1596,6 +1597,13 @@ _hf_downloader = None
 _ms_downloader = None
 _oq_manager = None
 _hf_uploader = None
+
+router.include_router(
+    create_activity_router(
+        get_settings=lambda: _get_global_settings() if _get_global_settings else None,
+        require_admin=require_admin,
+    )
+)
 
 # One save at a time: _save_data writes through a pid-named temp file.
 _settings_save_lock = asyncio.Lock()

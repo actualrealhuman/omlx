@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Worker-owned SQLite persistence and bounded, independent read snapshots."""
 
+import hashlib
 import json
 import sqlite3
 import time
@@ -252,25 +253,75 @@ class ActivityReader:
             self.path.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.25
         )
         db.row_factory = sqlite3.Row
+        try:
+            if db.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+                raise ValueError("Unsupported Activity history schema")
+        except BaseException:
+            db.close()
+            raise
         return db
 
     @staticmethod
     def _record(row):
         result = json.loads(row["metadata"])
+        if not isinstance(result, dict):
+            raise ValueError("Invalid Activity record metadata")
         for key in row.keys():  # noqa: SIM118 -- sqlite3.Row iterates values, not names.
             if key != "metadata":
                 result[key] = row[key]
         return result
 
     def list_requests(
-        self, *, limit=50, before=None, model_id=None, source_id=None, active=None
+        self,
+        *,
+        limit=50,
+        before=None,
+        model_id=None,
+        source_id=None,
+        active=None,
+        state=None,
+        since=None,
+        until=None,
     ):
         if type(limit) is not int or not 1 <= limit <= 200:
             raise ValueError("Activity page limit must be between 1 and 200")
         if not self.path.exists():
             return []
+        db = self._connect()
+        try:
+            return self._rows(
+                db,
+                limit=limit,
+                before=before,
+                model_id=model_id,
+                source_id=source_id,
+                active=active,
+                state=state,
+                since=since,
+                until=until,
+            )
+        finally:
+            db.close()
+
+    def _rows(
+        self,
+        db,
+        *,
+        limit=50,
+        before=None,
+        model_id=None,
+        source_id=None,
+        active=None,
+        state=None,
+        since=None,
+        until=None,
+    ):
         where, args = [], []
-        for field, value in (("model_id", model_id), ("source_id", source_id)):
+        for field, value in (
+            ("model_id", model_id),
+            ("source_id", source_id),
+            ("state", state),
+        ):
             if value is not None:
                 where.append(f"{field}=?")
                 args.append(value)
@@ -279,14 +330,114 @@ class ActivityReader:
             args.extend(before)
         if active is not None:
             where.append("finished_at IS " + ("NULL" if active else "NOT NULL"))
+        for operator, value in ((">=", since), ("<=", until)):
+            if value is not None:
+                where.append(f"received_at{operator}?")
+                args.append(value)
         query = "SELECT * FROM requests"
         if where:
             query += " WHERE " + " AND ".join(where)
         query += " ORDER BY received_at DESC,id DESC LIMIT ?"
         args.append(limit)
+        return [self._record(row) for row in db.execute(query, args)]
+
+    def _detail(self, db, request_id):
+        row = db.execute("SELECT * FROM requests WHERE id=?", (request_id,)).fetchone()
+        if row is None:
+            return None
+        result = self._record(row)
+        result["representations"] = [
+            {
+                "invocation_id": item["invocation_id"],
+                "representation": item["representation"],
+                "bytes": item["bytes"],
+                "chunks": item["chunks"],
+                "last_sequence": item["last_sequence"],
+                "encoding": "utf-8",
+            }
+            for item in db.execute(
+                "SELECT invocation_id,representation,SUM(logical_bytes) AS bytes,"
+                "COUNT(*) AS chunks,MAX(sequence) AS last_sequence FROM content_chunks "
+                "WHERE request_id=? GROUP BY invocation_id,representation "
+                "ORDER BY invocation_id,representation",
+                (request_id,),
+            )
+        ]
+        result["producer_output_layer"] = (
+            "engine output before API formatting; native engine parsers may already have transformed text"
+        )
+        result["capture_status"] = (
+            "gaps_recorded" if result["capture_gaps"] else "no_gaps_recorded"
+        )
+        result["version"] = hashlib.sha256(
+            json.dumps(result, sort_keys=True, ensure_ascii=True).encode()
+        ).hexdigest()
+        return result
+
+    def detail(self, request_id):
+        if not self.path.exists():
+            return None
         db = self._connect()
         try:
-            return [self._record(row) for row in db.execute(query, args)]
+            db.execute("BEGIN")
+            return self._detail(db, request_id)
+        finally:
+            db.close()
+
+    def snapshot(self, *, request_id=None, model_id=None, source_id=None):
+        """One committed metadata/index snapshot; no content BLOBs are read."""
+        if not self.path.exists():
+            return {
+                "active": [],
+                "recent": [],
+                "active_more": False,
+                "recent_more": False,
+                "detail": None,
+            }
+        db = self._connect()
+        try:
+            db.execute("BEGIN")
+            active = self._rows(
+                db, active=True, limit=51, model_id=model_id, source_id=source_id
+            )
+            recent = self._rows(
+                db, active=False, limit=51, model_id=model_id, source_id=source_id
+            )
+            return {
+                "active": active[:50],
+                "recent": recent[:50],
+                "active_more": len(active) > 50,
+                "recent_more": len(recent) > 50,
+                "detail": self._detail(db, request_id) if request_id else None,
+            }
+        finally:
+            db.close()
+
+    def facets(self):
+        if not self.path.exists():
+            return {"models": [], "sources": [], "truncated": False}
+        db = self._connect()
+        try:
+            db.execute("BEGIN")
+            models = [
+                row[0]
+                for row in db.execute(
+                    "SELECT DISTINCT model_id FROM requests ORDER BY model_id LIMIT 201"
+                )
+            ]
+            sources = [
+                dict(row)
+                for row in db.execute(
+                    "SELECT source_id,source_name FROM (SELECT source_id,source_name,"
+                    "ROW_NUMBER() OVER (PARTITION BY source_id ORDER BY received_at DESC,id DESC) AS n "
+                    "FROM requests) WHERE n=1 ORDER BY source_name,source_id LIMIT 201"
+                )
+            ]
+            return {
+                "models": models[:200],
+                "sources": sources[:200],
+                "truncated": len(models) > 200 or len(sources) > 200,
+            }
         finally:
             db.close()
 
@@ -303,7 +454,14 @@ class ActivityReader:
             db.close()
 
     def content(
-        self, request_id, representation, *, invocation_id="0", offset=0, limit=65536
+        self,
+        request_id,
+        representation,
+        *,
+        invocation_id="0",
+        offset=0,
+        limit=65536,
+        require_exists=False,
     ):
         if representation not in REPRESENTATIONS:
             raise ValueError("Unknown Activity representation")
@@ -314,10 +472,20 @@ class ActivityReader:
             or not 1 <= limit <= MAX_READ_BYTES
         ):
             raise ValueError("Activity content range outside bounds")
+        if require_exists and not self.path.exists():
+            return None
         db = self._connect()
         try:
             # Total length and chunks must describe one committed snapshot.
             db.execute("BEGIN")
+            if (
+                require_exists
+                and db.execute(
+                    "SELECT 1 FROM requests WHERE id=?", (request_id,)
+                ).fetchone()
+                is None
+            ):
+                return None
             params = (request_id, invocation_id, representation)
             total = db.execute(
                 "SELECT COALESCE(SUM(logical_bytes),0) FROM content_chunks "
