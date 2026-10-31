@@ -115,7 +115,7 @@ def test_merge_limits_or_memory_pressure_fall_back_without_losing_payload(
             enabled=True,
             max_pending_bytes=262144,
             max_active_requests=1,
-            max_memory_bytes=270336,
+            max_memory_bytes=278528,
         )
         if kind == "memory"
         else None
@@ -242,7 +242,7 @@ def test_scratch_participates_in_all_ingress_memory_admission(writer, monkeypatc
         enabled=True,
         max_pending_bytes=65536,
         max_active_requests=64,
-        max_memory_bytes=589824,
+        max_memory_bytes=1114112,
     )
     recorder, handle = writer(settings)
     entered, resume = threading.Event(), threading.Event()
@@ -256,6 +256,7 @@ def test_scratch_participates_in_all_ingress_memory_admission(writer, monkeypatc
     monkeypatch.setattr(ActivityStore, "append", block)
     recorder.append(handle, "api_response", b"a")
     recorder.append(handle, "api_response", b"b")
+    recorder.append(handle, "api_response", b"c" * 30000)
     flush = recorder._control("flush")
     try:
         assert entered.wait(3)
@@ -469,7 +470,7 @@ def test_prepared_groups_fall_back_if_memory_is_consumed_after_planning(
         enabled=True,
         max_pending_bytes=65536,
         max_active_requests=64,
-        max_memory_bytes=589824,
+        max_memory_bytes=1114112,
     )
     recorder, handle = writer(settings)
     entered, resume = threading.Event(), threading.Event()

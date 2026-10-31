@@ -3,6 +3,8 @@
 
 from dataclasses import asdict, dataclass, fields
 
+REQUEST_METADATA_RESERVATION_BYTES = 16 * 1024
+
 
 @dataclass(frozen=True)
 class ActivitySettings:
@@ -35,7 +37,8 @@ class ActivitySettings:
             raise ValueError("Activity attachment cap exceeds the request cap")
         # Reserve bounded lifecycle metadata independently of the content queue.
         if (
-            self.max_pending_bytes + self.max_active_requests * 8192
+            self.max_pending_bytes
+            + self.max_active_requests * REQUEST_METADATA_RESERVATION_BYTES
             > self.max_memory_bytes
         ):
             raise ValueError("Activity content and metadata exceed the memory budget")

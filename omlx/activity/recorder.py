@@ -11,7 +11,7 @@ from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import ActivitySettings
+from .config import REQUEST_METADATA_RESERVATION_BYTES, ActivitySettings
 from .coverage import BACKENDS
 from .images import prepare_image
 from .invocations import (
@@ -239,7 +239,7 @@ class ActivityRecorder:
     ):
         if not self.settings.enabled or self._closed:
             return None
-        # Six bounded strings fit the separately reserved per-request metadata.
+        # The request metadata slot is charged separately from capture payloads.
         values = (model_id, endpoint, source_id, source_name)
         if any(not isinstance(value, str) or len(value) > 256 for value in values):
             return None
@@ -265,6 +265,8 @@ class ActivityRecorder:
                     "finished_at": None,
                     "state": "received",
                     "model_id": model_id,
+                    "requested_model_id": model_id,
+                    "model_resolution_observed": False,
                     "source_id": source_id,
                     "source_name": source_name,
                     "endpoint": endpoint,
@@ -395,7 +397,7 @@ class ActivityRecorder:
             + max(self._writer_scratch_bytes, self._prepared_group_bytes)
             + pending_bytes
             + invocation_bytes
-            + (len(self._pending) + capture_slots) * 8192
+            + (len(self._pending) + capture_slots) * REQUEST_METADATA_RESERVATION_BYTES
         )
 
     def reserve_invocation(self, handle):
@@ -508,13 +510,20 @@ class ActivityRecorder:
             pending = self._lookup(handle)
             if pending is None or pending.metadata["finished_at"] is not None:
                 return False
-            if pending.metadata["state"] == state and (
-                model_id is None or pending.metadata["model_id"] == model_id
+            resolution_observed = model_id is not None
+            if (
+                pending.metadata["state"] == state
+                and (model_id is None or pending.metadata["model_id"] == model_id)
+                and (
+                    not resolution_observed
+                    or pending.metadata.get("model_resolution_observed") is True
+                )
             ):
                 return True
             pending.metadata["state"] = state
             if model_id is not None:
                 pending.metadata["model_id"] = model_id
+                pending.metadata["model_resolution_observed"] = True
             pending.version += 1
         self._wake.set()
         return True

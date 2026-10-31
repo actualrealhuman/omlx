@@ -85,7 +85,11 @@ def test_full_dashboard_renders_activity_with_local_assets_and_translatable_text
     assert "activityRequestHref(pp.activity_request_id)" in rendered
     assert "activityRequestHref(gen.activity_request_id)" in rendered
     assert "activityRequestHref(wait.activity_request_id)" in rendered
-    assert "x-html=" not in (ROOT / "templates/dashboard/_activity.html").read_text()
+    activity = (ROOT / "templates/dashboard/_activity.html").read_text()
+    assert "x-html=" not in activity
+    assert "detail?.requested_model_id !== undefined" in activity
+    assert "detail?.model_resolution_observed === true" in activity
+    assert "activity.duration_hint" in activity
     expected = {key for key in locale if key.startswith("activity.")}
     for file in (ROOT / "i18n").glob("*.json"):
         translated = json.loads(file.read_text())

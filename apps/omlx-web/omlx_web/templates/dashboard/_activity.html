@@ -40,7 +40,7 @@
                                :href="'/admin/dashboard?tab=activity&request=' + encodeURIComponent(record.id)"
                                @click="if (!$event.metaKey &amp;&amp; !$event.ctrlKey &amp;&amp; !$event.shiftKey &amp;&amp; !$event.altKey) { $event.preventDefault(); select(record.id); }">
                                 <div><span class="activity-state badge" :data-state="record.state" x-text="stateLabel(record.state)"></span><time x-text="time(record.received_at)"></time></div>
-                                <strong x-text="record.model_id || label('unknown_model')"></strong>
+                                <strong x-text="modelTitle(record)"></strong>
                                 <div><span x-text="record.source_name"></span><span x-text="bytes(record.captured_bytes)"></span></div>
                                 <span x-show="record.capture_gaps" class="activity-gap" x-text="label('gaps')"></span>
                             </a>
@@ -51,7 +51,7 @@
                 <template x-for="record in older" :key="'older-' + record.id">
                     <a class="activity-request" :href="'/admin/dashboard?tab=activity&request=' + encodeURIComponent(record.id)"
                        @click="if (!$event.metaKey &amp;&amp; !$event.ctrlKey &amp;&amp; !$event.shiftKey &amp;&amp; !$event.altKey) { $event.preventDefault(); select(record.id); }">
-                        <div><span x-text="stateLabel(record.state)"></span><time x-text="time(record.received_at)"></time></div><strong x-text="record.model_id"></strong><span x-text="record.source_name"></span>
+                        <div><span x-text="stateLabel(record.state)"></span><time x-text="time(record.received_at)"></time></div><strong x-text="modelTitle(record)"></strong><span x-text="record.source_name"></span>
                     </a>
                 </template>
                 <button x-show="pageCursor" class="activity-page-button" @click="more(pageScope)" :disabled="paging">{{ t('activity.next_page') }}</button>
@@ -64,9 +64,11 @@
             <div x-show="selected &amp;&amp; !missing" class="activity-detail">
                 <header class="activity-detail-heading">
                     <button class="activity-back" @click="select('')" aria-label="{{ t('activity.back_to_requests') }}">←</button>
-                    <div class="activity-detail-title"><span class="activity-state badge" :data-state="detail?.state" x-text="stateLabel(detail?.state || 'received')"></span><h2 x-text="detail?.model_id || label('loading')"></h2><p><span x-text="detail?.source_name"></span> · <span class="activity-id" :title="selected" x-text="selected"></span><span class="activity-id-actions"><button type="button" class="activity-inline-copy" @click="copyRequestInfo('id')" :disabled="exporting || authorizationLost" :title="selected" :aria-label="label('copy_request_id') + ' ' + selected" x-text="label('copy_id')"></button><button type="button" class="activity-inline-copy" @click="copyRequestInfo('link')" :disabled="exporting || authorizationLost" :title="selected" :aria-label="label('copy_request_link') + ' ' + selected" x-text="label('copy_link')"></button></span></p></div>
+                    <div class="activity-detail-title"><span class="activity-state badge" :data-state="detail?.state" x-text="stateLabel(detail?.state || 'received')"></span><h2 x-text="modelTitle(detail)"></h2><p><span x-text="detail?.source_name"></span> · <span class="activity-id" :title="selected" x-text="selected"></span><span class="activity-id-actions"><button type="button" class="activity-inline-copy" @click="copyRequestInfo('id')" :disabled="exporting || authorizationLost" :title="selected" :aria-label="label('copy_request_id') + ' ' + selected" x-text="label('copy_id')"></button><button type="button" class="activity-inline-copy" @click="copyRequestInfo('link')" :disabled="exporting || authorizationLost" :title="selected" :aria-label="label('copy_request_link') + ' ' + selected" x-text="label('copy_link')"></button></span></p></div>
                     <dl class="activity-metrics"><div><dt>{{ t('activity.received') }}</dt><dd x-text="time(detail?.received_at)"></dd></div><div><dt>{{ t('activity.duration') }}</dt><dd x-text="duration(detail)"></dd></div><div><dt>{{ t('activity.retained') }}</dt><dd x-text="bytes(detail?.captured_bytes)"></dd></div></dl>
                 </header>
+                <p x-show="detail?.requested_model_id !== undefined" class="activity-fidelity"><span x-text="label('requested_model')"></span> · <span x-text="modelRequestTitle(detail)"></span><span> · </span><span x-text="label('serving_model')"></span> · <span x-text="detail?.model_resolution_observed === true ? detail?.model_id : label('resolution_unobserved')"></span></p>
+                <p class="activity-fidelity">{{ t('activity.duration_hint') }}</p>
                 <p x-show="selectedOutsideFilters === true" class="activity-selected-filter-hint" role="status">{{ t('activity.selected_outside_filters') }}</p>
                 <dl class="activity-evidence-metrics">
                     <div><dt>{{ t('activity.input_tokens') }}</dt><dd x-text="count(detail?.observed_input_tokens)"></dd></div>

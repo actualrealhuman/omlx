@@ -212,7 +212,7 @@ def test_memory_bound_can_refuse_new_observers_and_new_requests_without_exceedin
     settings = ActivitySettings(
         enabled=True,
         max_pending_bytes=131072,
-        max_memory_bytes=139264,
+        max_memory_bytes=147456,
         max_active_requests=1,
     )
     recorder = ActivityRecorder(tmp_path / "activity.sqlite3", settings)
@@ -224,11 +224,8 @@ def test_memory_bound_can_refuse_new_observers_and_new_requests_without_exceedin
         while (invocation := capture.invocation("engine")) is not None:
             observers.append(invocation)
         assert observers and len(observers) < 256
-        health = recorder.health()
-        assert (
-            health["pending_bytes"] + health["invocation_live_bytes"] + 8192
-            <= settings.max_memory_bytes
-        )
+        with recorder._lock:
+            assert recorder._memory_used() <= settings.max_memory_bytes
         assert recorder.begin(model_id="other", endpoint="chat") is None
         assert recorder.flush()
         assert recorder.reader.get(handle.request_id)["capture_gaps"] > 0

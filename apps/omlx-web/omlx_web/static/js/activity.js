@@ -6,6 +6,7 @@
     const roles = ['system', 'developer', 'user', 'assistant', 'reasoning', 'output_error', 'output_refusal', 'choice', 'block', 'item', 'tool', 'tool_calls', 'tools', 'options', 'submitted', 'unparsed', 'model_input', 'raw_output', 'api_response', 'model_tokens', 'events'];
     function activityInspector() {
         let stream, worker, resize, controller, retry, searchTimer, frame, invocationController, pageController;
+        let observationTimer = null, observationGeneration = 0;
         let invocationGeneration = 0;
         let generation = 0, activation = 0, pageGeneration = 0, loadedVersion = '', stopped = true, lastFacets = 0, exportSequence = 0, programmaticScrollRow = null;
         const positions = new Map();
@@ -16,7 +17,7 @@
             selectedOutsideFilters: null, filtersLoading: false, filterError: '', connection: 'connecting', error: '', missing: false, authorizationLost: false,
             mode: 'submitted', follow: true, loading: false, limited: false, rows: [], outline: [], rail: [], total: 0,
             outlineOpen: false, outlineOffset: 0, outlineTotal: 0, outlinePageSize: 128, outlineHasPrevious: false, outlineHasNext: false,
-            current: null, row: 0, visibleRows: 25, columns: 100,
+            current: null, row: 0, visibleRows: 25, columns: 100, observationNow: null,
             searchQuery: '', searchResult: {count: 0, match: 0, marks: []}, activeMore: false, recentMore: false,
             pageCursor: '', pageScope: 'recent', paging: false, exporting: false, exportError: '', exportContext: null, newOutput: false, viewReady: false, outputBytes: 0,
             settingsOpen: false, settingsDraft: {enabled: false, retain_images: true, max_requests: 1000, max_age_days: 7, storageGiB: 5},
@@ -44,6 +45,7 @@
             },
             async activate(value) {
                 if (!value) {
+                    this.stopObservationClock();
                     this.pendingAction = '';
                     this.attachmentsOpen = false; this.previewId = '';
                     this.resetInvocationDetail();
@@ -164,8 +166,9 @@
                         if (this.selected) {
                             this.missing = !snapshot.detail;
                             this.detail = snapshot.detail;
+                            this.syncObservationClock();
                             if (snapshot.detail && snapshot.detail.id === this.selected) this.inspect(snapshot.detail);
-                            else if (!snapshot.detail) { this.resetInvocationDetail(); this.exportContext = null; this.exporting = false; this.exportError = ''; this.attachmentsOpen = false; this.previewId = ''; generation++; worker?.terminate(); worker = null; loadedVersion = ''; this.rows = []; this.outline = []; this.rail = []; this.current = null; this.total = 0; this.outlineOffset = 0; this.outlineTotal = 0; }
+                            else if (!snapshot.detail) { this.stopObservationClock(); this.resetInvocationDetail(); this.exportContext = null; this.exporting = false; this.exportError = ''; this.attachmentsOpen = false; this.previewId = ''; generation++; worker?.terminate(); worker = null; loadedVersion = ''; this.rows = []; this.outline = []; this.rail = []; this.current = null; this.total = 0; this.outlineOffset = 0; this.outlineTotal = 0; }
                         }
                         this.loadFacets().catch(() => {});
                     } catch (_) { this.error = label('invalid_snapshot'); }
@@ -175,7 +178,7 @@
                     if (stream !== current) return;
                     current.close(); stream = null; this.connection = 'disconnected';
                     this.filtersLoading = false;
-                    if (type === 'authorization_lost') { pageGeneration++; pageController?.abort(); pageController = null; this.paging = false; this.authorizationLost = true; this.resetInvocationDetail(); this.exportContext = null; this.exporting = false; this.exportError = label('sign_in'); this.error = label('sign_in'); this.attachmentsOpen = false; this.previewId = ''; }
+                    if (type === 'authorization_lost') { this.stopObservationClock(); pageGeneration++; pageController?.abort(); pageController = null; this.paging = false; this.authorizationLost = true; this.resetInvocationDetail(); this.exportContext = null; this.exporting = false; this.exportError = label('sign_in'); this.error = label('sign_in'); this.attachmentsOpen = false; this.previewId = ''; }
                     else { if (type === 'unavailable') this.error = label('unavailable'); retry = setTimeout(() => this.connect(), 3000); }
                 });
                 current.onerror = () => { if (stream === current) { this.connection = 'reconnecting'; this.filtersLoading = false; } };
@@ -198,6 +201,13 @@
                 const milliseconds = new Date(value).getTime();
                 return Number.isFinite(milliseconds) ? milliseconds / 1000 : NaN;
             },
+            modelTitle(record) {
+                if (record?.model_id === '<default>' && record.model_resolution_observed !== true) return label('default_model');
+                return record?.model_id || label('loading');
+            },
+            modelRequestTitle(record) {
+                return record?.requested_model_id === '<default>' ? label('default_model') : record?.requested_model_id || '';
+            },
             rangeError() {
                 const since = this.localTimeSeconds(this.receivedFrom), until = this.localTimeSeconds(this.receivedUntil);
                 if ((this.receivedFrom && !Number.isFinite(since)) || (this.receivedUntil && !Number.isFinite(until)) || (since !== null && until !== null && since > until)) return label('invalid_received_range');
@@ -217,6 +227,7 @@
                 if (value !== this.selected || (!worker && value)) this.select(value, false);
             },
             select(id, push = true) {
+                this.stopObservationClock();
                 if (this.selected) {
                     positions.set(this.selected, {row: this.row, mode: this.mode, follow: this.follow, invocationId: this.invocationId, allPosition: this.allPosition});
                     if (positions.size > 20) positions.delete(positions.keys().next().value);
@@ -568,8 +579,46 @@
             bytes(value) { if (!value) return '0 B'; const unit = Math.min(3, Math.floor(Math.log(value) / Math.log(1024))); return `${(value / 1024 ** unit).toFixed(unit ? 1 : 0)} ${['B', 'KiB', 'MiB', 'GiB'][unit]}`; },
             count(value) { return Number.isFinite(value) ? value.toLocaleString() : '—'; },
             milliseconds(value) { return Number.isFinite(value) ? `${Math.round(value).toLocaleString()} ms` : '—'; },
-            time(value) { return value ? new Date(value * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'}) : '—'; },
-            duration(record) { return record?.finished_at ? `${Math.max(0, record.finished_at - record.received_at).toFixed(1)} s` : '—'; },
+            time(value) { return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? new Date(value * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'}) : '—'; },
+            duration(record) {
+                const received = record?.received_at;
+                if (typeof received !== 'number' || !Number.isFinite(received) || received < 0) return '—';
+                if (record.finished_at !== null) {
+                    if (typeof record.finished_at !== 'number' || !Number.isFinite(record.finished_at) || record.finished_at < 0) return '—';
+                    return `${Math.max(0, record.finished_at - received).toFixed(1)} s`;
+                }
+                if (!this.observationEligible(record) || typeof this.observationNow !== 'number' || !Number.isFinite(this.observationNow)) return '—';
+                return `${Math.max(0, this.observationNow / 1000 - received).toFixed(1)} s`;
+            },
+            observationEligible(record) {
+                return !stopped && this.mainTab === 'activity' && !document.hidden && !this.authorizationLost
+                    && !!this.selected && record?.id === this.selected && record.finished_at === null
+                    && typeof record.received_at === 'number' && Number.isFinite(record.received_at) && record.received_at >= 0;
+            },
+            stopObservationClock() {
+                observationGeneration++;
+                if (observationTimer !== null) clearInterval(observationTimer);
+                observationTimer = null;
+                this.observationNow = null;
+            },
+            syncObservationClock() {
+                if (!this.observationEligible(this.detail)) {
+                    this.stopObservationClock();
+                    return;
+                }
+                if (observationTimer !== null) return;
+                const wallAtStart = Date.now(), monotonicAtStart = performance.now();
+                this.observationNow = wallAtStart;
+                const token = ++observationGeneration;
+                observationTimer = setInterval(() => {
+                    if (token !== observationGeneration) return;
+                    if (!this.observationEligible(this.detail)) {
+                        this.stopObservationClock();
+                        return;
+                    }
+                    this.observationNow = wallAtStart + Math.max(0, performance.now() - monotonicAtStart);
+                }, 1000);
+            },
             currentSection() { return this.current || this.outline[0]; },
         };
     }

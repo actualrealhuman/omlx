@@ -33,6 +33,16 @@ runtime overrides back into saved settings. Normal authentication remains the
 authority; credentials and HTTP authentication headers are not copied from
 authentication into Activity records.
 
+New records retain the bounded requested model separately from the current
+serving/filter model. A resolution marker is set only when the serving-model
+hook supplies an ID, including same-name resolution. Unresolved/default choices
+and older rows without this evidence remain distinguishable; historical aliases
+are not reconstructed. The selected inspector's receipt-based elapsed span uses
+one visible-only clock, which stops on hiding, deselection, authorization loss
+or completion. Live ticks use monotonic browser time after the initial elapsed
+estimate is anchored to receipt. Terminal spans use their saved finish time.
+This is observation time rather than decoding latency.
+
 Defaults: disabled capture, 1,000 terminal requests, seven days, and a 5 GiB
 physical storage budget. Counts and budgets are configurable; 1,000 is not a
 hard ceiling. Internal safety defaults include a 64 MiB request cap, a 16 MiB
@@ -40,6 +50,13 @@ attachment cap, 128 MiB observer memory, a 16 MiB content queue and 1,024 active
 capture slots. Supported inline originals have bounded image retention and
 lazy previews; effective queue limits can be lower than the attachment cap. Captured
 content is distinct from aggregate serving statistics and reusable KV caches.
+
+Each active capture reserves 16 KiB of protected request metadata independently
+of content. Settings require the pending-content limit plus all configured
+active metadata slots to fit the observer memory budget. A worst-case Unicode/
+scalar fixture includes retained requested/serving names and a worker metadata
+copy; this structural check does not measure full process RSS. Tight custom
+memory configurations may need a smaller active limit or a larger memory budget.
 
 ## Source and adoption boundary
 

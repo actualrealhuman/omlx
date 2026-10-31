@@ -4,6 +4,7 @@
 import hashlib
 import json
 import sqlite3
+import sys
 import tempfile
 import threading
 import time
@@ -14,6 +15,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from omlx.activity import ActivityReader, ActivityRecorder, ActivitySettings
+from omlx.activity.recorder import REQUEST_METADATA_RESERVATION_BYTES
 from omlx.activity.store import MAX_CHUNK_BYTES, ActivityStore
 
 
@@ -172,11 +174,144 @@ class ActivityTests(unittest.TestCase):
     def test_metadata_slots_are_bounded_and_released_on_finish(self):
         recorder = self.recorder(replace(self.settings, max_active_requests=1))
         handle = self.begin(recorder)
+        self.assertEqual(recorder._memory_used(), REQUEST_METADATA_RESERVATION_BYTES)
         self.assertIsNone(recorder.begin(model_id="b", endpoint="chat"))
         recorder.finish(handle)
         self.assertTrue(recorder.flush())
         self.assertIsNotNone(recorder.begin(model_id="b", endpoint="chat"))
         self.assertEqual(recorder.health()["skipped_requests"], 1)
+
+    def test_requested_and_resolved_model_identity_survives_restart(self):
+        recorder = self.recorder()
+        alias = "publisher/alias"
+        handle = self.begin(recorder, model_id=alias)
+        pending = recorder._pending[handle.request_id]
+        self.assertEqual(pending.metadata["requested_model_id"], alias)
+        self.assertFalse(pending.metadata["model_resolution_observed"])
+
+        # Resolution must be recorded even when the phase and ID are unchanged.
+        self.assertTrue(recorder.state(handle, "received", model_id=alias))
+        self.assertTrue(pending.metadata["model_resolution_observed"])
+        self.assertEqual(pending.metadata["requested_model_id"], alias)
+        self.assertEqual(pending.metadata["model_id"], alias)
+
+        resolved = "publisher/canonical"
+        self.assertTrue(recorder.state(handle, "preparing", model_id=resolved))
+        self.assertEqual(pending.metadata["requested_model_id"], alias)
+        self.assertEqual(pending.metadata["model_id"], resolved)
+        self.assertTrue(pending.metadata["model_resolution_observed"])
+        self.assertTrue(recorder.finish(handle))
+        self.assertTrue(recorder.flush())
+        self.assertTrue(recorder.close())
+
+        restarted_reader = ActivityReader(self.path)
+        row = restarted_reader.get(handle.request_id)
+        self.assertEqual(row["requested_model_id"], alias)
+        self.assertEqual(row["model_id"], resolved)
+        self.assertIs(row["model_resolution_observed"], True)
+        restarted_writer = self.recorder()
+        self.assertEqual(
+            restarted_writer.reader.get(handle.request_id)["requested_model_id"], alias
+        )
+
+    def test_default_and_unresolved_model_identity_and_legacy_rows(self):
+        recorder = self.recorder()
+        default = self.begin(recorder, model_id="<default>")
+        unresolved = self.begin(recorder, model_id="publisher/not-loaded")
+        legacy = self.begin(recorder, model_id="legacy")
+        with recorder._lock:
+            recorder.finish(default)
+            recorder.finish(unresolved)
+            recorder.finish(legacy)
+            # Simulate a record written before requested/resolution fields existed.
+            legacy_pending = recorder._pending[legacy.request_id]
+            legacy_pending.metadata.pop("requested_model_id")
+            legacy_pending.metadata.pop("model_resolution_observed")
+        self.assertTrue(recorder.flush())
+        rows = {row["id"]: row for row in recorder.reader.list_requests(limit=10)}
+        self.assertEqual(rows[default.request_id]["requested_model_id"], "<default>")
+        self.assertFalse(rows[default.request_id]["model_resolution_observed"])
+        self.assertEqual(
+            rows[unresolved.request_id]["requested_model_id"], "publisher/not-loaded"
+        )
+        self.assertFalse(rows[unresolved.request_id]["model_resolution_observed"])
+        self.assertNotIn("requested_model_id", rows[legacy.request_id])
+        self.assertNotIn("model_resolution_observed", rows[legacy.request_id])
+
+    def test_peak_owned_request_metadata_fits_protected_reservation(self):
+        recorder = self.recorder()
+
+        def wide_text():
+            return "".join(chr(0x100000 + index) for index in range(256))
+
+        def max_scalar():
+            return int("9223372036854775807")
+
+        def max_time():
+            return float("1000000000000")
+
+        handle = self.begin(
+            recorder,
+            model_id=wide_text(),
+            source_id=wide_text(),
+            source_name=wide_text(),
+            endpoint=wide_text(),
+        )
+        pending = recorder._pending[handle.request_id]
+        # Model resolution replaces the filter identity while preserving the
+        # initial requested ID. Terminal and optional scalar fields can coexist.
+        with recorder._lock:
+            pending.metadata.update(
+                model_id=wide_text(),
+                model_resolution_observed=True,
+                finish_reason=wide_text(),
+                capture_reason=wide_text(),
+                observed_invocations=max_scalar(),
+                prepared_invocations=max_scalar(),
+                prepared_text_invocations=max_scalar(),
+                prefilling_invocations=max_scalar(),
+                observed_input_tokens=max_scalar(),
+                observed_generated_tokens=max_scalar(),
+                first_observed_token_ms=max_time(),
+                first_observed_text_ms=max_time(),
+                submitted_normalized=True,
+                submitted_media_references=max_scalar(),
+                api_failure_outcome="cancelled",
+                api_failure_source="api_formatter",
+                resolved_backends=(
+                    "local_text",
+                    "local_vlm",
+                    "local_diffusion",
+                    "distributed_proxy",
+                    "splash_native",
+                    "unknown",
+                ),
+            )
+            metadata_snapshot = dict(pending.metadata)
+
+        def owned_bytes(value, seen):
+            if value is None or type(value) is bool or id(value) in seen:
+                return 0
+            seen.add(id(value))
+            size = sys.getsizeof(value)
+            if type(value) is dict:
+                # Key strings are fixed shared names; count this record's value
+                # table and each independently owned value only once.
+                return size + sum(owned_bytes(child, seen) for child in value.values())
+            if type(value) in (tuple, list):
+                return size + sum(owned_bytes(child, seen) for child in value)
+            return size
+
+        measured = (
+            owned_bytes(pending.metadata, set())
+            + sys.getsizeof(metadata_snapshot)
+            + sys.getsizeof(pending)
+            + sys.getsizeof(vars(pending))
+            + sys.getsizeof(handle)
+            + sys.getsizeof(vars(handle))
+            + 32  # amortized per-request key/value entry in the pending ledger
+        )
+        self.assertLessEqual(measured, REQUEST_METADATA_RESERVATION_BYTES)
 
     def test_clear_fences_inflight_writes_and_old_handles(self):
         self._deletion_race(clear=True)

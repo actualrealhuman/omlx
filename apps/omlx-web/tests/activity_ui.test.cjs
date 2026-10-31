@@ -7,14 +7,19 @@ const path = require('node:path');
 const js = path.join(__dirname, '../omlx_web/static/js');
 
 function harness() {
-    const streams = [], workers = [], downloads = [], listeners = new Map();
+    const streams = [], workers = [], downloads = [], listeners = new Map(), intervals = new Map();
+    let nextInterval = 0, now = 10000, monotonic = 10000;
+    class TestDate extends Date { static now() { return now; } }
     const window = {t: key => key, location: new URL('http://test.invalid/admin/dashboard?tab=activity&request=first'),
         history: {pushState(_state, _title, url) { window.location = new URL(url); }, replaceState(_state, _title, url) { window.location = new URL(url); }},
         addEventListener(name, callback) { listeners.set(name, callback); }, removeEventListener(name) { listeners.delete(name); },
         dispatchEvent(event) { listeners.get(event.type)?.(event); },
     };
-    const context = {window, localStorage: {getItem: () => null}, URL, URLSearchParams, AbortController, Blob,
-        Event, Date, console, setTimeout, clearTimeout, requestAnimationFrame: callback => { callback(); return 1; }, cancelAnimationFrame() {},
+    const context = {window, localStorage: {getItem: () => null}, URL, URLSearchParams, AbortController, Blob, performance: {now: () => monotonic},
+        Event, Date: TestDate, console, setTimeout, clearTimeout,
+        setInterval(callback, delay) {const id = ++nextInterval; intervals.set(id, {callback, delay}); return id;},
+        clearInterval(id) {intervals.delete(id);},
+        requestAnimationFrame: callback => { callback(); return 1; }, cancelAnimationFrame() {},
         ResizeObserver: class { observe() {} disconnect() {} },
         EventSource: class { constructor(url) {this.url = url; this.events = {}; streams.push(this);} addEventListener(name, callback) {this.events[name] = callback;} close() {this.closed = true;} },
         Worker: class { constructor() {this.messages = []; workers.push(this);} postMessage(message) {this.messages.push(message);} terminate() {this.terminated = true;} },
@@ -30,7 +35,8 @@ function harness() {
     const app = window.activityInspector();
     Object.assign(app, {mainTab: 'activity', $watch() {}, $nextTick: callback => callback(),
         $refs: {contextViewport: {clientWidth: 600, clientHeight: 440, scrollTop: 0}}, $el: {dataset: {workerUrl: '/worker.js'}}});
-    return {app, context, window, streams, workers, downloads};
+    return {app, context, window, streams, workers, downloads, intervals, setNow(value) {now = value; monotonic = value;},
+        setWallNow(value) {now = value;}, setMonotonic(value) {monotonic = value;}};
 }
 
 test('inspector resynchronizes, ignores old selections and stops all work when hidden', async () => {
@@ -56,6 +62,81 @@ test('inspector resynchronizes, ignores old selections and stops all work when h
     await app.activate(true);
     assert.equal(app.selected, 'second');
     assert.equal(app.row, 200);
+    await app.activate(false);
+});
+
+test('selected active detail uses one visible receipt clock and freezes terminal duration', async () => {
+    const {app, context, streams, intervals, setNow, setWallNow, setMonotonic} = harness();
+    await app.activate(true);
+    const snapshot = detail => JSON.stringify({active: [], recent: [], health: {enabled: true}, detail});
+    streams.at(-1).events.snapshot({data: snapshot({id: 'first', received_at: 0, finished_at: null, representations: []})});
+    assert.equal(intervals.size, 1);
+    assert.equal(app.duration(app.detail), '10.0 s');
+    const oldTick = [...intervals.values()][0].callback;
+    setNow(12100); oldTick();
+    assert.equal(app.duration(app.detail), '12.1 s');
+    setWallNow(-900000); setMonotonic(13100); oldTick();
+    assert.equal(app.duration(app.detail), '13.1 s', 'live elapsed ticks ignore wall-clock corrections');
+    setNow(13100);
+    context.document.hidden = true;
+    app.syncObservationClock();
+    assert.equal(intervals.size, 0);
+    oldTick();
+    assert.equal(app.observationNow, null);
+    context.document.hidden = false;
+    streams.at(-1).events.snapshot({data: snapshot({id: 'first', received_at: 0, finished_at: null, representations: []})});
+    assert.equal(intervals.size, 1);
+
+    app.select('second');
+    assert.equal(intervals.size, 0);
+    oldTick();
+    assert.equal(app.observationNow, null);
+    streams.at(-1).events.snapshot({data: snapshot({id: 'second', received_at: 5, finished_at: null, representations: []})});
+    assert.equal(intervals.size, 1);
+    const currentTick = [...intervals.values()][0].callback;
+    setNow(15000); currentTick();
+    assert.equal(app.duration(app.detail), '10.0 s');
+
+    app.activate(false);
+    assert.equal(intervals.size, 0);
+    currentTick();
+    assert.equal(app.observationNow, null);
+    await app.activate(true);
+    streams.at(-1).events.snapshot({data: snapshot({id: 'second', received_at: 5, finished_at: 8.25, representations: []})});
+    assert.equal(intervals.size, 0);
+    assert.equal(app.duration(app.detail), '3.3 s');
+    await app.activate(false);
+});
+
+test('invalid and unobserved model times stay unknown and auth loss stops the clock', async () => {
+    const {app, streams, intervals, setNow} = harness();
+    await app.activate(true);
+    const snapshot = detail => JSON.stringify({active: [], recent: [], health: {enabled: true}, detail});
+    streams.at(-1).events.snapshot({data: snapshot({id: 'first', received_at: -1, finished_at: null, representations: []})});
+    assert.equal(intervals.size, 0);
+    assert.equal(app.duration(app.detail), '—');
+    assert.equal(app.duration({received_at: NaN, finished_at: 1}), '—');
+    assert.equal(app.duration({received_at: '0', finished_at: 1}), '—');
+    assert.equal(app.duration({received_at: 2, finished_at: 1}), '0.0 s');
+    assert.notEqual(app.time(0), '—');
+
+    streams.at(-1).events.snapshot({data: snapshot({id: 'first', received_at: 1, finished_at: null, requested_model_id: '<default>', model_id: '<default>', model_resolution_observed: false, representations: []})});
+    assert.equal(intervals.size, 1);
+    assert.equal(app.modelTitle(app.detail), 'activity.default_model');
+    assert.equal(app.modelRequestTitle(app.detail), 'activity.default_model');
+    assert.equal(app.duration({id: 'other', received_at: 0, finished_at: null}), '—');
+    const staleTick = [...intervals.values()][0].callback;
+    setNow(14000);
+    streams.at(-1).events.authorization_lost();
+    assert.equal(intervals.size, 0);
+    assert.equal(app.observationNow, null);
+    staleTick();
+    assert.equal(app.observationNow, null);
+    await app.activate(false);
+    await app.activate(true);
+    streams.at(-1).events.snapshot({data: snapshot({id: 'first', received_at: 1, finished_at: null, requested_model_id: 'alias', model_id: 'canonical', model_resolution_observed: true, representations: []})});
+    assert.equal(intervals.size, 1);
+    assert.equal(app.modelTitle(app.detail), 'canonical');
     await app.activate(false);
 });
 
