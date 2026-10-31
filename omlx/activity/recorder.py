@@ -929,8 +929,11 @@ class ActivityRecorder:
                     final = [
                         (key, dict(value.metadata), value.version)
                         for key, value in self._pending.items()
-                        if value.pending_chunks == 0
-                        and value.saved_version != value.version
+                        if value.saved_version != value.version
+                        and (
+                            value.pending_chunks == 0
+                            or value.metadata["finished_at"] is None
+                        )
                     ]
                 for key, record, version in final:
                     store.save_metadata(record)

@@ -196,6 +196,11 @@ def test_live_observer_memory_survives_capture_controls_until_object_release(
     else:
         assert result["invocations"][0]["state"] == "observation_ended"
         assert result["invocations"][0]["last_observed_state"] == "admitted"
+        summary = recorder.reader.snapshot(request_id=capture.handle.request_id)[
+            "detail"
+        ]["invocations"][0]
+        assert summary["state"] == "observation_ended"
+        assert summary["last_observed_state"] == "admitted"
     del invocation
     gc.collect()
     assert recorder.health()["invocation_live_bytes"] == 0
@@ -248,6 +253,12 @@ def test_migration_is_transactional_preserves_old_history_and_restart_marks_obse
         db.execute("DROP TABLE invocations")
         db.execute(f"PRAGMA user_version={version}")
     assert ActivityReader(path).detail(handle.request_id)["invocations"] == []
+    assert (
+        ActivityReader(path).snapshot(request_id=handle.request_id)["detail"][
+            "invocations"
+        ]
+        == []
+    )
     connect = sqlite3.connect
 
     def reject_version(*args, **kwargs):
@@ -390,6 +401,87 @@ def test_live_snapshots_exclude_options_and_engine_identifiers(observed):
     row = snapshot["detail"]["invocations"][0]
     assert row["generated_tokens"] == 1 and row["state"] == "generating"
     assert "admission_options" not in row
+
+
+def test_summary_projection_skips_python_decode_and_preserves_scalar_semantics(
+    observed, monkeypatch
+):
+    recorder, capture = observed
+    capture.invocation("private-engine", options=(("stop", ["x" * 12000]),))
+    assert recorder.flush()
+    with sqlite3.connect(recorder.path) as db:
+        metadata = db.execute("SELECT metadata FROM invocations").fetchone()[0]
+        record = json.loads(metadata)
+        record.update(
+            {
+                "state": "generating",
+                "last_observed_state": "prefilling",
+                "input_tokens": 0,
+                "generated_tokens": None,
+                "first_token_ms": False,
+                "counter_regressed": True,
+                "admission_options": {"stop": ["x" * 12000]},
+            }
+        )
+        metadata = json.dumps(record)
+        assert 12000 < len(metadata.encode()) <= MAX_INVOCATION_BYTES
+        db.execute("UPDATE invocations SET metadata=?", (metadata,))
+
+    original_loads = json.loads
+
+    def reject_invocation_decode(value, *args, **kwargs):
+        assert value != metadata
+        return original_loads(value, *args, **kwargs)
+
+    monkeypatch.setattr("omlx.activity.store.json.loads", reject_invocation_decode)
+    snapshot = recorder.reader.snapshot(request_id=capture.handle.request_id)
+    row = snapshot["detail"]["invocations"][0]
+    assert row == {
+        "id": "1",
+        "state": "generating",
+        "last_observed_state": "prefilling",
+        "input_tokens": 0,
+        "generated_tokens": None,
+        "first_token_ms": False,
+        "counter_regressed": True,
+        "scope": "observed_scheduler_invocation_snapshot",
+    }
+    assert "admission_options" not in row
+
+
+def test_summary_falls_back_when_sqlite_json_functions_are_unavailable(
+    observed, monkeypatch
+):
+    recorder, capture = observed
+    invocation = capture.invocation("engine")
+    invocation.output(output(0, "partial"))
+    assert recorder.flush()
+    monkeypatch.setattr(
+        ActivityReader, "_json_functions_available", staticmethod(lambda _db: False)
+    )
+    row = recorder.reader.snapshot(request_id=capture.handle.request_id)["detail"][
+        "invocations"
+    ][0]
+    assert row["generated_tokens"] == 0
+    assert row["state"] == "generating"
+    assert row["id"] == "1"
+    assert "admission_options" not in row
+
+
+@pytest.mark.parametrize(
+    ("message", "unavailable"),
+    [("no such function: json_type", True), ("database is locked", False)],
+)
+def test_json_probe_falls_back_only_for_unavailable_functions(message, unavailable):
+    class Connection:
+        def execute(self, query):
+            raise sqlite3.OperationalError(message)
+
+    if unavailable:
+        assert ActivityReader._json_functions_available(Connection()) is False
+    else:
+        with pytest.raises(sqlite3.OperationalError, match=message):
+            ActivityReader._json_functions_available(Connection())
 
 
 def test_gc_can_release_observer_memory_while_same_thread_owns_ledger_lock(observed):

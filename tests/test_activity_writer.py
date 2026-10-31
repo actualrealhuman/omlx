@@ -17,9 +17,14 @@ class NotifyingEvent:
     def __init__(self):
         self.event = threading.Event()
         self.entered = threading.Event()
+        self.second_entered = threading.Event()
+        self.wait_calls = 0
 
     def wait(self, timeout):
+        self.wait_calls += 1
         self.entered.set()
+        if self.wait_calls >= 2:
+            self.second_entered.set()
         return self.event.wait(timeout)
 
     def set(self):
@@ -373,6 +378,59 @@ def test_storage_refusal_drops_group_with_gap_but_preserves_terminal_metadata(
         == recorder.health()["writer_scratch_bytes"]
         == 0
     )
+
+
+@pytest.mark.parametrize("terminal", [False, True])
+def test_metadata_freshness_does_not_wait_for_continuous_payload_drain(
+    writer, monkeypatch, terminal
+):
+    recorder, handle = writer()
+    entered, resume = threading.Event(), threading.Event()
+    append = ActivityStore.append
+
+    def block_first_append(store, *args):
+        entered.set()
+        assert resume.wait(3)
+        return append(store, *args)
+
+    monkeypatch.setattr(ActivityStore, "append", block_first_append)
+    assert recorder.append_text(handle, "raw_output", "first")
+    flush = recorder._control("flush")
+    assert entered.wait(3)
+
+    # The initial snapshot is already committed, while the first content write
+    # is blocked. Create a new phase/counter version and keep another piece of
+    # content pending during the same drain.
+    initial = recorder.reader.get(handle.request_id)
+    assert initial["state"] == "received"
+    assert recorder.append_text(handle, "raw_output", "second")
+    assert recorder.metrics(handle, counts={"observed_generated_tokens": 7})
+    assert recorder.state(handle, "generating")
+    if terminal:
+        assert recorder.finish(handle, "completed")
+
+    resume.set()
+    flush.result(3)
+    assert recorder._urgent.second_entered.wait(3)
+    assert not recorder._urgent.event.is_set()
+    with recorder._lock:
+        assert recorder._pending[handle.request_id].pending_chunks == 1
+
+    persisted = recorder.reader.get(handle.request_id)
+    if terminal:
+        # Terminal state and removal remain behind the full payload barrier.
+        assert persisted["state"] == "received"
+        assert persisted["finished_at"] is None
+        assert persisted.get("observed_generated_tokens") is None
+    else:
+        assert persisted["state"] == "generating"
+        assert persisted["finished_at"] is None
+        assert persisted["observed_generated_tokens"] == 7
+
+    assert recorder.flush(3)
+    persisted = recorder.reader.get(handle.request_id)
+    assert persisted["state"] == ("completed" if terminal else "generating")
+    assert persisted["observed_generated_tokens"] == 7
 
 
 @pytest.mark.parametrize("count", [64, 256])

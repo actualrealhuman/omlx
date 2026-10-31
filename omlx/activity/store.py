@@ -531,14 +531,87 @@ class ActivityReader:
         return result
 
     @staticmethod
+    def _json_functions_available(db):
+        """Probe JSON support on this connection; only absence selects fallback."""
+        try:
+            db.execute(
+                "SELECT json_type('{}', '$'), json_extract('{}', '$')"
+            ).fetchone()
+        except sqlite3.OperationalError as exc:
+            if "no such function: json_" in str(exc).lower():
+                return False
+            raise
+        return True
+
+    @staticmethod
+    def _invocation_summary(row, request):
+        if row["root_type"] != "object":
+            raise TypeError("Activity invocation metadata must be an object")
+        record = {"id": row["invocation_id"]}
+        for key in (
+            "state",
+            "last_observed_state",
+            "input_tokens",
+            "generated_tokens",
+            "first_token_ms",
+            "first_text_ms",
+            "counter_regressed",
+        ):
+            value_type = row[f"{key}_type"]
+            if value_type is None:
+                continue
+            value = row[key]
+            if value_type == "true":
+                value = True
+            elif value_type == "false":
+                value = False
+            elif value_type in ("array", "object"):
+                # Only an allowed summary field is decoded, never option payloads.
+                value = json.loads(value)
+            record[key] = value
+        record["scope"] = "observed_scheduler_invocation_snapshot"
+        if (
+            request["finished_at"] is not None
+            and record.get("state") not in TERMINAL_STATES
+        ):
+            record["last_observed_state"] = record.get("state")
+            record["state"] = "observation_ended"
+        return record
+
+    @staticmethod
     def _invocations(db, request_id, request, *, summary=False, invocation_id=None):
         if db.execute("PRAGMA user_version").fetchone()[0] < 3:
             return []
         result = []
-        query = (
-            "SELECT invocation_id,metadata FROM invocations WHERE request_id=? "
-            "AND length(metadata)<=? "
-        )
+        projected = summary and ActivityReader._json_functions_available(db)
+        if projected:
+            fields = (
+                "state",
+                "last_observed_state",
+                "input_tokens",
+                "generated_tokens",
+                "first_token_ms",
+                "first_text_ms",
+                "counter_regressed",
+            )
+            columns = ["invocation_id", "json_type(metadata, '$') AS root_type"]
+            for key in fields:
+                path = f"$.{key}"
+                columns.extend(
+                    (
+                        f"json_type(metadata, '{path}') AS {key}_type",
+                        f"json_extract(metadata, '{path}') AS {key}",
+                    )
+                )
+            query = (
+                "SELECT " + ",".join(columns) + " FROM invocations "
+                "WHERE request_id=? AND length(metadata)<=? "
+            )
+        else:
+            query = (
+                "SELECT invocation_id,metadata FROM invocations WHERE request_id=? "
+                "AND length(metadata)<=? "
+            )
         args = [request_id, MAX_INVOCATION_BYTES]
         if invocation_id is not None:
             query += "AND invocation_id=? "
@@ -546,6 +619,9 @@ class ActivityReader:
         query += "ORDER BY length(invocation_id),invocation_id LIMIT ?"
         args.append(1 if invocation_id is not None else MAX_INVOCATIONS)
         for row in db.execute(query, args):
+            if projected:
+                result.append(ActivityReader._invocation_summary(row, request))
+                continue
             record = json.loads(row["metadata"])
             record["id"] = row["invocation_id"]
             record["scope"] = "observed_scheduler_invocation_snapshot"

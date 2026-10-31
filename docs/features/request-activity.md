@@ -348,6 +348,13 @@ endpoint reads at most one row under the same admin authority, isolated read
 admission and no-store policy. Unknown, noncanonical or missing IDs return 404;
 retained history remains readable with capture disabled.
 
+On SQLite builds with JSON functions, live summaries project only their allowed
+fields inside the read transaction, so Python does not decode rich admission
+options for each poll. Missing values, nulls, booleans and zeros remain distinct.
+Older SQLite builds use the existing bounded decode path. Detail reads retain
+their full options. This reduces materialized metadata in that path; serving
+CPU, process memory and inference overhead still require measurement.
+
 The inspector defaults to Entire request. Its Generation selector lists up to 256
 IDs from compact snapshots and retained content indexes, including content whose
 rich snapshot was dropped. Selecting a generation recreates the bounded reader
@@ -418,11 +425,16 @@ unchanged.
 
 This coalesces payloads before existing storage admission, rather than placing
 pruning, vacuum or checkpoint calls inside a long outer transaction. Existing
-physical/page-budget and terminal metadata rules still apply. Twenty deterministic
+physical/page-budget and terminal metadata rules still apply. Changed active
+phase/count metadata can commit even when another payload is queued. Terminal
+metadata and capture removal still wait for the request's queued payloads to
+drain; this does not promise a deadline during a blocked storage operation.
+Twenty-two deterministic
 writer checks cover interleaved channel/request/invocation isolation, byte/item/
 type limits, semantic barriers, no-memory fallback, urgent controls/shutdown,
 in-flight clear, scratch-aware admission, prepared-capacity changes, descriptor
-size/weak-reference lifetime and failed-writer reference release.
+size/weak-reference lifetime, failed-writer reference release and active metadata
+freshness with its paired terminal drain barrier.
 A refused combined write records a gap for that group; gap counts do not count
 producer pieces. A small burst fixture reduces ten pieces to two actual writes with identical
 retained bytes. This establishes fewer writes in that fixture, not measured
