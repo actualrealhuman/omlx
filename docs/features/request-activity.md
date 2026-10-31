@@ -680,8 +680,14 @@ of model/raw/JSON evidence modes. Rendered-browser behavior remains unqualified.
 
 ## Limitations and remaining work
 
+- Record actual scheduler pause, resume and requeue annotations with known
+  reasons on the existing invocation. These accepted lifecycle details are
+  still missing; a stalled phase must not be treated as observed preemption.
+- Implement bounded sequenced live-event replay and cursor invalidation.
+  Current delivery explicitly resynchronizes with committed snapshots; the
+  accepted replay contract still needs implementation and race/resource checks.
 - Qualify invocation selection/options in a real browser and detailed snapshots
-  under load. Final backend options, richer cache/paused-state evidence
+  under load. Final backend options and richer cache evidence
   and all backend/endpoint qualification remain. Backend
   resolution/evidence labels are implemented; they are not qualification badges. Current
   generation hooks are covered by mock-model checks, not real-model validation.
