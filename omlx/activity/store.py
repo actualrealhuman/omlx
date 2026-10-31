@@ -531,15 +531,21 @@ class ActivityReader:
         return result
 
     @staticmethod
-    def _invocations(db, request_id, request, *, summary=False):
+    def _invocations(db, request_id, request, *, summary=False, invocation_id=None):
         if db.execute("PRAGMA user_version").fetchone()[0] < 3:
             return []
         result = []
-        for row in db.execute(
+        query = (
             "SELECT invocation_id,metadata FROM invocations WHERE request_id=? "
-            "AND length(metadata)<=? ORDER BY length(invocation_id),invocation_id LIMIT ?",
-            (request_id, MAX_INVOCATION_BYTES, MAX_INVOCATIONS),
-        ):
+            "AND length(metadata)<=? "
+        )
+        args = [request_id, MAX_INVOCATION_BYTES]
+        if invocation_id is not None:
+            query += "AND invocation_id=? "
+            args.append(invocation_id)
+        query += "ORDER BY length(invocation_id),invocation_id LIMIT ?"
+        args.append(1 if invocation_id is not None else MAX_INVOCATIONS)
+        for row in db.execute(query, args):
             record = json.loads(row["metadata"])
             record["id"] = row["invocation_id"]
             record["scope"] = "observed_scheduler_invocation_snapshot"
@@ -609,6 +615,32 @@ class ActivityReader:
                 "size": row["size"],
                 "data": row["data"],
             }
+        finally:
+            db.close()
+
+    def invocation(self, request_id, invocation_id):
+        if (
+            type(invocation_id) is not str
+            or not invocation_id.isascii()
+            or not invocation_id.isdecimal()
+            or len(invocation_id) > 3
+            or not 1 <= int(invocation_id) <= MAX_INVOCATIONS
+            or str(int(invocation_id)) != invocation_id
+            or not self.path.exists()
+        ):
+            return None
+        db = self._connect()
+        try:
+            db.execute("BEGIN")
+            row = db.execute(
+                "SELECT * FROM requests WHERE id=?", (request_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            records = self._invocations(
+                db, request_id, self._record(row), invocation_id=invocation_id
+            )
+            return records[0] if records else None
         finally:
             db.close()
 

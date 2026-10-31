@@ -5,7 +5,8 @@
     const API = '/admin/api/activity';
     const roles = ['system', 'developer', 'user', 'assistant', 'reasoning', 'output_error', 'output_refusal', 'choice', 'block', 'item', 'tool', 'tool_calls', 'tools', 'options', 'submitted', 'unparsed', 'model_input', 'raw_output', 'api_response', 'model_tokens', 'events'];
     function activityInspector() {
-        let stream, worker, resize, controller, retry, searchTimer, frame;
+        let stream, worker, resize, controller, retry, searchTimer, frame, invocationController;
+        let invocationGeneration = 0;
         let generation = 0, activation = 0, loadedVersion = '', stopped = true, lastFacets = 0;
         const positions = new Map();
         const label = key => root.t(`activity.${key}`);
@@ -20,6 +21,7 @@
             attachmentsOpen: false, previewId: '', previewFailed: false,
             projectionState: 'waiting', projectionIncomplete: false,
             coverageOpen: false,
+            invocationId: '', invocationOpen: false, invocationDetail: null, invocationBusy: false, invocationError: '', allPosition: null,
             configVersion: '', controlBusy: false, pendingAction: '', pendingDeleteId: '',
             boot() {
                 this._visibility = () => this.activate(this.mainTab === 'activity' && !document.hidden);
@@ -42,10 +44,12 @@
                 if (!value) {
                     this.pendingAction = '';
                     this.attachmentsOpen = false; this.previewId = '';
+                    this.resetInvocationDetail();
+                    this.exporting = false;
                     stopped = true; generation++; activation++; stream?.close(); stream = null;
                     worker?.terminate(); worker = null; controller?.abort();
                     clearTimeout(retry); clearTimeout(searchTimer); cancelAnimationFrame(frame);
-                    if (this.selected) positions.set(this.selected, {row: this.row, mode: this.mode, follow: this.follow});
+                    if (this.selected) positions.set(this.selected, {row: this.row, mode: this.mode, follow: this.follow, invocationId: this.invocationId, allPosition: this.allPosition});
                     return;
                 }
                 if (!stopped) return;
@@ -61,8 +65,8 @@
                     if (!stopped && token === activation && !stream) this.connect();
                 } catch (error) { if (!stopped && token === activation && error.name !== 'AbortError') this.error = error.message; }
             },
-            async read(path) {
-                const response = await fetch(API + path, {cache: 'no-store', credentials: 'same-origin', signal: controller?.signal});
+            async read(path, signal = controller?.signal) {
+                const response = await fetch(API + path, {cache: 'no-store', credentials: 'same-origin', signal});
                 if (!response.ok) throw new Error(response.status === 401 ? label('sign_in') : `${label('read_failed')} (${response.status})`);
                 return response.json();
             },
@@ -141,7 +145,7 @@
                             this.missing = !snapshot.detail;
                             this.detail = snapshot.detail;
                             if (snapshot.detail && snapshot.detail.id === this.selected) this.inspect(snapshot.detail);
-                            else if (!snapshot.detail) { this.attachmentsOpen = false; this.previewId = ''; generation++; worker?.terminate(); worker = null; loadedVersion = ''; this.rows = []; this.outline = []; this.current = null; this.total = 0; }
+                            else if (!snapshot.detail) { this.resetInvocationDetail(); this.attachmentsOpen = false; this.previewId = ''; generation++; worker?.terminate(); worker = null; loadedVersion = ''; this.rows = []; this.outline = []; this.current = null; this.total = 0; }
                         }
                         this.loadFacets().catch(() => {});
                     } catch (_) { this.error = label('invalid_snapshot'); }
@@ -150,7 +154,7 @@
                 for (const type of ['reconnect', 'unavailable', 'authorization_lost']) current.addEventListener(type, () => {
                     if (stream !== current) return;
                     current.close(); this.connection = 'disconnected';
-                    if (type === 'authorization_lost') { this.error = label('sign_in'); this.attachmentsOpen = false; this.previewId = ''; }
+                    if (type === 'authorization_lost') { this.resetInvocationDetail(); this.error = label('sign_in'); this.attachmentsOpen = false; this.previewId = ''; }
                     else { if (type === 'unavailable') this.error = label('unavailable'); retry = setTimeout(() => this.connect(), 3000); }
                 });
                 current.onerror = () => { if (stream === current) this.connection = 'reconnecting'; };
@@ -164,19 +168,21 @@
             },
             select(id, push = true) {
                 if (this.selected) {
-                    positions.set(this.selected, {row: this.row, mode: this.mode, follow: this.follow});
+                    positions.set(this.selected, {row: this.row, mode: this.mode, follow: this.follow, invocationId: this.invocationId, allPosition: this.allPosition});
                     if (positions.size > 20) positions.delete(positions.keys().next().value);
                 }
                 generation++; worker?.terminate(); worker = null; loadedVersion = '';
                 this.selected = id; this.detail = null; this.missing = false; this.error = '';
                 this.attachmentsOpen = false; this.previewId = ''; this.previewFailed = false;
                 this.rows = []; this.outline = []; this.total = 0; this.loading = !!id;
-                this.current = null; this.viewReady = false; this.outputBytes = 0;
+                this.current = null; this.viewReady = false; this.outputBytes = 0; this.exporting = false;
                 this.projectionState = 'waiting';
                 this.projectionIncomplete = false;
                 this.coverageOpen = false;
+                this.resetInvocationDetail();
                 this.searchQuery = ''; this.searchResult = {count: 0, match: 0, marks: []}; this.newOutput = false;
                 const saved = positions.get(id);
+                this.invocationId = saved?.invocationId || ''; this.allPosition = saved?.allPosition || null;
                 this.row = saved?.row || 0; this.mode = saved?.mode || 'submitted'; this.follow = saved?.follow ?? false;
                 if (push) {
                     const url = new URL(window.location.href);
@@ -215,6 +221,7 @@
                         this.outlineTruncated = data.outlineTruncated; this.searchResult = data.search;
                         this.row = data.row;
                         this.$nextTick(() => {
+                            if (token !== generation || stopped) return;
                             const el = this.$refs.contextViewport, top = this.scrollPixels(data.row);
                             if (Math.abs(el.scrollTop - top) > ROW_HEIGHT) el.scrollTop = top;
                         });
@@ -225,7 +232,62 @@
                 }
                 if (loadedVersion === detail.version) return;
                 loadedVersion = detail.version;
-                worker.postMessage({type: 'sync', detail, labels: {...Object.fromEntries(roles.map(role => [role, label(`role.${role}`)])), attachment_not_retained: label('attachment_not_retained'), attachment_reference: label('attachment_reference')}});
+                const view = this.invocationId ? {...detail, representations: detail.representations.filter(item => item.invocation_id === this.invocationId)} : detail;
+                worker.postMessage({type: 'sync', detail: view, labels: {...Object.fromEntries(roles.map(role => [role, label(`role.${role}`)])), attachment_not_retained: label('attachment_not_retained'), attachment_reference: label('attachment_reference')}});
+            },
+            resetInvocationDetail() {
+                invocationGeneration++; invocationController?.abort(); invocationController = null;
+                this.invocationOpen = false; this.invocationDetail = null; this.invocationBusy = false; this.invocationError = '';
+            },
+            invocationChoices() {
+                const ids = new Set([...(this.detail?.invocations || []).map(item => item.id),
+                    ...(this.detail?.representations || []).map(item => item.invocation_id), this.invocationId]);
+                return [...ids].filter(id => typeof id === 'string' && /^[1-9]\d{0,2}$/.test(id) && Number(id) <= 256).sort((a, b) => Number(a) - Number(b)).slice(0, 256);
+            },
+            invocationSummary() {
+                return {...this.invocationDetail, ...(this.detail?.invocations || []).find(item => item.id === this.invocationId)};
+            },
+            invocationState(id = this.invocationId) {
+                const state = (this.detail?.invocations || []).find(item => item.id === id)?.state
+                    || (this.invocationDetail?.id === id ? this.invocationDetail.state : null);
+                return ['admitted', 'observation_ended'].includes(state) ? label(`invocation.${state}`)
+                    : ['received', 'loading', 'preparing', 'queued', 'prefilling', 'generating', 'completed', 'rejected', 'cancelled', 'error', 'interrupted', 'capture_stopped'].includes(state) ? this.stateLabel(state) : label('invocation.unknown');
+            },
+            chooseInvocation(id) {
+                if (typeof id !== 'string' || (id && (!/^[1-9]\d{0,2}$/.test(id) || Number(id) > 256))) return;
+                if (id === this.invocationId) return;
+                if (!this.invocationId) this.allPosition = {row: this.row, mode: this.mode, follow: this.follow};
+                this.resetInvocationDetail(); this.invocationId = id;
+                const position = !id && this.allPosition;
+                this.row = position?.row || 0; this.mode = position?.mode || 'model'; this.follow = position?.follow ?? false;
+                if (!id) this.allPosition = null;
+                clearTimeout(searchTimer); this.searchQuery = ''; this.searchResult = {count: 0, match: 0, marks: []};
+                generation++; worker?.terminate(); worker = null; loadedVersion = '';
+                this.rows = []; this.outline = []; this.total = 0; this.current = null; this.viewReady = false; this.outputBytes = 0;
+                this.loading = !!this.detail; this.newOutput = false; this.exporting = false;
+                if (this.detail) this.inspect(this.detail);
+            },
+            async toggleInvocationOptions() {
+                if (this.invocationOpen) { this.resetInvocationDetail(); return; }
+                this.invocationOpen = true;
+                await this.loadInvocation();
+            },
+            async loadInvocation() {
+                if (!this.invocationId || !this.selected || stopped || !this.invocationOpen || this.invocationBusy) return;
+                const token = ++invocationGeneration, request = this.selected, id = this.invocationId;
+                invocationController?.abort(); invocationController = new AbortController();
+                this.invocationBusy = true; this.invocationError = ''; this.invocationDetail = null;
+                try {
+                    const value = await this.read(`/requests/${encodeURIComponent(request)}/invocations/${encodeURIComponent(id)}`, invocationController.signal);
+                    if (token !== invocationGeneration || stopped || request !== this.selected || id !== this.invocationId) return;
+                    if (value?.id !== id) throw new Error(label('invocation.unavailable'));
+                    this.invocationDetail = value;
+                } catch (error) {
+                    if (token === invocationGeneration && !stopped && error.name !== 'AbortError') this.invocationError = error.message;
+                } finally { if (token === invocationGeneration) this.invocationBusy = false; }
+            },
+            invocationOptions() {
+                return this.invocationDetail?.admission_options ? JSON.stringify(this.invocationDetail.admission_options, null, 2) : label('invocation.unavailable');
             },
             toggleAttachments() {
                 this.attachmentsOpen = !this.attachmentsOpen; this.previewFailed = false;
@@ -285,7 +347,12 @@
                 return this.total <= 200000 ? row * ROW_HEIGHT : row / Math.max(1, this.total - this.visibleRows) * (200000 - this.visibleRows) * ROW_HEIGHT;
             },
             lineTop(line) { return this.scrollPixels(this.row) + (line.row - this.row) * ROW_HEIGHT; },
-            changeMode() { this.row = 0; this.follow = false; worker?.postMessage({type: 'mode', mode: this.mode}); },
+            changeMode() {
+                if (this.invocationId && !['model', 'raw_output', 'model_tokens'].includes(this.mode)) {
+                    const mode = this.mode; this.chooseInvocation(''); this.mode = mode;
+                }
+                this.row = 0; this.follow = false; worker?.postMessage({type: 'mode', mode: this.mode});
+            },
             jump(row) { this.follow = false; worker?.postMessage({type: 'jump', row}); },
             navigate(direction) {
                 this.follow = false; worker?.postMessage({type: 'navigate', direction});
@@ -319,14 +386,19 @@
             },
             exportView(action = 'download') { this.exporting = true; worker?.postMessage({type: 'export', action}); },
             async saveExport(data) {
+                const token = generation;
                 if (data.action === 'copy') {
                     try {
-                        await navigator.clipboard.writeText(await data.blob.text());
-                        this.exporting = false; return;
+                        const text = await data.blob.text();
+                        if (token !== generation || stopped) return;
+                        await navigator.clipboard.writeText(text);
+                        if (token === generation) this.exporting = false;
+                        return;
                     } catch (_) { /* A download is the fallback for denied clipboard access. */ }
                 }
+                if (token !== generation || stopped) return;
                 const url = URL.createObjectURL(data.blob), link = document.createElement('a');
-                link.href = url; link.download = `activity-${this.selected}.txt`; link.click();
+                link.href = url; link.download = `activity-${this.selected}${this.invocationId ? '-generation-' + this.invocationId : ''}.txt`; link.click();
                 setTimeout(() => URL.revokeObjectURL(url), 1000); this.exporting = false;
             },
             label, stateLabel(value) { return label(`state.${value}`); },

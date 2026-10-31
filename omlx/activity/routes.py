@@ -540,6 +540,19 @@ def create_activity_router(
         response.headers.update(_NO_STORE)
         return result
 
+    @router.get("/requests/{request_id}/invocations/{invocation_id}")
+    async def invocation(request_id: str, invocation_id: str, response: Response):
+        if len(request_id) > 128 or len(invocation_id) > 3:
+            raise HTTPException(404, "Activity invocation not retained")
+        reader = service.reader()
+        result = await service.read(
+            lambda: reader.invocation(request_id, invocation_id)
+        )
+        if result is None:
+            raise HTTPException(404, "Activity invocation not retained")
+        response.headers.update(_NO_STORE)
+        return result
+
     @router.get("/requests/{request_id}/content")
     async def content(
         request_id: str,

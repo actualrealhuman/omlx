@@ -237,3 +237,151 @@ test('cleared or expired selections invalidate already queued worker responses',
     assert.equal(app.rows.length, 0);
     await app.activate(false);
 });
+
+test('invocation selection isolates worker evidence and restores the entire-request position', async () => {
+    const {app, streams, workers} = harness();
+    await app.activate(true);
+    const detail = {id: 'first', version: 'v1', invocations: [{id: '1', state: 'completed'}, {id: '2', state: 'generating'}], representations: [
+        {invocation_id: '0', representation: 'submitted'}, {invocation_id: '0', representation: 'api_response'},
+        {invocation_id: '1', representation: 'raw_output'}, {invocation_id: '2', representation: 'model_input'}, {invocation_id: '2', representation: 'raw_output'},
+    ]};
+    streams.at(-1).events.snapshot({data: JSON.stringify({active: [], recent: [], detail, health: {}})});
+    app.row = 155; app.follow = false;
+    const original = workers.at(-1);
+    app.chooseInvocation('2');
+    assert.equal(original.terminated, true);
+    assert.equal(app.mode, 'model');
+    assert.equal(app.invocationId, '2');
+    const sync = workers.at(-1).messages.find(message => message.type === 'sync');
+    assert.deepEqual(Array.from(sync.detail.representations, item => item.invocation_id), ['2', '2']);
+    assert.equal(app.invocationState(), 'activity.state.generating');
+    // Feed the controller's exact filtered payload through the real reader worker.
+    const workerOutputs = [], reads = [];
+    const payloads = {model_input: 'prepared-two', raw_output: 'answer-two'};
+    sync.detail.representations.forEach(item => { item.bytes = Buffer.byteLength(payloads[item.representation]); });
+    const reader = {ActivityDocumentTools: require('../omlx_web/static/js/activity_document.js'),
+        ActivityOutputTools: require('../omlx_web/static/js/activity_output.js'), importScripts() {},
+        TextDecoder, URLSearchParams, Blob, self: {}, postMessage: value => workerOutputs.push(value),
+        fetch: async url => {
+            const params = new URL(url, 'http://test.invalid').searchParams;
+            reads.push(params.get('invocation_id'));
+            const data = Uint8Array.from(Buffer.from(payloads[params.get('representation')]));
+            return {ok: true, arrayBuffer: async () => data.buffer};
+        },
+    };
+    vm.createContext(reader);
+    vm.runInContext(fs.readFileSync(path.join(js, 'activity_worker.js'), 'utf8'), reader);
+    reader.self.onmessage({data: {type: 'mode', mode: 'model'}}); workerOutputs.length = 0;
+    reader.self.onmessage({data: sync});
+    for (let attempt = 0; attempt < 100 && !workerOutputs.some(item => item.type === 'render' && !item.loading); attempt++) await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(reads, ['2', '2']);
+    reader.self.onmessage({data: {type: 'export'}});
+    const exported = await workerOutputs.at(-1).blob.text();
+    assert.ok(exported.includes('prepared-two') && exported.includes('answer-two'));
+    assert.ok(!exported.includes('submitted') && !exported.includes('api_response'));
+    app.chooseInvocation('1');
+    assert.equal(app.invocationState(), 'activity.state.completed');
+    app.chooseInvocation('');
+    assert.equal(app.row, 155); assert.equal(app.mode, 'submitted'); assert.equal(app.follow, false);
+    assert.equal(workers.at(-1).messages.find(message => message.type === 'sync').detail.representations.length, 5);
+    app.chooseInvocation('2');
+    await app.activate(false);
+    await app.activate(true);
+    assert.equal(app.invocationId, '2');
+    assert.equal(app.invocationOpen, false);
+    app.mode = 'api_response'; app.changeMode();
+    assert.equal(app.invocationId, '');
+    assert.equal(app.mode, 'api_response');
+    await app.activate(false);
+});
+
+test('invocation options load one bounded admin read only on expansion and ignore stale selections', async () => {
+    const {app, streams, context} = harness();
+    await app.activate(true);
+    streams.at(-1).events.snapshot({data: JSON.stringify({active: [], recent: [], health: {}, detail: {
+        id: 'first', version: '1', representations: [], invocations: [{id: '1'}, {id: '2'}],
+    }})});
+    const pending = [];
+    context.fetch = (url, options) => new Promise(resolve => pending.push({url, options, resolve}));
+    app.chooseInvocation('1');
+    assert.equal(pending.length, 0);
+    const first = app.toggleInvocationOptions();
+    assert.ok(pending[0].url.endsWith('/requests/first/invocations/1'));
+    app.chooseInvocation('2');
+    assert.equal(pending[0].options.signal.aborted, true);
+    const second = app.toggleInvocationOptions();
+    pending[0].resolve({ok: true, json: async () => ({id: '1', admission_options: {seed: 111}})});
+    await first;
+    assert.equal(app.invocationDetail, null);
+    pending[1].resolve({ok: true, json: async () => ({id: '2', admission_options: {seed: 222}})});
+    await second;
+    assert.equal(app.invocationDetail.id, '2');
+    assert.ok(app.invocationOptions().includes('222'));
+    await app.toggleInvocationOptions();
+    assert.equal(app.invocationDetail, null);
+    const third = app.toggleInvocationOptions();
+    await app.activate(false);
+    assert.equal(pending[2].options.signal.aborted, true);
+    pending[2].resolve({ok: true, json: async () => ({id: '2', admission_options: {seed: 333}})});
+    await third;
+    assert.equal(app.invocationDetail, null);
+});
+
+test('invocation read failures retry explicitly and clear on authorization loss or removed history', async () => {
+    const {app, streams, context} = harness();
+    await app.activate(true);
+    const snapshot = detail => ({data: JSON.stringify({active: [], recent: [], health: {}, detail})});
+    streams.at(-1).events.snapshot(snapshot({id: 'first', version: '1', representations: [], invocations: [{id: '1', generated_tokens: 0}]}));
+    app.chooseInvocation('1');
+    context.fetch = async () => ({ok: false, status: 404});
+    await app.toggleInvocationOptions();
+    assert.ok(app.invocationError.includes('404'));
+    context.fetch = async () => ({ok: true, json: async () => ({id: '1', admission_options: {seed: 42}})});
+    await app.loadInvocation();
+    assert.equal(app.invocationError, '');
+    assert.equal(app.invocationSummary().generated_tokens, 0);
+    streams.at(-1).events.authorization_lost();
+    assert.equal(app.invocationDetail, null); assert.equal(app.invocationOpen, false);
+    app.connect();
+    streams.at(-1).events.snapshot(snapshot(null));
+    assert.equal(app.invocationDetail, null); assert.equal(app.missing, true);
+    await app.activate(false);
+});
+
+test('invocation choices include retained evidence with missing summaries and reject invalid IDs', () => {
+    const {app} = harness();
+    app.detail = {invocations: [{id: '2'}, {id: '<script>'}, {id: '257'}], representations: [
+        {invocation_id: '0'}, {invocation_id: '1'}, {invocation_id: '2'}, {invocation_id: '01'},
+    ]};
+    assert.deepEqual(Array.from(app.invocationChoices()), ['1', '2']);
+    assert.equal(app.invocationState('1'), 'activity.invocation.unknown');
+    app.chooseInvocation('999');
+    assert.equal(app.invocationId, '');
+});
+
+test('switching invocation invalidates a deferred clipboard export', async () => {
+    const {app, streams, context} = harness();
+    await app.activate(true);
+    streams.at(-1).events.snapshot({data: JSON.stringify({active: [], recent: [], health: {}, detail: {id: 'first', version: '1', representations: [], invocations: [{id: '1'}, {id: '2'}]}})});
+    const copied = []; let resolve;
+    context.navigator = {clipboard: {writeText: async text => copied.push(text)}};
+    app.chooseInvocation('1'); app.exporting = true;
+    const pending = app.saveExport({action: 'copy', blob: {text: () => new Promise(done => {resolve = done;})}});
+    app.chooseInvocation('2');
+    resolve('old generation'); await pending;
+    assert.deepEqual(copied, []);
+    assert.equal(app.exporting, false);
+    await app.activate(false);
+});
+
+test('deferred scroll restoration from an older worker cannot move the new invocation viewport', async () => {
+    const {app, streams, workers} = harness();
+    await app.activate(true);
+    streams.at(-1).events.snapshot({data: JSON.stringify({active: [], recent: [], health: {}, detail: {id: 'first', version: '1', representations: [], invocations: [{id: '1'}]}})});
+    const callbacks = []; app.$nextTick = callback => callbacks.push(callback);
+    workers.at(-1).onmessage({data: {type: 'render', rows: [], outline: [], total: 1000, row: 200, loading: false, search: {count: 0}}});
+    app.chooseInvocation('1');
+    callbacks.forEach(callback => callback());
+    assert.equal(app.$refs.contextViewport.scrollTop, 0);
+    await app.activate(false);
+});

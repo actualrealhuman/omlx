@@ -140,6 +140,7 @@ inference keys do not grant access:
 | `/facets` | Bounded model and historical credential-label choices |
 | `/requests/{id}` | Metadata, bounded invocation details/options, retained representation indexes and version |
 | `/requests/{id}/content` | Bounded raw byte ranges for a representation/invocation |
+| `/requests/{id}/invocations/{invocation_id}` | One bounded invocation snapshot and admission options; no context BLOB reads |
 | `/requests/{id}/attachments/{attachment_id}` | Lazy, bounded-streamed original PNG/JPEG/WebP bytes |
 | `/events` | Committed metadata snapshots with selected-request indexes and compact invocation summaries |
 
@@ -333,9 +334,39 @@ SSE includes only compact phase/count/timing summaries and declares
 `invocation_options_included:false`; full detail declares it true. Engine IDs,
 stop strings and option payloads are excluded from SSE/list delivery. Detail reads
 use the same short transaction as request/index metadata, without reading content
-BLOBs, and have a fixed 256-row/16 KiB-per-row ceiling. The browser invocation
-selector/options presentation remains follow-up work; structured API metadata is
-implemented now.
+BLOBs, and have a fixed 256-row/16 KiB-per-row ceiling. A single-invocation
+endpoint reads at most one row under the same admin authority, isolated read
+admission and no-store policy. Unknown, noncanonical or missing IDs return 404;
+retained history remains readable with capture disabled.
+
+The inspector defaults to Entire request. Its Generation selector lists up to 256
+IDs from compact snapshots and retained content indexes, including content whose
+rich snapshot was dropped. Selecting a generation recreates the bounded reader
+worker with only that invocation's prepared input, producer output and token-ID
+indexes, leaving the request-wide counters above unchanged. Search, navigation,
+copy and export then cover that filtered evidence. Submitted input and API wire
+are request-wide; choosing those views returns to Entire request. Returning
+explicitly restores the previous full-request position/mode/follow preference.
+Session reading positions retain the invocation selection. Downloads include
+the generation ID in their filename.
+
+Admission options load only when expanded, through one single-invocation read;
+there is no options polling or retained multi-invocation options cache. One
+bounded detail stays mounted, with explicit missing/error/retry and omitted-field
+labels and inert text rendering. Changing request/generation, collapsing, hiding,
+authorization loss or removal invalidates/aborts that detail read. Live scalar
+summaries take precedence over loaded detail for counts/phases. Deferred exports
+and scroll restoration are fenced when selection changes. Expanded panels scroll
+within bounded heights, while a minimum context height and inspector overflow
+keep content reachable on short screens; actual browser layout remains unqualified.
+
+The controller checks selection isolation, restored reading position, lazy reads,
+stale results, hidden/auth/deletion fences and invalid IDs; the exact filtered
+payload is also exercised through the actual reader worker and exported. Real
+route checks reject unauthenticated/inference-only keys, deny context/attachment
+table reads during the single-row query, and cover disabled/deleted history and
+malformed IDs. Template expressions/rendering pass; browser visual/runtime review
+is still required.
 
 ## Backend and evidence coverage
 
@@ -498,8 +529,8 @@ of model/raw/JSON evidence modes. Rendered-browser behavior remains unqualified.
 
 ## Limitations and remaining work
 
-- Add inspector invocation selection/options presentation and qualify detailed
-  snapshots under load. Final backend options, richer cache/paused-state evidence
+- Qualify invocation selection/options in a real browser and detailed snapshots
+  under load. Final backend options, richer cache/paused-state evidence
   and all backend/endpoint qualification remain. Backend
   resolution/evidence labels are implemented; they are not qualification badges. Current
   generation hooks are covered by mock-model checks, not real-model validation.
@@ -507,7 +538,7 @@ of model/raw/JSON evidence modes. Rendered-browser behavior remains unqualified.
   Engines with their own native parsers may already have transformed it;
   universal pre-parser raw generation is not yet qualified.
 - Qualify the initial inspector, navigation, dashboard links and live controls
-  in an actual browser. Assess image support without delaying the core text MVP
+  in an actual browser. Qualify original-image previews and browser pixel budgets
   unnecessarily; current media placeholders are inert.
 - Qualify physical-budget behavior under disk-full conditions, pinned SQLite
   readers, reclamation/migration and very large histories. Current page limits

@@ -17,7 +17,7 @@ from starlette.requests import ClientDisconnect
 
 from omlx.activity import ActivityRecorder, ActivitySettings
 from omlx.activity.routes import create_activity_router
-from omlx.activity.runtime import configure_recorder
+from omlx.activity.runtime import RequestCapture, configure_recorder
 from omlx.admin import auth
 from omlx.settings import GlobalSettings, SubKeyEntry
 
@@ -100,6 +100,7 @@ class ActivityRouteTests(unittest.TestCase):
             "/facets",
             f"/requests/{handle.request_id}",
             f"/requests/{handle.request_id}/content?representation=submitted",
+            f"/requests/{handle.request_id}/invocations/1",
             "/events",
         ):
             for headers in ({}, {"authorization": "Bearer synthetic-inference-only"}):
@@ -377,6 +378,63 @@ class ActivityRouteTests(unittest.TestCase):
             self.assertEqual(self.service._reads, 0)
 
         asyncio.run(check())
+
+    def test_single_invocation_read_is_bounded_metadata_only_and_no_store(self):
+        handle = self.request(terminal=False)
+        capture = RequestCapture(self.recorder, handle)
+        one = capture.invocation("engine-one", options=(("seed", 123),))
+        two = capture.invocation("engine-two", options=(("seed", 456),))
+        one.end("completed", finish_reason="stop")
+        two.end("completed", finish_reason="length")
+        capture.api_done("completed")
+        self.assertTrue(self.recorder.flush())
+        reader = self.recorder.reader
+        connect = type(reader)._connect
+
+        def deny_content(instance):
+            db = connect(instance)
+            db.set_authorizer(
+                lambda action, first, *_: (
+                    sqlite3.SQLITE_DENY
+                    if action == sqlite3.SQLITE_READ
+                    and first in {"content_chunks", "attachments"}
+                    else sqlite3.SQLITE_OK
+                )
+            )
+            return db
+
+        with patch.object(type(reader), "_connect", deny_content):
+            response = self.get(f"/requests/{handle.request_id}/invocations/1")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        self.assertEqual(response.headers["x-content-type-options"], "nosniff")
+        row = response.json()
+        self.assertEqual(row["id"], "1")
+        self.assertEqual(row["admission_options"], {"seed": 123})
+        self.assertEqual(row["finish_reason"], "stop")
+        self.assertNotIn("engine-two", json.dumps(row))
+        self.assertLess(len(response.content), 16384)
+
+    def test_single_invocation_read_handles_disabled_history_invalid_ids_and_deletion(
+        self,
+    ):
+        from dataclasses import replace
+
+        handle = self.request(terminal=False)
+        capture = RequestCapture(self.recorder, handle)
+        observation = capture.invocation("engine")
+        observation.end("completed")
+        capture.api_done("completed")
+        self.assertTrue(self.recorder.flush())
+        prefix = f"/requests/{handle.request_id}/invocations/"
+        self.recorder.update_settings(
+            replace(self.recorder.settings, enabled=False)
+        ).result(3)
+        self.assertEqual(self.get(prefix + "1").status_code, 200)
+        for value in ("0", "001", "257", "-1", "unknown", "2", "1' OR 1=1"):
+            self.assertEqual(self.get(prefix + value).status_code, 404)
+        self.recorder.delete(handle.request_id).result(3)
+        self.assertEqual(self.get(prefix + "1").status_code, 404)
 
 
 if __name__ == "__main__":

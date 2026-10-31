@@ -2444,5 +2444,18 @@
   "activity.coverage.state.retained": "Retained",
   "activity.coverage.state.observed_not_retained": "Observed, not retained",
   "activity.coverage.state.not_observed": "No observation recorded",
-  "activity.coverage_hint": "These states describe recorded evidence. Resolving a backend does not prove its execution path was observed. Retained content can have gaps; unrecorded evidence is unknown. Prepared IDs do not reconstruct media embeddings or guarantee the final attended context."
+  "activity.coverage_hint": "These states describe recorded evidence. Resolving a backend does not prove its execution path was observed. Retained content can have gaps; unrecorded evidence is unknown. Prepared IDs do not reconstruct media embeddings or guarantee the final attended context.",
+  "activity.invocation.select": "Generation",
+  "activity.invocation.all": "Entire request",
+  "activity.invocation.options": "Admission options",
+  "activity.invocation.phase": "Observed phase",
+  "activity.invocation.admitted": "Admitted",
+  "activity.invocation.observation_ended": "Observation ended",
+  "activity.invocation.unknown": "Not recorded",
+  "activity.invocation.scope_hint": "Showing this generation’s prepared input and producer output. Request totals above cover all observed generations. Choose Entire request for submitted input and API output.",
+  "activity.invocation.options_hint": "Parameters recorded when this generation entered the local scheduler. Later backend settings may differ. Details can be missing or incomplete.",
+  "activity.invocation.retry": "Retry detail read",
+  "activity.invocation.engine_id": "Engine request ID",
+  "activity.invocation.omitted": "Omitted or truncated option fields",
+  "activity.invocation.unavailable": "Admission options are unavailable."
 }
