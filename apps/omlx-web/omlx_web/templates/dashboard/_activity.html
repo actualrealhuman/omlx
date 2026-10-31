@@ -76,7 +76,7 @@
                         <button class="segmented__item" :class="mode === 'model' ? 'segmented__item--active' : ''" :aria-pressed="mode === 'model'" @click="mode = 'model'; changeMode()">{{ t('activity.model_view') }}</button>
                     </div>
                     <select aria-label="{{ t('activity.evidence') }}" :value="['submitted', 'model'].includes(mode) ? '' : mode" @change="if ($event.target.value) { mode = $event.target.value; changeMode(); }">
-                        <option value="">{{ t('activity.evidence') }}</option><option value="submitted_json">{{ t('activity.submitted_json') }}</option><option value="model_tokens">{{ t('activity.role.model_tokens') }}</option><option value="api_response">{{ t('activity.role.api_response') }}</option><option value="events">{{ t('activity.role.events') }}</option>
+                        <option value="">{{ t('activity.evidence') }}</option><option value="parsed_output">{{ t('activity.parsed_output') }}</option><option value="submitted_json">{{ t('activity.submitted_json') }}</option><option value="model_tokens">{{ t('activity.role.model_tokens') }}</option><option value="raw_output">{{ t('activity.role.raw_output') }}</option><option value="api_response">{{ t('activity.role.api_response') }}</option><option value="events">{{ t('activity.role.events') }}</option>
                     </select>
                     <button @click="confirmRemoval('delete')" :disabled="controlBusy">{{ t('activity.delete_request') }}</button>
                     <button x-show="detail?.attachments?.length" @click="toggleAttachments()" :aria-expanded="attachmentsOpen" aria-controls="activity-images" x-text="label('attachments') + ' (' + (detail?.attachments?.length || 0) + ')'"></button>
@@ -84,6 +84,7 @@
                     <button @click="exportView()" :disabled="exporting || loading || !total" x-text="label(exporting ? 'exporting' : 'download')"></button>
                 </div>
                 <p class="activity-fidelity" x-text="label(mode === 'model' ? 'model_fidelity' : mode === 'submitted' ? 'submitted_fidelity' : 'evidence_fidelity')"></p>
+                <p x-show="['submitted', 'parsed_output'].includes(mode)" class="activity-fidelity"><span x-text="label('projection.' + projectionState)"></span> · {{ t('activity.projection_fidelity') }}</p>
                 <p x-show="detail?.submitted_normalized" class="activity-fidelity">{{ t('activity.media_normalized') }}</p>
                 <div id="activity-images" x-show="attachmentsOpen" class="activity-images">
                     <div><label><span class="activity-sr-only">{{ t('activity.attachments') }}</span><select x-model="previewId" @change="previewFailed = false"><template x-for="image in detail?.attachments || []" :key="image.id"><option :value="image.id" x-text="image.id + ' · ' + (image.mime_type || label('image_unknown_type')) + ' · ' + label(image.status === 'retained' ? 'image_retained' : 'image_not_retained')"></option></template></select></label><span x-show="previewInfo()?.status === 'retained'" x-text="previewInfo()?.width + ' × ' + previewInfo()?.height + ' · ' + bytes(previewInfo()?.bytes)"></span></div>
@@ -96,7 +97,7 @@
                     <button @click="outlineOpen = !outlineOpen" :aria-expanded="outlineOpen" aria-controls="activity-outline">{{ t('activity.outline') }}</button>
                     <button class="activity-icon-button" @click="navigate(-1)" :disabled="!total" aria-label="{{ t('activity.previous_message') }}">↑</button><button class="activity-icon-button" @click="navigate(1)" :disabled="!total" aria-label="{{ t('activity.next_message') }}">↓</button>
                     <button @click="jump(0)" :disabled="!total">{{ t('activity.first') }}</button>
-                    <label class="activity-search"><span class="activity-sr-only">{{ t('activity.search') }}</span><input type="search" x-model="searchQuery" @input="search()" @keydown.enter.prevent="search($event.shiftKey ? -1 : 1)" placeholder="{{ t('activity.search') }}" maxlength="512"><span x-show="searchQuery" :title="label(loading || limited ? 'search_partial' : 'search_complete')" x-text="(searchResult.count ? searchResult.match + 1 : 0) + '/' + searchResult.count"></span></label>
+                    <label class="activity-search"><span class="activity-sr-only">{{ t('activity.search') }}</span><input type="search" x-model="searchQuery" @input="search()" @keydown.enter.prevent="search($event.shiftKey ? -1 : 1)" placeholder="{{ t('activity.search') }}" maxlength="512"><span x-show="searchQuery" :title="label(loading || limited || projectionIncomplete ? 'search_partial' : 'search_complete')" x-text="(searchResult.count ? searchResult.match + 1 : 0) + '/' + searchResult.count"></span></label>
                     <button class="activity-icon-button" @click="search(-1)" :disabled="!searchResult.count" aria-label="{{ t('activity.previous_match') }}">‹</button><button class="activity-icon-button" @click="search(1)" :disabled="!searchResult.count" aria-label="{{ t('activity.next_match') }}">›</button>
                 </div>
                 <div class="activity-document-shell">
@@ -114,7 +115,7 @@
                         <span class="activity-rail-viewport" :style="'top:' + Math.min(100, row / Math.max(1,total) * 100) + '%;height:' + Math.min(100, Math.max(1, visibleRows / Math.max(1,total) * 100)) + '%'"></span>
                     </div>
                 </div>
-                <footer class="activity-document-footer"><span x-text="currentSection()?.label || label('context')"></span><span x-show="searchQuery &amp;&amp; (loading || limited)">{{ t('activity.partial_scan') }}</span><span x-show="loading">{{ t('activity.loading_context') }}</span><span x-show="limited">{{ t('activity.browser_limit') }}</span><button @click="followOutput()" :aria-pressed="follow" x-text="label(newOutput ? 'new_output' : follow ? 'following' : 'follow_output')"></button></footer>
+                <footer class="activity-document-footer"><span x-text="currentSection()?.label || label('context')"></span><span x-show="searchQuery &amp;&amp; (loading || limited || projectionIncomplete)">{{ t('activity.partial_scan') }}</span><span x-show="loading">{{ t('activity.loading_context') }}</span><span x-show="limited">{{ t('activity.browser_limit') }}</span><button @click="followOutput()" :aria-pressed="follow" x-text="label(newOutput ? 'new_output' : follow ? 'following' : 'follow_output')"></button></footer>
             </div>
         </div>
     </div>

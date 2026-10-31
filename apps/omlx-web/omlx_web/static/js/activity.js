@@ -3,7 +3,7 @@
     'use strict';
     const ROW_HEIGHT = 22;
     const API = '/admin/api/activity';
-    const roles = ['system', 'developer', 'user', 'assistant', 'tool', 'tool_calls', 'tools', 'options', 'submitted', 'unparsed', 'model_input', 'raw_output', 'api_response', 'model_tokens', 'events'];
+    const roles = ['system', 'developer', 'user', 'assistant', 'reasoning', 'output_error', 'output_refusal', 'choice', 'block', 'item', 'tool', 'tool_calls', 'tools', 'options', 'submitted', 'unparsed', 'model_input', 'raw_output', 'api_response', 'model_tokens', 'events'];
     function activityInspector() {
         let stream, worker, resize, controller, retry, searchTimer, frame;
         let generation = 0, activation = 0, loadedVersion = '', stopped = true, lastFacets = 0;
@@ -18,6 +18,7 @@
             pageCursor: '', pageScope: 'recent', paging: false, exporting: false, newOutput: false, viewReady: false, outputBytes: 0,
             settingsOpen: false, settingsDraft: {enabled: false, retain_images: true, max_requests: 1000, max_age_days: 7, storageGiB: 5},
             attachmentsOpen: false, previewId: '', previewFailed: false,
+            projectionState: 'waiting', projectionIncomplete: false,
             configVersion: '', controlBusy: false, pendingAction: '', pendingDeleteId: '',
             boot() {
                 this._visibility = () => this.activate(this.mainTab === 'activity' && !document.hidden);
@@ -170,6 +171,8 @@
                 this.attachmentsOpen = false; this.previewId = ''; this.previewFailed = false;
                 this.rows = []; this.outline = []; this.total = 0; this.loading = !!id;
                 this.current = null; this.viewReady = false; this.outputBytes = 0;
+                this.projectionState = 'waiting';
+                this.projectionIncomplete = false;
                 this.searchQuery = ''; this.searchResult = {count: 0, match: 0, marks: []}; this.newOutput = false;
                 const saved = positions.get(id);
                 this.row = saved?.row || 0; this.mode = saved?.mode || 'submitted'; this.follow = saved?.follow ?? false;
@@ -205,6 +208,8 @@
                         if (!data.loading) this.viewReady = true;
                         this.current = data.current;
                         this.loading = data.loading; this.limited = data.limited;
+                        this.projectionState = data.projectionState || 'waiting';
+                        this.projectionIncomplete = !!data.projectionIncomplete;
                         this.outlineTruncated = data.outlineTruncated; this.searchResult = data.search;
                         this.row = data.row;
                         this.$nextTick(() => {

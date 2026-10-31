@@ -67,12 +67,15 @@
 .activity-line-match { background:rgb(var(--palette-amber-500) / .16); }
 .activity-line-heading { color:var(--text-muted); font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; border-top:1px solid var(--border-faint); background:var(--bg-secondary); padding-left:7px; margin-left:-7px; }
 .activity-line-heading[data-role="system"],.activity-line-heading[data-role="developer"] { color:rgb(var(--palette-violet-500)); }
+.activity-line-heading[data-role="reasoning"] { color:rgb(var(--palette-violet-500)); }
+.activity-line-heading[data-role="output_error"],.activity-line-heading[data-role="output_refusal"] { color:rgb(var(--palette-amber-600)); }
 .activity-line-heading[data-role="raw_output"] { color:var(--activity-accent); }
 .activity-line-heading[data-role="tool"],.activity-line-heading[data-role="tools"] { color:rgb(var(--palette-amber-600)); }
 .activity-document-empty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; padding:32px; text-align:center; font:12px/1.7 Inter,sans-serif; color:var(--text-muted); }
 .activity-rail { position:relative; width:25px; margin:12px 12px 12px 4px; flex-shrink:0; border-radius:4px; background:var(--bg-secondary); overflow:hidden; touch-action:none; cursor:crosshair; }
 .activity-rail-section { position:absolute; left:5px; right:5px; min-height:1px; background:rgb(var(--palette-slate-400) / .4); border-bottom:1px solid var(--bg-primary); pointer-events:none; }
 .activity-rail-section[data-role="system"],.activity-rail-section[data-role="developer"] { background:rgb(var(--palette-violet-500) / .5); }
+.activity-rail-section[data-role="reasoning"] { background:rgb(var(--palette-violet-500) / .5); }
 .activity-rail-section[data-role="user"] { background:rgb(var(--palette-blue-500) / .45); }
 .activity-rail-section[data-role="raw_output"],.activity-rail-section[data-role="assistant"] { background:rgb(var(--palette-emerald-500) / .5); }
 .activity-rail-section[data-role="tool"],.activity-rail-section[data-role="tools"] { background:rgb(var(--palette-amber-500) / .5); }

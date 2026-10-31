@@ -294,9 +294,11 @@ requeue/attention transformations remain qualification work.
 
 The Activity tab opens independently of capture being enabled. The list reads
 metadata; selecting a request loads its bounded retained ranges in a dedicated
-browser worker. Submitted messages and engine output share one view. Model
-input shows observed prepared text followed by engine output; input token IDs,
-API wire response and invocation events remain distinct evidence choices.
+browser worker. Submitted input shares a readable view with structured API output. Model input
+shows observed prepared text followed by producer output. When supported API wire
+is unavailable, the submitted view retains a separately labeled producer fallback.
+Input token IDs, producer text, original API wire and invocation events remain
+distinct evidence choices.
 Unavailable representations and capture gaps are labeled.
 
 The worker keeps full retained text for literal, case-sensitive search and
@@ -318,6 +320,49 @@ Observed dashboard waiting/prefill/generation rows link to the parent Activity
 request. Links support modified clicks and browser history. Uncorrelated or
 synthetic aggregate rows remain unlinked. Interface strings use locale keys;
 new non-English entries currently use the repository's English fallback.
+
+## Readable API output
+
+The inspector worker projects captured JSON/SSE from the four generation API
+families into separate answer, API-exposed reasoning, refusal, error and tool-call
+sections. It consumes the formatter output that was actually retained, without
+re-running a model's thinking/tool parser or changing inference capture. Raw
+producer text and API wire evidence remain available unchanged. Models/backends
+that do not expose reasoning or tools in the API do not acquire invented ones.
+The Structured API output evidence choice shows this projection without input.
+
+Choice, Anthropic block and Responses output-item indexes remain separate.
+Fragmented tool arguments append to their own call; initial empty Anthropic tool
+input is replaced by the argument deltas. Responses item-done and terminal full
+snapshots replace earlier deltas, avoiding duplicate reasoning/answers/calls and
+preserving authoritative final text. Responses sequence duplicates/reordering
+and gaps are flagged. Unknown blocks/events, malformed envelopes, missing starts,
+interruption and hard limits are explicitly partial. A captured terminal envelope
+means protocol termination was observed; it does not mean inference succeeded or
+that capture had no gaps. API errors appear in their own inert text section.
+
+Parsing runs only in the selected inspector's dedicated browser worker. It is
+incremental across fetched ranges and UTF-8 decoder boundaries. It supports JSON
+keepalive whitespace, SSE comments, CRLF and multiline data fields. Per-projection
+limits are 1 Mi-character SSE events/lines, 16 Mi-character JSON bodies and output
+text, 4,096 sections, and JSON structural limits of 32,768 punctuation/nodes and
+64 levels before native parsing. Tool names/IDs/namespaces are bounded at 256
+characters; truncation is explicitly partial. These are additional to the aggregate 64 MiB
+selection fetch limit. Hitting them stops/coarsens this readable projection; it
+does not discard the retained wire or throttle inference. Search/copy/download
+operate on the selected view, visibly partial for incomplete projections, capture
+gaps or loading/size limits. The API wire choice supports inspection of fields
+that the readable projection does not map, including signatures and usage.
+
+`tests/test_activity_output.py` feeds the actual four production streaming
+formatters' synthetic-engine output, actual response builders and formatter error
+paths through the browser parser at multiple fragment sizes. These checks cover
+formatting, not full authenticated endpoint execution or real-model behavior.
+`activity_output.test.cjs` covers fragmented/multiple calls and choices, block
+ordering, final replacement, errors/partial/unknown data, sequences and resource
+limits. The actual worker harness additionally checks a long Unicode response,
+far-tail search, complete selected exports, input/output ordering and preservation
+of model/raw/JSON evidence modes. Rendered-browser behavior remains unqualified.
 
 ## Limitations and remaining work
 
@@ -344,7 +389,7 @@ new non-English entries currently use the repository's English fallback.
   large-image throughput and native restart/long-running viewer lifecycle remain
   to be qualified. The first source slice now includes supported inline previews.
 - Actual rendered-browser validation, text selection across virtualized windows,
-  per-message copying, richer parsed reasoning/tool output, complete large-outline
+  per-message copying, complete large-outline
   navigation and deep-link history polish remain to be qualified or completed.
   Native browser Find sees only mounted text; use the inspector search instead.
 

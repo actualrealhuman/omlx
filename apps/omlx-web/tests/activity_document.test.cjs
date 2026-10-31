@@ -86,6 +86,7 @@ test('actual worker incrementally decodes split UTF-8 and searches retained cont
     const buffers = {submitted: Buffer.from(submitted), raw_output: Buffer.from('answer 世界🙂')};
     const context = {ActivityDocumentTools: {ActivityDocument, submittedSections},
         importScripts() {}, TextDecoder, URLSearchParams, Blob, self: {},
+        ActivityOutputTools: require('../omlx_web/static/js/activity_output.js'),
         postMessage: data => outputs.push(data),
         fetch: async url => {
             const params = new URL(url, 'http://test.invalid').searchParams;
@@ -118,4 +119,61 @@ test('normalized attachment references remain visible and plain documents stay r
     ]}]}), {attachment_not_retained: 'not retained'});
     assert.match(sections[0].text, /attachment-1: not retained/);
     assert.match(sections[0].text, /useful document text/);
+});
+
+test('actual worker projects long API output, keeps raw views separate and exports all selected text', async () => {
+    const outputs = [], response = text => `data: ${JSON.stringify(text)}\n\n`;
+    const body = '世界🙂 text '.repeat(100000) + 'far-tail-match';
+    const wire = response({choices: [{index: 0, delta: {reasoning_content: 'reason'}}]}) +
+        Array.from({length: Math.ceil(body.length / 200000)}, (_, i) => response({choices: [{index: 0, delta: {content: body.slice(i * 200000, (i + 1) * 200000)}}]})).join('');
+    const buffers = {api_response: Buffer.from(wire), raw_output: Buffer.from('<think>producer layer</think>'),
+        submitted: Buffer.from(JSON.stringify({messages: [{role: 'user', content: 'input'}]}))};
+    const context = {ActivityDocumentTools: {ActivityDocument, submittedSections}, ActivityOutputTools: require('../omlx_web/static/js/activity_output.js'),
+        importScripts() {}, TextDecoder, URLSearchParams, Blob, self: {}, postMessage: value => outputs.push(value),
+        fetch: async url => {
+            const params = new URL(url, 'http://test.invalid').searchParams, offset = Number(params.get('offset'));
+            return {ok: true, arrayBuffer: async () => Uint8Array.from(buffers[params.get('representation')].subarray(offset, offset + 65537)).buffer};
+        }};
+    vm.createContext(context);
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../omlx_web/static/js/activity_worker.js'), 'utf8'), context);
+    const detail = {id: 'synthetic', endpoint: '/v1/chat/completions', finished_at: null,
+        representations: Object.entries(buffers).map(([representation, data]) => ({representation, bytes: data.length, invocation_id: '0'}))};
+    context.self.onmessage({data: {type: 'sync', detail}});
+    for (let attempt = 0; attempt < 100 && !outputs.some(value => value.type === 'render' && !value.loading); attempt++) await new Promise(resolve => setImmediate(resolve));
+    assert.equal(outputs.at(-1).projectionState, 'streaming');
+    assert.equal(outputs.at(-1).projectionIncomplete, true);
+    assert.ok(outputs.at(-1).rows.length <= 200);
+    context.self.onmessage({data: {type: 'search', query: 'far-tail-match', match: 0}});
+    assert.equal(outputs.at(-1).search.count, 1);
+    const anchor = outputs.at(-1).current.key;
+    context.self.onmessage({data: {type: 'export'}});
+    assert.equal(outputs.at(-1).incomplete, true);
+    buffers.api_response = Buffer.from(wire + 'data: [DONE]\n\n');
+    detail.finished_at = 1;
+    detail.representations.find(item => item.representation === 'api_response').bytes = buffers.api_response.length;
+    outputs.length = 0;
+    context.self.onmessage({data: {type: 'sync', detail}});
+    for (let attempt = 0; attempt < 100 && !outputs.some(value => value.type === 'render' && !value.loading); attempt++) await new Promise(resolve => setImmediate(resolve));
+    assert.equal(outputs.at(-1).projectionState, 'complete');
+    assert.equal(outputs.at(-1).projectionIncomplete, false);
+    assert.equal(outputs.at(-1).current.key, anchor);
+    context.self.onmessage({data: {type: 'export'}});
+    let text = await outputs.at(-1).blob.text();
+    assert.ok(text.includes(body));
+    assert.ok(!text.includes('<think>producer layer</think>'));
+    assert.ok(text.indexOf('input') < text.indexOf(body));
+    assert.equal(outputs.at(-1).incomplete, false);
+    context.self.onmessage({data: {type: 'mode', mode: 'parsed_output'}});
+    context.self.onmessage({data: {type: 'export'}});
+    text = await outputs.at(-1).blob.text();
+    assert.ok(text.includes(body) && !text.includes('user\ninput'));
+    context.self.onmessage({data: {type: 'mode', mode: 'model'}});
+    context.self.onmessage({data: {type: 'export'}});
+    assert.ok((await outputs.at(-1).blob.text()).includes('<think>producer layer</think>'));
+    context.self.onmessage({data: {type: 'mode', mode: 'api_response'}});
+    context.self.onmessage({data: {type: 'export'}});
+    assert.ok((await outputs.at(-1).blob.text()).includes(wire));
+    context.self.onmessage({data: {type: 'mode', mode: 'submitted_json'}});
+    context.self.onmessage({data: {type: 'export'}});
+    assert.ok(!(await outputs.at(-1).blob.text()).includes('far-tail-match'));
 });
