@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import ActivitySettings
+from .coverage import BACKENDS
 from .images import prepare_image
 from .snapshot import SemanticSnapshot, snapshot_request
 from .store import (
@@ -479,6 +480,26 @@ class ActivityRecorder:
                 return True
             pending.metadata["api_failure_outcome"] = outcome
             pending.metadata["api_failure_source"] = "api_formatter"
+            pending.version += 1
+        self._wake.set()
+        return True
+
+    def backend(self, handle, kind):
+        """Bounded immutable dispatch observations; never retain the engine."""
+        if type(kind) is not str or kind not in BACKENDS:
+            return False
+        with self._lock:
+            pending = self._lookup(handle)
+            if (
+                pending is None
+                or not self.settings.enabled
+                or pending.metadata["finished_at"] is not None
+            ):
+                return False
+            kinds = pending.metadata.get("resolved_backends", ())
+            if kind in kinds:
+                return True
+            pending.metadata["resolved_backends"] = (*kinds, kind)
             pending.version += 1
         self._wake.set()
         return True

@@ -190,6 +190,26 @@ test('image previews load one admin URL lazily and invalidate on selection, expi
     assert.equal(app.imageUrl('attachment-2'), null);
 });
 
+test('coverage labels keep dispatch identity separate from retained evidence and unknown states', () => {
+    const {app} = harness();
+    app.detail = {coverage: {backend_kinds: ['distributed_proxy', 'local_text'], evidence: {
+        submitted: 'retained', prepared_text: 'not_observed', prepared_tokens: 'retained',
+        producer_output: 'observed_not_retained', api_wire: 'retained', images: 'future_state',
+    }}};
+    assert.equal(app.backendLabel(), 'activity.backend.distributed_proxy + activity.backend.local_text');
+    const rows = app.coverageRows();
+    assert.equal(rows.length, 6);
+    assert.equal(rows.find(item => item.key === 'prepared_text').state, 'not_observed');
+    assert.equal(rows.find(item => item.key === 'producer_output').state, 'observed_not_retained');
+    assert.equal(rows.find(item => item.key === 'images').state, 'not_observed');
+    app.detail.coverage.backend_kinds = ['arbitrary-backend-string'];
+    assert.equal(app.backendLabel(), 'activity.backend.unknown');
+    app.detail = null;
+    assert.equal(app.backendLabel(), 'activity.backend.unresolved');
+    app.coverageOpen = true; app.select('next');
+    assert.equal(app.coverageOpen, false);
+});
+
 test('failed settings writes retain the draft and do not blindly retry', async () => {
     const {app, context} = harness();
     let calls = 0;

@@ -69,6 +69,10 @@
                     <div :title="label('first_token_hint')"><dt>{{ t('activity.first_token') }}</dt><dd x-text="milliseconds(detail?.first_observed_token_ms)"></dd></div>
                 </dl>
                 <p class="activity-fidelity">{{ t('activity.counts_scope') }}</p>
+                <div x-show="detail?.coverage" class="activity-coverage">
+                    <button @click="coverageOpen = !coverageOpen" :aria-expanded="coverageOpen" aria-controls="activity-coverage-detail"><span>{{ t('activity.coverage') }} · <span x-text="backendLabel()"></span></span><span x-text="label(detail?.coverage?.scheduler_path === 'observed' ? 'coverage.scheduler_observed' : 'coverage.scheduler_not_observed')"></span></button>
+                    <div id="activity-coverage-detail" x-show="coverageOpen"><dl><template x-for="item in coverageRows()" :key="item.key"><div><dt x-text="label('coverage.evidence.' + item.key)"></dt><dd :data-state="item.state" x-text="label('coverage.state.' + item.state)"></dd></div></template></dl><p>{{ t('activity.coverage_hint') }}</p></div>
+                </div>
                 <div x-show="detail?.capture_gaps" class="activity-capture-warning"><strong>{{ t('activity.gaps') }}</strong><span x-text="detail?.capture_reason || label('gap_hint')"></span></div>
                 <div class="activity-view-controls">
                     <div class="activity-view-tabs segmented segmented--sm" role="group" aria-label="{{ t('activity.view') }}">

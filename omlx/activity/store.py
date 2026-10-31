@@ -9,6 +9,7 @@ import zlib
 from pathlib import Path
 
 from .config import ActivitySettings
+from .coverage import evidence_coverage
 
 SCHEMA_VERSION = 2
 MAX_CHUNK_BYTES = 256 * 1024
@@ -464,6 +465,9 @@ class ActivityReader:
             "api_wire_retained": "api_response" in retained,
             "preparser_output_guaranteed": False,
         }
+        result["coverage"] = evidence_coverage(
+            result, result["representations"], result["attachments"]
+        )
         result["version"] = hashlib.sha256(
             json.dumps(result, sort_keys=True, ensure_ascii=True).encode()
         ).hexdigest()

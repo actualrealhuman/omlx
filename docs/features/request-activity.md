@@ -290,6 +290,45 @@ report the evidence sources and retained representations. Engine-producer text
 is still not universally pre-parser text; unobserved backends and later sparse/
 requeue/attention transformations remain qualification work.
 
+## Backend and evidence coverage
+
+The inspector's expandable Evidence coverage panel separates resolved engine
+identity from recorded execution signals. Resolution records only a bounded set
+of known kinds: local batched text, batched VLM, local diffusion, distributed,
+Splash and other/unknown. An unresolved or historical record stays unclassified.
+Multiple resolutions retain distinct kinds in order without retaining engine
+objects, addresses, local paths or arbitrary class names. Unknown subclasses do
+not inherit a claim to a known implementation merely from their class hierarchy.
+This observation is made after normal resolution; model selection and lease
+behavior are unchanged.
+
+Detail metadata includes `coverage.backend_kinds`, the resolution source, whether
+the shared scheduler was observed, and states for submitted input, prepared text,
+admitted token IDs, producer output, API wire and original images. `retained`
+means at least that representation exists, not that it is complete. Known scalar
+observations with no retained payload are `observed_not_retained`; otherwise the
+state is `not_observed` (no recorded signal, not proof the engine never had it).
+Capture gaps, browser projection limits and normal lifecycle indicators remain
+separate. No backend identity implies universal pre-parser output or a fully
+reconstructed attended context.
+
+| Resolved implementation | Evidence boundary |
+| --- | --- |
+| Local batched text | Shared-core prepared-input/IDs and producer hooks; exact retained fields still determine availability |
+| Local batched VLM | Normal shared-core path can observe IDs/output; preprocessing can leave token IDs without prepared text, and no embedding/KV reconstruction is implied |
+| Local diffusion | Separate generation path; submitted/API wire where captured, with no shared-core guarantee |
+| Distributed | RPC paths can bypass local core; partial chat may use a local fallback, which must be established from actual scheduler signals |
+| Splash | Native proxy path; submitted/API wire where captured, with no local-core guarantee; plain completions remain unsupported |
+| Other/unresolved | No inferred backend capability; retained evidence is still inspectable |
+
+`tests/test_activity_coverage.py` checks actual class dispatch through normal
+leased/unleased resolution with no model load, bounded immutable metadata,
+unknown subclasses, proxy identity alongside local-core evidence, VLM ID-only
+input and content loss versus unavailable signals. These fixtures qualify the
+classification/recording contract; real backend execution, all endpoint modes
+and full composition still require qualification. The panel's controller and real
+template have local behavior/render checks; actual browser review is pending.
+
 ## Internal work and background scope
 
 Only the four generation endpoints create ordinary Activity records. The
@@ -413,7 +452,8 @@ of model/raw/JSON evidence modes. Rendered-browser behavior remains unqualified.
 ## Limitations and remaining work
 
 - Complete per-invocation query summaries, full effective options, richer timing/
-  cache/paused-state evidence and all backend/endpoint qualification. Current
+  cache/paused-state evidence and all backend/endpoint qualification. Backend
+  resolution/evidence labels are implemented; they are not qualification badges. Current
   generation hooks are covered by mock-model checks, not real-model validation.
 - `raw_output` currently means engine-producer text before API formatting.
   Engines with their own native parsers may already have transformed it;

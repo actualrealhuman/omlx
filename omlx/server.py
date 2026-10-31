@@ -75,6 +75,7 @@ from .activity.runtime import (
     api_failure as activity_api_failure,
     capture_enabled as activity_capture_enabled,
     configure_recorder,
+    current_capture as activity_current_capture,
     inference_request_id as activity_request_id,
     observe_request,
     phase as activity_phase,
@@ -1757,18 +1758,41 @@ async def get_engine_for_model(
     """
     activity_phase("loading")
     if lease is None:
-        return await get_engine(model, EngineType.LLM)
-
-    leased: list[str] = []
-    engine = await get_engine(
-        model,
-        EngineType.LLM,
-        _lease=True,
-        _leased_out=leased,
-    )
-    if leased:
-        lease.model_id = leased[0]
+        engine = await get_engine(model, EngineType.LLM)
+    else:
+        leased: list[str] = []
+        engine = await get_engine(
+            model,
+            EngineType.LLM,
+            _lease=True,
+            _leased_out=leased,
+        )
+        if leased:
+            lease.model_id = leased[0]
+    _observe_engine_backend(engine)
     return engine
+
+
+def _observe_engine_backend(engine):
+    capture = activity_current_capture()
+    if capture is None:
+        return
+    from .engine.distributed import DistributedBatchedEngine
+    from .engine.splash import SplashEngine
+
+    # Dispatch identity is a fact about resolution, not proof of which internal
+    # execution path ran. In particular distributed partials may fall back local.
+    if type(engine) is BatchedEngine:
+        kind = "local_text"
+    elif type(engine) is VLMBatchedEngine:
+        kind = "local_diffusion" if engine.is_diffusion_model else "local_vlm"
+    elif type(engine) is DistributedBatchedEngine:
+        kind = "distributed_proxy"
+    elif type(engine) is SplashEngine:
+        kind = "splash_native"
+    else:
+        kind = "unknown"
+    capture.recorder.backend(capture.handle, kind)
 
 
 def _serving_model_id(

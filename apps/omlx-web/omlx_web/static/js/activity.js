@@ -19,6 +19,7 @@
             settingsOpen: false, settingsDraft: {enabled: false, retain_images: true, max_requests: 1000, max_age_days: 7, storageGiB: 5},
             attachmentsOpen: false, previewId: '', previewFailed: false,
             projectionState: 'waiting', projectionIncomplete: false,
+            coverageOpen: false,
             configVersion: '', controlBusy: false, pendingAction: '', pendingDeleteId: '',
             boot() {
                 this._visibility = () => this.activate(this.mainTab === 'activity' && !document.hidden);
@@ -173,6 +174,7 @@
                 this.current = null; this.viewReady = false; this.outputBytes = 0;
                 this.projectionState = 'waiting';
                 this.projectionIncomplete = false;
+                this.coverageOpen = false;
                 this.searchQuery = ''; this.searchResult = {count: 0, match: 0, marks: []}; this.newOutput = false;
                 const saved = positions.get(id);
                 this.row = saved?.row || 0; this.mode = saved?.mode || 'submitted'; this.follow = saved?.follow ?? false;
@@ -228,6 +230,17 @@
             toggleAttachments() {
                 this.attachmentsOpen = !this.attachmentsOpen; this.previewFailed = false;
                 this.previewId = this.attachmentsOpen ? (this.detail?.attachments?.find(item => item.status === 'retained') || this.detail?.attachments?.[0])?.id || '' : '';
+            },
+            backendLabel() {
+                const known = ['local_text', 'local_vlm', 'local_diffusion', 'distributed_proxy', 'splash_native', 'unknown'];
+                const kinds = this.detail?.coverage?.backend_kinds;
+                return Array.isArray(kinds) && kinds.length ? kinds.slice(0, 6).map(kind => label(`backend.${known.includes(kind) ? kind : 'unknown'}`)).join(' + ') : label('backend.unresolved');
+            },
+            coverageRows() {
+                return ['submitted', 'prepared_text', 'prepared_tokens', 'producer_output', 'api_wire', 'images'].map(key => {
+                    const value = this.detail?.coverage?.evidence?.[key];
+                    return {key, state: ['retained', 'observed_not_retained'].includes(value) ? value : 'not_observed'};
+                });
             },
             previewInfo() {
                 return this.detail?.attachments?.find(item => item.id === this.previewId);
