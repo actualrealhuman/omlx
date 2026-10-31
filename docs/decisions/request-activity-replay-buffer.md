@@ -29,3 +29,21 @@ history without accumulating tombstones.
 Focused standard-library tests cover framing, deduplication, byte/count/lease
 caps, TTL and LRU eviction, invalid input atomicity, reset, overflow and replay
 gaps. They do not qualify live reconnects, browser behavior or inference latency.
+
+## Publication fencing
+
+Current snapshot delivery also fences admin history/settings mutations. A worker
+timing out while awaiting SQLite does not prove that its write has finished.
+Publication remains blocked until both the actual executor operation and its
+recorder Future have completed. HTTP cancellation cannot release this gate early,
+including cancellation while the executor operation is still queued.
+
+The fence retains at most 16 tokens with fixed scalar state, without retaining
+HTTP contexts or writer Futures. Ambiguous or cancelled writer Futures keep the
+gate closed; capacity exhaustion rejects further mutations before writing.
+Ordinary completion, including a reported writer failure, changes the publication
+generation. Source/writer identity checks additionally discard reads spanning a
+source switch. A stream validates its initial generation after reads and async
+authorization and before publishing snapshots or keepalives; invalidation ends
+the stream with `reconnect`. Bytes already handed to the network cannot be
+recalled. Replay route integration remains a separate required step.

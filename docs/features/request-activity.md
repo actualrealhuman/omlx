@@ -213,6 +213,13 @@ route/browser cursor integration remain required. Run its focused checks with
 [buffer decision](../decisions/request-activity-replay-buffer.md) for bounds and
 failure semantics.
 
+Live snapshot publication is fenced across Activity settings, clear and delete
+operations until their actual recorder writes finish, including writes whose
+HTTP caller times out or disconnects. Reads spanning a mutation or source/writer
+switch are discarded and the stream reconnects. The bounded fence fails closed
+on an ambiguous or cancelled writer Future. Focused synthetic cases are in
+`tests/test_activity_publication_fence.py`; these do not qualify replay delivery.
+
 ## Submitted snapshot and media normalization
 
 Submitted input is frozen once before preprocessing into a bounded immutable

@@ -32,6 +32,93 @@ _NO_STORE = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
 _MAX_READERS = 4
 _MAX_STREAMS = 8
 _MAX_EVENT_BYTES = 1024 * 1024
+_MAX_MUTATION_FENCES = 16
+
+
+class _MutationFence:
+    """Bounded publication gate for controls and their recorder writes."""
+
+    def __init__(self):
+        self._lock = threading.RLock()
+        self._generation = uuid.uuid4().hex
+        self._tokens = {}
+
+    def begin(self):
+        with self._lock:
+            if len(self._tokens) >= _MAX_MUTATION_FENCES:
+                raise HTTPException(
+                    429,
+                    "Activity mutation capacity reached",
+                    headers={"Retry-After": "1"},
+                )
+            token = uuid.uuid4().hex
+            self._tokens[token] = [False, "none"]
+            self._generation = uuid.uuid4().hex
+            return token
+
+    def track(self, token, future):
+        if token is None:
+            return
+        with self._lock:
+            state = self._tokens.get(token)
+            if state is None or state[1] != "none":
+                # Preserve the gate if future ownership became ambiguous.
+                if state is not None:
+                    state[1] = "ambiguous"
+                return
+            state[1] = "pending"
+        try:
+            future.add_done_callback(
+                lambda completed, fence=self, token_id=token: fence._future_done(
+                    token_id, completed
+                )
+            )
+        except Exception:
+            # The write may already be queued. Keep its bounded token fenced.
+            with self._lock:
+                state = self._tokens.get(token)
+                if state is not None:
+                    state[1] = "ambiguous"
+
+    def worker_done(self, token):
+        if token is None:
+            return
+        with self._lock:
+            state = self._tokens.get(token)
+            if state is None:
+                return
+            state[0] = True
+            self._finish_if_safe(token, state)
+
+    def _future_done(self, token, future):
+        with self._lock:
+            state = self._tokens.get(token)
+            if state is None or state[1] != "pending":
+                return
+            # Cancellation leaves the write outcome uncertain. Fail closed
+            # until this service is replaced.
+            if future.cancelled():
+                state[1] = "cancelled"
+            else:
+                state[1] = "done"
+            self._finish_if_safe(token, state)
+
+    def _finish_if_safe(self, token, state):
+        if state[0] and state[1] in {"none", "done"}:
+            self._tokens.pop(token, None)
+            self._generation = uuid.uuid4().hex
+
+    def stamp(self):
+        with self._lock:
+            if self._tokens:
+                return None
+            return self._generation
+
+    def valid(self, generation):
+        if generation is None:
+            return False
+        with self._lock:
+            return not self._tokens and self._generation == generation
 
 
 class ActivityUpdate(BaseModel):
@@ -129,6 +216,8 @@ class ActivityAdmin:
         self._settings_lock = settings_lock or asyncio.Lock()
         self._controls = 0
         self._control_tasks = set()
+        self._mutation_fences = _MutationFence()
+        self._mutation_context = threading.local()
 
     def start(self):
         with self._read_lock:
@@ -152,7 +241,38 @@ class ActivityAdmin:
             raise HTTPException(503, "Server not initialized")
         return ActivityReader(Path(settings.base_path) / "activity.sqlite3")
 
-    async def read(self, operation):
+    def _source_identity(self):
+        settings = self.get_settings()
+        if settings is None:
+            raise HTTPException(503, "Server not initialized")
+        path = str(Path(settings.base_path) / "activity.sqlite3")
+        recorder = get_recorder()
+        epoch = getattr(recorder, "_epoch", None) if recorder is not None else None
+        if type(epoch) is not str or len(epoch) > 64:
+            epoch = id(epoch) if epoch is not None else None
+        return path, id(recorder) if recorder is not None else None, epoch
+
+    def publication_stamp(self):
+        generation = self._mutation_fences.stamp()
+        if generation is None:
+            return None
+        stamp = (generation, *self._source_identity())
+        return stamp if self.publication_valid(stamp) else None
+
+    def publication_valid(self, stamp):
+        if (
+            stamp is None
+            or len(stamp) != 4
+            or not self._mutation_fences.valid(stamp[0])
+        ):
+            return False
+        try:
+            identity = self._source_identity()
+        except HTTPException:
+            return False
+        return stamp[1:] == identity and self._mutation_fences.valid(stamp[0])
+
+    async def read(self, operation, *, on_submitted=None):
         # Only admin readers can wait for this isolated executor. Decode and
         # capture producers never use it, and admission itself is bounded.
         with self._read_lock:
@@ -176,6 +296,8 @@ class ActivityAdmin:
             release()
             raise HTTPException(503, "Activity reader is stopping") from exc
         future.add_done_callback(release)
+        if on_submitted is not None:
+            on_submitted(future)
         try:
             # Keep admission until the actual worker completes, even if the
             # HTTP caller disconnects. Cancellation cannot grow the work queue.
@@ -183,7 +305,7 @@ class ActivityAdmin:
         except (sqlite3.Error, OSError, ValueError, zlib.error) as exc:
             raise HTTPException(503, "Activity history unavailable") from exc
 
-    async def control(self, operation):
+    async def control(self, operation, mutation=False):
         # A task owns the shared settings lock through the actual worker result,
         # even when its HTTP caller disconnects. Admission bounds queued tasks.
         if self._controls >= 8:
@@ -191,10 +313,35 @@ class ActivityAdmin:
         self._controls += 1
 
         async def run():
+            token = None
+            submitted = False
             try:
                 async with self._settings_lock:
-                    return await self.read(operation)
+                    if mutation:
+                        token = self._mutation_fences.begin()
+
+                    def invoke():
+                        previous = getattr(self._mutation_context, "token", None)
+                        self._mutation_context.token = token
+                        try:
+                            return operation()
+                        finally:
+                            self._mutation_context.token = previous
+
+                    def on_submitted(future):
+                        nonlocal submitted
+                        submitted = True
+                        if token is not None:
+                            future.add_done_callback(
+                                lambda _completed, fence=self._mutation_fences, token_id=token: (
+                                    fence.worker_done(token_id)
+                                )
+                            )
+
+                    return await self.read(invoke, on_submitted=on_submitted)
             finally:
+                if token is not None and not submitted:
+                    self._mutation_fences.worker_done(token)
                 self._controls -= 1
 
         task = asyncio.create_task(run())
@@ -286,7 +433,11 @@ class ActivityAdmin:
             recorder = staged
         if recorder is not None:
             try:
-                recorder.update_settings(candidate).result(5)
+                future = recorder.update_settings(candidate)
+                self._mutation_fences.track(
+                    getattr(self._mutation_context, "token", None), future
+                )
+                future.result(5)
             except (RuntimeError, TimeoutError):
                 raise HTTPException(
                     503, "Activity settings saved; live change did not complete"
@@ -310,6 +461,9 @@ class ActivityAdmin:
             raise HTTPException(404, "Activity request not retained")
         try:
             future = recorder.delete(request_id) if request_id else recorder.clear()
+            self._mutation_fences.track(
+                getattr(self._mutation_context, "token", None), future
+            )
             future.result(5)
         except (RuntimeError, TimeoutError):
             raise HTTPException(
@@ -368,15 +522,24 @@ class ActivityAdmin:
         state=None,
         since=None,
         until=None,
+        publication_stamp=None,
     ):
         epoch, sequence, previous = uuid.uuid4().hex, 0, None
         generation = self._generation
+        publication_stamp = publication_stamp or self.publication_stamp()
         started, last_sent = time.monotonic(), time.monotonic()
+        if not self.publication_valid(publication_stamp):
+            yield "event: reconnect\ndata: {}\n\n"
+            return
         if request.headers.get("last-event-id"):
             yield 'event: resync_required\ndata: {"reason":"snapshot_only_reconnect"}\n\n'
         snapshot = initial
         while True:
-            if self._closed or generation != self._generation:
+            if (
+                self._closed
+                or generation != self._generation
+                or not self.publication_valid(publication_stamp)
+            ):
                 yield "event: reconnect\ndata: {}\n\n"
                 return
             try:
@@ -386,6 +549,9 @@ class ActivityAdmin:
                     await authorization
             except Exception:
                 yield "event: authorization_lost\ndata: {}\n\n"
+                return
+            if not self.publication_valid(publication_stamp):
+                yield "event: reconnect\ndata: {}\n\n"
                 return
             payload = json.dumps(
                 {**snapshot, "health": self.health()},
@@ -397,16 +563,25 @@ class ActivityAdmin:
                 return
             signature = hashlib.sha256(payload.encode()).digest()
             if signature != previous:
+                if not self.publication_valid(publication_stamp):
+                    yield "event: reconnect\ndata: {}\n\n"
+                    return
                 sequence += 1
                 yield f"id: {epoch}:{sequence}\nevent: snapshot\ndata: {payload}\n\n"
                 previous, last_sent = signature, time.monotonic()
             elif time.monotonic() - last_sent >= 15:
+                if not self.publication_valid(publication_stamp):
+                    yield "event: reconnect\ndata: {}\n\n"
+                    return
                 yield ": keepalive\n\n"
                 last_sent = time.monotonic()
             if time.monotonic() - started >= 1800:
                 yield "event: reconnect\ndata: {}\n\n"
                 return
             await asyncio.sleep(self.poll_seconds)
+            if not self.publication_valid(publication_stamp):
+                yield "event: reconnect\ndata: {}\n\n"
+                return
             try:
                 snapshot = await self.read(
                     lambda: reader.snapshot(
@@ -421,6 +596,9 @@ class ActivityAdmin:
                 )
             except HTTPException:
                 yield 'event: unavailable\ndata: {"reason":"history_unavailable"}\n\n'
+                return
+            if not self.publication_valid(publication_stamp):
+                yield "event: reconnect\ndata: {}\n\n"
                 return
 
 
@@ -472,7 +650,9 @@ def create_activity_router(
         if any(value is None for value in values.values()):
             raise HTTPException(400, "Activity settings cannot be null")
         version = request.headers.get("if-match")
-        result = await service.control(lambda: service.apply_settings(values, version))
+        result = await service.control(
+            lambda: service.apply_settings(values, version), mutation=True
+        )
         response.headers.update(_NO_STORE)
         return result
 
@@ -490,7 +670,9 @@ def create_activity_router(
             raise HTTPException(400, "Explicit delete confirmation required")
         if len(request_id) > 128:
             raise HTTPException(404, "Activity request not retained")
-        result = await service.control(lambda: service.remove(request_id))
+        result = await service.control(
+            lambda: service.remove(request_id), mutation=True
+        )
         response.headers.update(_NO_STORE)
         return result
 
@@ -503,7 +685,7 @@ def create_activity_router(
             or request.headers.get("x-activity-action") != "clear"
         ):
             raise HTTPException(400, "Explicit clear confirmation required")
-        result = await service.control(service.remove)
+        result = await service.control(service.remove, mutation=True)
         response.headers.update(_NO_STORE)
         return result
 
@@ -626,6 +808,13 @@ def create_activity_router(
         _validate_activity_filters(state, since, until)
         release = service.reserve_stream()
         try:
+            publication_stamp = service.publication_stamp()
+            if publication_stamp is None:
+                raise HTTPException(
+                    503,
+                    "Activity history is changing; retry the request",
+                    headers={"Retry-After": "1"},
+                )
             reader = service.reader()
             initial = await service.read(
                 lambda: reader.snapshot(
@@ -638,6 +827,12 @@ def create_activity_router(
                     until=until,
                 )
             )
+            if not service.publication_valid(publication_stamp):
+                raise HTTPException(
+                    503,
+                    "Activity history changed; retry the request",
+                    headers={"Retry-After": "1"},
+                )
             return _StreamResponse(
                 service.snapshots(
                     request,
@@ -650,6 +845,7 @@ def create_activity_router(
                     state,
                     since,
                     until,
+                    publication_stamp,
                 ),
                 release,
             )

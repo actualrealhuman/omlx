@@ -411,6 +411,19 @@ class ActivityRouteTests(unittest.TestCase):
             close()
         self.assertEqual(self.service._streams, set())
 
+    def test_events_rejects_initial_read_when_source_changes_mid_read(self):
+        original_read = self.service.read
+
+        async def switched_source(operation):
+            snapshot = await original_read(operation)
+            self.settings.base_path = self.root / "replacement-source"
+            return snapshot
+
+        with patch.object(self.service, "read", switched_source):
+            response = self.get("/events")
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("Activity history changed", response.json()["detail"])
+
     def test_snapshot_pins_lists_and_content_indexes_to_one_commit(self):
         handle = self.request(terminal=False)
         reader = self.service.reader()
