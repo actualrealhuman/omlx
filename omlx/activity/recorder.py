@@ -33,6 +33,10 @@ from .store import (
 _MAX_PENDING_CHUNKS = 4096
 _MAX_CONTROLS = 16
 _CHUNK_OVERHEAD = 256
+_COLLECT_SECONDS = 0.05
+_COALESCE_ITEMS = 64
+_COALESCE_BYTES = 64 * 1024
+_MERGE_SCRATCH_BYTES = 5 * _COALESCE_BYTES
 
 
 @dataclass(frozen=True)
@@ -57,6 +61,10 @@ class _Chunk:
     representation: str
     invocation_id: str
     data: bytes | str | tuple[int, ...] | SemanticSnapshot | InvocationSnapshot
+
+    @property
+    def item_count(self):
+        return 1
 
     @property
     def estimated_bytes(self):
@@ -110,6 +118,42 @@ class _Chunk:
                 yield "".join(parts).encode("ascii")
 
 
+@dataclass(frozen=True)
+class _ChunkBatch:
+    chunks: tuple[_Chunk, ...]
+    data = None  # No semantic snapshot/image/invocation payload.
+
+    @property
+    def handle(self):
+        return self.chunks[0].handle
+
+    @property
+    def invocation_id(self):
+        return self.chunks[0].invocation_id
+
+    @property
+    def representation(self):
+        return self.chunks[0].representation
+
+    @property
+    def item_count(self):
+        return len(self.chunks)
+
+    @property
+    def cost(self):
+        return sum(chunk.cost for chunk in self.chunks)
+
+    @property
+    def estimated_bytes(self):
+        return sum(chunk.estimated_bytes for chunk in self.chunks)
+
+    def encoded_chunks(self):
+        yield b"".join(
+            chunk.data.encode("utf-8") if type(chunk.data) is str else chunk.data
+            for chunk in self.chunks
+        )
+
+
 class ActivityRecorder:
     """One background writer, bounded content and separately reserved lifecycle.
 
@@ -128,6 +172,7 @@ class ActivityRecorder:
         # the ledger lock; releasing an observer reservation must be reentrant.
         self._lock = threading.RLock()
         self._wake = threading.Event()
+        self._urgent = threading.Event()
         self._ready = threading.Event()
         self._epoch = uuid.uuid4().hex
         self._pending: dict[str, _Pending] = {}
@@ -137,6 +182,7 @@ class ActivityRecorder:
         )
         self._pending_bytes = 0
         self._invocation_live_bytes = 0
+        self._writer_scratch_bytes = 0
         self._pending_count = 0
         self._freezing_bytes = 0
         self._freezing_count = 0
@@ -165,6 +211,7 @@ class ActivityRecorder:
                 "active_captures": len(self._pending),
                 "pending_bytes": self._pending_bytes,
                 "invocation_live_bytes": self._invocation_live_bytes,
+                "writer_scratch_bytes": self._writer_scratch_bytes,
                 "dropped_events": self._dropped_events,
                 "skipped_requests": self._skipped_requests,
             }
@@ -194,10 +241,7 @@ class ActivityRecorder:
                 or not self.settings.enabled
                 or self._error
                 or len(self._pending) >= self.settings.max_active_requests
-                or self._pending_bytes
-                + self._invocation_live_bytes
-                + (len(self._pending) + 1) * 8192
-                > self.settings.max_memory_bytes
+                or self._memory_used(capture_slots=1) > self.settings.max_memory_bytes
             ):
                 self._skipped_requests += 1
                 return None
@@ -265,10 +309,7 @@ class ActivityRecorder:
                 return False
             reservation = min(
                 self.settings.max_pending_bytes - self._pending_bytes,
-                self.settings.max_memory_bytes
-                - self._pending_bytes
-                - self._invocation_live_bytes
-                - len(self._pending) * 8192,
+                self.settings.max_memory_bytes - self._memory_used(),
             )
             logical = self.settings.max_request_bytes - pending.accepted_bytes
             if (
@@ -334,6 +375,17 @@ class ActivityRecorder:
         self._wake.set()
         return True
 
+    def _memory_used(self, *, capture_slots=0, pending_bytes=0, invocation_bytes=0):
+        # Caller owns the ledger lock. Includes in-flight worker allocations.
+        return (
+            self._pending_bytes
+            + self._invocation_live_bytes
+            + self._writer_scratch_bytes
+            + pending_bytes
+            + invocation_bytes
+            + (len(self._pending) + capture_slots) * 8192
+        )
+
     def reserve_invocation(self, handle):
         with self._lock:
             pending = self._lookup(handle)
@@ -344,10 +396,7 @@ class ActivityRecorder:
             ):
                 return False
             if (
-                self._pending_bytes
-                + self._invocation_live_bytes
-                + 2048
-                + len(self._pending) * 8192
+                self._memory_used(invocation_bytes=2048)
                 > self.settings.max_memory_bytes
             ):
                 self._gap(pending, "invocation_memory_capacity")
@@ -412,10 +461,7 @@ class ActivityRecorder:
             elif (
                 self._pending_count >= _MAX_PENDING_CHUNKS
                 or self._pending_bytes + cost > self.settings.max_pending_bytes
-                or self._pending_bytes
-                + cost
-                + self._invocation_live_bytes
-                + len(self._pending) * 8192
+                or self._memory_used(pending_bytes=cost)
                 > self.settings.max_memory_bytes
             ):
                 reason = "capture_queue_full"
@@ -611,6 +657,7 @@ class ActivityRecorder:
                         self._pending_count -= 1
                 self._chunks = retained
             self._controls.append((kind, request_id, future))
+        self._urgent.set()
         self._wake.set()
         return future
 
@@ -667,6 +714,7 @@ class ActivityRecorder:
                         capture_reason="server shutdown before terminal observation",
                     )
                     pending.version += 1
+        self._urgent.set()
         self._wake.set()
         if self._thread is not None:
             self._thread.join(timeout)
@@ -686,6 +734,63 @@ class ActivityRecorder:
             ]
         return controls, chunks, metadata
 
+    def _next_chunk(self, chunks):
+        """Worker only: coalesce independent payloads across a bounded window.
+
+        Each representation keeps its byte order; semantic/lifecycle chunks are
+        barriers. Original reservations remain held through write completion.
+        """
+        first = chunks.popleft()
+        if (
+            first.representation not in {"raw_output", "api_response"}
+            or type(first.data) not in (str, bytes)
+            or first.estimated_bytes > _COALESCE_BYTES
+        ):
+            return first
+        with self._lock:
+            if self._lookup(first.handle) is None or (
+                self._memory_used() + _MERGE_SCRATCH_BYTES
+                > self.settings.max_memory_bytes
+            ):
+                return first
+        window, chosen, size = [], [first], first.estimated_bytes
+        for _ in range(min(len(chunks), _COALESCE_ITEMS - 1)):
+            candidate = chunks.popleft()
+            if candidate.representation not in {"raw_output", "api_response"} or type(
+                candidate.data
+            ) not in (str, bytes):
+                chunks.appendleft(candidate)
+                break
+            same = (
+                candidate.handle,
+                candidate.representation,
+                candidate.invocation_id,
+            ) == (first.handle, first.representation, first.invocation_id)
+            if same and (
+                type(candidate.data) is not type(first.data)
+                or size + candidate.estimated_bytes > _COALESCE_BYTES
+            ):
+                chunks.appendleft(candidate)
+                break
+            window.append(candidate)
+            if same:
+                chosen.append(candidate)
+                size += candidate.estimated_bytes
+        batch = False
+        if len(chosen) > 1:
+            with self._lock:
+                if (
+                    self._memory_used() + _MERGE_SCRATCH_BYTES
+                    <= self.settings.max_memory_bytes
+                ):
+                    self._writer_scratch_bytes = _MERGE_SCRATCH_BYTES
+                    batch = True
+        selected = {id(chunk) for chunk in chosen[1:]} if batch else set()
+        for candidate in reversed(window):
+            if id(candidate) not in selected:
+                chunks.appendleft(candidate)
+        return _ChunkBatch(tuple(chosen)) if batch else first
+
     def _run(self):
         store = None
         outstanding = []
@@ -696,8 +801,11 @@ class ActivityRecorder:
             self._ready.set()
             last_prune = time.monotonic()
             while True:
-                self._wake.wait(1)
+                woke = self._wake.wait(1)
                 self._wake.clear()
+                if woke:
+                    self._urgent.wait(_COLLECT_SECONDS)
+                self._urgent.clear()
                 controls, chunks, metadata = self._snapshot()
                 outstanding = controls
                 # Controls fence all earlier writes. New request snapshots are
@@ -726,7 +834,7 @@ class ActivityRecorder:
                         if pending is not None:
                             pending.persisted = True
                 while chunks:
-                    chunk = chunks.popleft()
+                    chunk = self._next_chunk(chunks)
                     with self._lock:
                         current = self._lookup(chunk.handle)
                         valid = current is not None
@@ -773,18 +881,20 @@ class ActivityRecorder:
                     else:
                         saved = True  # Explicit deletion/clear, not a capture gap.
                         encoded_bytes = chunk.estimated_bytes
-                    handle, cost, estimate = (
+                    handle, cost, estimate, item_count = (
                         chunk.handle,
                         chunk.cost,
                         chunk.estimated_bytes,
+                        chunk.item_count,
                     )
                     del chunk  # Release payload before advertising free capacity.
                     with self._lock:
                         current = self._lookup(handle)
                         self._pending_bytes -= cost
-                        self._pending_count -= 1
+                        self._pending_count -= item_count
+                        self._writer_scratch_bytes = 0
                         if current is not None:
-                            current.pending_chunks -= 1
+                            current.pending_chunks -= item_count
                             if saved:
                                 current.accepted_bytes -= max(
                                     0, estimate - encoded_bytes
@@ -839,6 +949,7 @@ class ActivityRecorder:
                 self._chunks.clear()
                 self._pending.clear()
                 self._pending_bytes = self._freezing_bytes
+                self._writer_scratch_bytes = 0
                 self._pending_count = self._freezing_count
             for _, _, future in waiting:
                 if not future.done():

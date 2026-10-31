@@ -377,6 +377,45 @@ table reads during the single-row query, and cover disabled/deleted history and
 malformed IDs. Template expressions/rendering pass; browser visual/runtime review
 is still required.
 
+## Writer collection and payload coalescing
+
+A normal data wake has a 50 ms collection window on the existing worker thread.
+Flush, clear, delete, settings changes and shutdown signal a separate urgent event
+to bypass that delay. They still wait for an already running SQLite operation;
+this is not an absolute I/O deadline. Decode/API producers only offer immutable
+observations and never wait for the collection window, compression or storage.
+
+The worker examines at most 64 queued pieces at a time and joins matching
+`raw_output` or `api_response` pieces up to a conservative 64 KiB encoded bound.
+The key includes capture handle/epoch, representation, invocation and payload
+type. Independent channels may interleave in the queue, but each channel keeps
+its byte order. Semantic/event/token/image/invocation chunks and mixed payload
+types in the same channel are merge barriers. Large pieces use the existing
+bounded encoder. SQLite sequence numbers describe stored chunks, not one-to-one
+producer callbacks or global cross-channel causal order.
+
+Original byte/item/request reservations remain charged while a group is in
+flight. A separate conservative 320 KiB scratch reservation covers merge/encoding/
+compression buffers; new capture, content, submitted-snapshot and invocation
+admission include it in the memory ledger. Without scratch capacity, ordinary
+writes proceed without merging. Clear/delete and persistence failure do not
+release buffer credits while a valid write still owns them. `writer_scratch_bytes`
+in capture health exposes the current reservation. Queue and memory settings,
+request-byte admission, retained logical-byte totals and capture defaults are
+unchanged.
+
+This coalesces payloads before existing storage admission, rather than placing
+pruning, vacuum or checkpoint calls inside a long outer transaction. Existing
+physical/page-budget and terminal metadata rules still apply. Sixteen deterministic
+writer checks cover interleaved channel/request/invocation isolation, byte/item/
+type limits, semantic barriers, no-memory fallback, urgent controls/shutdown,
+in-flight clear, scratch-aware admission and failed-writer reference release.
+A refused combined write records a gap for that group; gap counts do not count
+producer pieces. A small burst fixture reduces ten pieces to two actual writes with identical
+retained bytes. This establishes fewer writes in that fixture, not measured
+inference overhead, high-cardinality CPU cost or a serving-throughput guarantee.
+See [the writer decision](../decisions/request-activity-writer-coalescing.md).
+
 ## API body observation boundary
 
 With the Activity transport middleware present, `api_response` is captured once
