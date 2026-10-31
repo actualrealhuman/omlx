@@ -17,7 +17,7 @@ from omlx.activity.runtime import (
     observe_request,
 )
 from omlx.engine_core import EngineCore
-from omlx.request import RequestOutput
+from omlx.request import RequestOutput, SamplingParams
 from omlx.scheduler import SchedulerOutput
 
 
@@ -106,6 +106,13 @@ async def test_actual_prepared_tokens_and_core_output_are_observed(observed_engi
     assert detail["prefilling_invocations"] == 1
     assert detail["first_observed_token_ms"] >= 0
     assert detail["observation"]["preparser_output_guaranteed"] is False
+    invocation = detail["invocations"][0]
+    assert invocation["engine_request_id"] == rid
+    assert invocation["admission_options"]["max_tokens"] == 256
+    assert invocation["admission_options"]["temperature"] == 0.7
+    assert invocation["admission_options"]["stop"] == []
+    assert invocation["generated_tokens"] == 7
+    assert invocation["state"] == "completed"
     events = [
         json.loads(line)
         for line in recorder.reader.content(rid, "events")["data"].splitlines()
@@ -176,3 +183,37 @@ async def test_scheduler_insert_failure_does_not_leak_activity_invocation(
     assert recorder.flush()
     assert recorder.reader.list_requests()[0]["state"] == "error"
     assert not core._activity_invocations
+
+
+@pytest.mark.asyncio
+async def test_actual_core_admission_records_overrides_without_retaining_grammar(
+    observed_engine,
+):
+    core, recorder = observed_engine
+    params = SamplingParams(
+        max_tokens=48, temperature=0.2, stop=["end"], stop_token_ids=[17], seed=123
+    )
+    grammar = object()
+    params.compiled_grammar = grammar
+
+    @observe_request
+    async def endpoint(request, http_request):
+        rid = inference_request_id(http_request)
+        await core.add_request([11], sampling_params=params, request_id=rid)
+        core._activity_invocations[rid].end("completed", finish_reason="stop")
+        core._cleanup_request(rid)
+        return JSONResponse({})
+
+    response = await endpoint(**arguments())
+    assert recorder.flush()
+    invocation = recorder.reader.detail(response.headers["x-omlx-request-id"])[
+        "invocations"
+    ][0]
+    assert invocation["admission_options"]["max_tokens"] == 48
+    assert invocation["admission_options"]["temperature"] == 0.2
+    assert invocation["admission_options"]["stop"] == ["end"]
+    assert invocation["admission_options"]["stop_token_ids"] == [17]
+    assert invocation["admission_options"]["seed"] == 123
+    assert invocation["admission_options"]["grammar_constrained"] is True
+    assert "compiled_grammar" not in invocation["admission_options"]
+    assert params.compiled_grammar is grammar

@@ -98,6 +98,11 @@ transactional migration rollback and physical/count/age retention.
 idempotence/regression, unavailable counts, capture-off fences, scalar evidence
 through queue loss and safe admission-option filtering. The engine integration
 check invokes the actual prefill callback without re-tokenizing prepared input.
+`tests/test_activity_invocations.py` checks structured multi-invocation counts,
+frozen/bounded options, coalescing, observation-ended state, resource admission,
+writer failure, clear/delete/off fences and transactional v1/v2 migration. Actual
+core fixtures additionally check default/overridden parameters without loading
+a model or retaining grammar objects.
 `tests/test_activity_routes.py` covers actual admin authorization, bounded reads,
 pagination/filtering, snapshot consistency, reconnect/session revalidation,
 reader cancellation and stream admission. `tests/test_activity_transport.py`
@@ -133,10 +138,10 @@ inference keys do not grant access:
 | `/status` | Capture health and Activity settings, without local paths |
 | `/requests` | Metadata-only keyset pages; active/recent, model, source, state and time filters |
 | `/facets` | Bounded model and historical credential-label choices |
-| `/requests/{id}` | Metadata, retained representation indexes and a version fingerprint |
+| `/requests/{id}` | Metadata, bounded invocation details/options, retained representation indexes and version |
 | `/requests/{id}/content` | Bounded raw byte ranges for a representation/invocation |
 | `/requests/{id}/attachments/{attachment_id}` | Lazy, bounded-streamed original PNG/JPEG/WebP bytes |
-| `/events` | Committed metadata snapshots with optional selected-request indexes |
+| `/events` | Committed metadata snapshots with selected-request indexes and compact invocation summaries |
 
 Content is never embedded in list or live snapshot responses. Content ranges
 use UTF-8 byte offsets and `application/octet-stream`; the response supplies
@@ -283,12 +288,54 @@ observed. First observed token/text times use monotonic elapsed time since
 Activity receipt, persisted as durations. They describe producer updates and
 are not HTTP first-byte latency or a measurement of GPU execution time.
 
-Invocation events include a bounded subset of scalar sampling values at core
-admission, prepared-input counts, terminal outcome and the observed finish reason.
-This is not a complete effective-options snapshot. Detail responses explicitly
-report the evidence sources and retained representations. Engine-producer text
-is still not universally pre-parser text; unobserved backends and later sparse/
+Invocation events retain the scalar sampling subset for raw evidence inspection.
+Structured details now appear in `invocations` on the request-detail endpoint:
+independent engine ID mapping, observed model ID at admission, phase/outcome,
+prepared count/text availability, generated count, first token/text offsets,
+admission/prepared/prefill/end offsets and finish reason. Time offsets use the
+request receipt as their common monotonic origin. A finished observation with no
+retained engine terminal update becomes `observation_ended`, preserving the last
+observed phase without inventing an engine outcome. Missing or stale detailed
+snapshots remain possible; request-wide protected counters are separate.
+
+Admission options cover named CPU scalars in `SamplingParams`, bounded stop lists,
+and booleans for grammar/logits-observer presence. Objects are never copied or
+serialized. Stop strings retain at most 32 entries and 1,024 combined characters;
+stop token IDs retain at most 32 entries. Invalid/oversized known values are
+listed in `omitted_option_fields`. Options describe core admission, not final
+scheduler/kernel configuration, later SpecPrefill defaults, compiled grammar
+content or all optional-engine parameters. Actual defaults and overrides are
+observed without re-tokenization. Universal pre-parser output and later sparse/
 requeue/attention transformations remain qualification work.
+
+Schema 3 transactionally adds request-owned invocation rows to schemas 1/2. Older
+history remains readable before migration; newer schemas are preserved/refused.
+Each of at most 256 rows has at most 16 KiB of JSON. Updates are immutable, encoded
+and merged only on the worker, and share the byte/item/request capture budgets.
+A conservative 128 KiB queue reservation covers each snapshot and writer merge
+buffers; live observer state reserves 2 KiB against total observer memory until the
+observer object is released, including after clear/off/persistence failure.
+New capture/content/submitted-snapshot admission includes those live reservations.
+When global memory cannot admit another observer, it records an explicit gap.
+Request-size admission conservatively counts all accepted update traffic even
+though storage keeps only the latest row. Stored captured-byte totals count the
+resident row, adjusted transactionally on replacement. Retention/deletion cascade.
+
+Live output snapshots coalesce to at most one per 500 ms per invocation, sampled
+when output arrives; lifecycle boundaries attempt immediate snapshots. There is
+no per-token SQLite write for invocation details. Queue refusal records a gap and
+does not erase existing protected request counters or cancel inference. Detailed
+terminal state is budgeted rather than promised lossless. The existing producer
+text path has its own content cadence; controlled serving overhead is unqualified.
+See [the snapshot decision](../decisions/request-activity-invocation-snapshots.md).
+
+SSE includes only compact phase/count/timing summaries and declares
+`invocation_options_included:false`; full detail declares it true. Engine IDs,
+stop strings and option payloads are excluded from SSE/list delivery. Detail reads
+use the same short transaction as request/index metadata, without reading content
+BLOBs, and have a fixed 256-row/16 KiB-per-row ceiling. The browser invocation
+selector/options presentation remains follow-up work; structured API metadata is
+implemented now.
 
 ## Backend and evidence coverage
 
@@ -451,8 +498,9 @@ of model/raw/JSON evidence modes. Rendered-browser behavior remains unqualified.
 
 ## Limitations and remaining work
 
-- Complete per-invocation query summaries, full effective options, richer timing/
-  cache/paused-state evidence and all backend/endpoint qualification. Backend
+- Add inspector invocation selection/options presentation and qualify detailed
+  snapshots under load. Final backend options, richer cache/paused-state evidence
+  and all backend/endpoint qualification remain. Backend
   resolution/evidence labels are implemented; they are not qualification badges. Current
   generation hooks are covered by mock-model checks, not real-model validation.
 - `raw_output` currently means engine-producer text before API formatting.

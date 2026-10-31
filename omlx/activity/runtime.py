@@ -7,6 +7,7 @@ import math
 import threading
 import time
 import uuid
+import weakref
 from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
@@ -107,10 +108,22 @@ class RequestCapture:
             if self._next_invocation >= 256 or self._api_outcome is not None:
                 self.recorder.gap(self.handle, "invocation_limit_or_closed_request")
                 return None
+            if not self.recorder.reserve_invocation(self.handle):
+                return None
             self._next_invocation += 1
             self._active += 1
             result = InvocationCapture(self, str(self._next_invocation), prepared_text)
             self.recorder.metrics(self.handle, counts={"observed_invocations": 1})
+            admitted_ms = (time.monotonic() - self._started) * 1000
+            self.recorder.invocation_snapshot(
+                self.handle,
+                result.id,
+                state="admitted",
+                since_receipt_ms=admitted_ms,
+                admitted_at_ms=admitted_ms,
+                engine_request_id=engine_request_id,
+                options=options or (),
+            )
         self.text(
             "events",
             json.dumps(
@@ -197,17 +210,35 @@ class InvocationCapture:
         self._counter_seen = False
         self._counter_regressed = False
         self._prefill_seen = False
+        self._last_snapshot = float("-inf")
+        self._first_token_ms = None
+        self._first_text_ms = None
+        weakref.finalize(self, request.recorder.release_invocation)
 
     def _event(self, kind, **values):
+        elapsed = round((time.monotonic() - self.request._started) * 1000, 3)
+        timing = {
+            "prepared": "prepared_at_ms",
+            "prefilling": "prefill_at_ms",
+            "invocation_end": "finished_at_ms",
+        }.get(kind)
+        self.request.recorder.invocation_snapshot(
+            self.request.handle,
+            self.id,
+            state={"prepared": "queued", "prefilling": "prefilling"}.get(
+                kind, values.get("outcome", kind)
+            ),
+            since_receipt_ms=elapsed,
+            **({timing: elapsed} if timing else {}),
+            **values,
+        )
         self.request.text(
             "events",
             json.dumps(
                 {
                     "type": kind,
                     "invocation_id": self.id,
-                    "since_receipt_ms": round(
-                        (time.monotonic() - self.request._started) * 1000, 3
-                    ),
+                    "since_receipt_ms": elapsed,
                     **values,
                 }
             )
@@ -254,6 +285,7 @@ class InvocationCapture:
                     self.request.recorder.metrics(
                         self.request.handle, counts={"prefilling_invocations": 1}
                     )
+                    self._event("prefilling")
                 self.request.recorder.state(self.request.handle, "prefilling")
 
     def output(self, output):
@@ -279,14 +311,26 @@ class InvocationCapture:
                 self._output_tokens = max(tokens, self._output_tokens)
                 if tokens:
                     times["first_observed_token_ms"] = elapsed
+                    if self._first_token_ms is None:
+                        self._first_token_ms = elapsed
             if output.new_text and not output.error:
                 self.request.text("raw_output", output.new_text, invocation_id=self.id)
                 times["first_observed_text_ms"] = elapsed
+                if self._first_text_ms is None:
+                    self._first_text_ms = elapsed
             if (known_counter and tokens) or (output.new_text and not output.error):
                 self.request.recorder.state(self.request.handle, "generating")
             self.request.recorder.metrics(
                 self.request.handle, counts=counts, times=times
             )
+            if (
+                elapsed - self._last_snapshot >= 500
+                and not output.finished
+                and (
+                    (known_counter and tokens) or (output.new_text and not output.error)
+                )
+            ):
+                self._snapshot_output(elapsed)
         if output.finished:
             outcome = (
                 "cancelled"
@@ -296,6 +340,19 @@ class InvocationCapture:
                 else "completed"
             )
             self.end(outcome, finish_reason=output.finish_reason)
+
+    def _snapshot_output(self, elapsed):
+        self._last_snapshot = elapsed
+        self.request.recorder.invocation_snapshot(
+            self.request.handle,
+            self.id,
+            state="generating",
+            since_receipt_ms=elapsed,
+            generated_tokens=self._output_tokens if self._counter_seen else None,
+            first_token_ms=self._first_token_ms,
+            first_text_ms=self._first_text_ms,
+            counter_regressed=self._counter_regressed,
+        )
 
     def end(self, outcome="interrupted", *, finish_reason=None):
         with self.request._lock:
@@ -312,6 +369,9 @@ class InvocationCapture:
                 finish_reason=finish_reason[:128]
                 if isinstance(finish_reason, str)
                 else None,
+                first_token_ms=self._first_token_ms,
+                first_text_ms=self._first_text_ms,
+                counter_regressed=self._counter_regressed,
             )
             final = self.request._final_outcome()
         if final is not None:

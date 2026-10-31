@@ -37,6 +37,7 @@ from typing import (
 
 import mlx.core as mx
 
+from .activity.invocations import SAMPLING_FIELDS
 from .activity.runtime import current_capture
 from .custom_kernels.quant_matmul.fast import share_command_queue
 from .exceptions import (
@@ -793,12 +794,14 @@ class EngineCore:
             observation = capture.invocation(
                 request_id,
                 prepared_text=activity_prompt,
-                options=tuple(
-                    (name, getattr(sampling_params, name, None))
-                    for name in (
-                        "max_tokens", "temperature", "top_p", "top_k", "min_p",
-                        "repetition_penalty", "presence_penalty", "frequency_penalty",
-                        "seed", "thinking_budget",
+                options=(
+                    tuple(
+                        (name, getattr(sampling_params, name, None))
+                        for name in SAMPLING_FIELDS + ("stop", "stop_token_ids")
+                    )
+                    + (
+                        ("grammar_constrained", sampling_params.compiled_grammar is not None),
+                        ("logits_observer_present", sampling_params.logits_observer is not None),
                     )
                 ),
             )

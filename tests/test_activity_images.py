@@ -280,7 +280,7 @@ def test_schema_one_upgrade_preserves_existing_text_and_is_transactional(tmp_pat
                 sqlite3.SQLITE_DENY
                 if action == sqlite3.SQLITE_PRAGMA
                 and first == "user_version"
-                and second == "2"
+                and second == str(SCHEMA_VERSION)
                 else sqlite3.SQLITE_OK
             )
         )

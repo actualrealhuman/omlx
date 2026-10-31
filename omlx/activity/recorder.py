@@ -14,6 +14,12 @@ from pathlib import Path
 from .config import ActivitySettings
 from .coverage import BACKENDS
 from .images import prepare_image
+from .invocations import (
+    INVOCATION_MEMORY_BYTES,
+    MAX_INVOCATION_BYTES,
+    MAX_INVOCATIONS,
+    InvocationSnapshot,
+)
 from .snapshot import SemanticSnapshot, snapshot_request
 from .store import (
     MAX_CHUNK_BYTES,
@@ -50,10 +56,12 @@ class _Chunk:
     handle: CaptureHandle
     representation: str
     invocation_id: str
-    data: bytes | str | tuple[int, ...] | SemanticSnapshot
+    data: bytes | str | tuple[int, ...] | SemanticSnapshot | InvocationSnapshot
 
     @property
     def estimated_bytes(self):
+        if isinstance(self.data, InvocationSnapshot):
+            return MAX_INVOCATION_BYTES
         if isinstance(self.data, SemanticSnapshot):
             return self.data.estimated_bytes
         if isinstance(self.data, str):
@@ -64,6 +72,8 @@ class _Chunk:
 
     @property
     def cost(self):
+        if isinstance(self.data, InvocationSnapshot):
+            return INVOCATION_MEMORY_BYTES + _CHUNK_OVERHEAD
         if isinstance(self.data, SemanticSnapshot):
             return self.data.memory_bytes + _CHUNK_OVERHEAD
         if isinstance(self.data, tuple):
@@ -74,7 +84,9 @@ class _Chunk:
 
     def encoded_chunks(self):
         """Encode only on the worker, with a bounded temporary buffer."""
-        if isinstance(self.data, SemanticSnapshot):
+        if isinstance(self.data, InvocationSnapshot):
+            yield self.data.encode()
+        elif isinstance(self.data, SemanticSnapshot):
             yield from self.data.encoded_chunks(MAX_CHUNK_BYTES)
         elif isinstance(self.data, bytes):
             yield self.data
@@ -112,7 +124,9 @@ class ActivityRecorder:
         self.path = Path(path)
         self.settings = settings or ActivitySettings()
         self.reader = ActivityReader(self.path)
-        self._lock = threading.Lock()
+        # Object finalizers can run during allocations while this thread owns
+        # the ledger lock; releasing an observer reservation must be reentrant.
+        self._lock = threading.RLock()
         self._wake = threading.Event()
         self._ready = threading.Event()
         self._epoch = uuid.uuid4().hex
@@ -122,6 +136,7 @@ class ActivityRecorder:
             deque()
         )
         self._pending_bytes = 0
+        self._invocation_live_bytes = 0
         self._pending_count = 0
         self._freezing_bytes = 0
         self._freezing_count = 0
@@ -149,6 +164,7 @@ class ActivityRecorder:
                 "error": self._error,
                 "active_captures": len(self._pending),
                 "pending_bytes": self._pending_bytes,
+                "invocation_live_bytes": self._invocation_live_bytes,
                 "dropped_events": self._dropped_events,
                 "skipped_requests": self._skipped_requests,
             }
@@ -178,6 +194,10 @@ class ActivityRecorder:
                 or not self.settings.enabled
                 or self._error
                 or len(self._pending) >= self.settings.max_active_requests
+                or self._pending_bytes
+                + self._invocation_live_bytes
+                + (len(self._pending) + 1) * 8192
+                > self.settings.max_memory_bytes
             ):
                 self._skipped_requests += 1
                 return None
@@ -243,7 +263,13 @@ class ActivityRecorder:
                 or pending.metadata["finished_at"] is not None
             ):
                 return False
-            reservation = self.settings.max_pending_bytes - self._pending_bytes
+            reservation = min(
+                self.settings.max_pending_bytes - self._pending_bytes,
+                self.settings.max_memory_bytes
+                - self._pending_bytes
+                - self._invocation_live_bytes
+                - len(self._pending) * 8192,
+            )
             logical = self.settings.max_request_bytes - pending.accepted_bytes
             if (
                 reservation < 8448
@@ -308,10 +334,49 @@ class ActivityRecorder:
         self._wake.set()
         return True
 
+    def reserve_invocation(self, handle):
+        with self._lock:
+            pending = self._lookup(handle)
+            if (
+                pending is None
+                or not self.settings.enabled
+                or pending.metadata["finished_at"] is not None
+            ):
+                return False
+            if (
+                self._pending_bytes
+                + self._invocation_live_bytes
+                + 2048
+                + len(self._pending) * 8192
+                > self.settings.max_memory_bytes
+            ):
+                self._gap(pending, "invocation_memory_capacity")
+                self._wake.set()
+                return False
+            self._invocation_live_bytes += 2048
+        return True
+
+    def release_invocation(self):
+        # A live engine may still own this small observer after clear/off/error.
+        with self._lock:
+            self._invocation_live_bytes -= 2048
+
+    def invocation_snapshot(self, handle, invocation_id, **values):
+        if (
+            type(invocation_id) is not str
+            or not invocation_id.isascii()
+            or not invocation_id.isdecimal()
+            or len(invocation_id) > 3
+            or not 1 <= int(invocation_id) <= MAX_INVOCATIONS
+            or str(int(invocation_id)) != invocation_id
+        ):
+            return False
+        return self._offer(handle, "invocation", values, invocation_id=invocation_id)
+
     def _offer(self, handle, representation, data, *, invocation_id):
         if handle is None or not self.settings.enabled or self._closed:
             return False
-        if representation not in REPRESENTATIONS:
+        if representation not in REPRESENTATIONS and representation != "invocation":
             return False
         if not isinstance(invocation_id, str) or len(invocation_id) > 128:
             return False
@@ -323,7 +388,12 @@ class ActivityRecorder:
                 or pending.metadata["finished_at"] is not None
             ):
                 return False
-            if type(data) in (list, tuple):
+            if representation == "invocation":
+                logical_size, cost = (
+                    MAX_INVOCATION_BYTES,
+                    INVOCATION_MEMORY_BYTES + _CHUNK_OVERHEAD,
+                )
+            elif type(data) in (list, tuple):
                 logical_size, cost = (
                     len(data) * 12 + 2,
                     len(data) * 40 + _CHUNK_OVERHEAD,
@@ -342,12 +412,19 @@ class ActivityRecorder:
             elif (
                 self._pending_count >= _MAX_PENDING_CHUNKS
                 or self._pending_bytes + cost > self.settings.max_pending_bytes
+                or self._pending_bytes
+                + cost
+                + self._invocation_live_bytes
+                + len(self._pending) * 8192
+                > self.settings.max_memory_bytes
             ):
                 reason = "capture_queue_full"
             if reason:
                 self._gap(pending, reason)
                 self._wake.set()
                 return False
+            if representation == "invocation":
+                data = InvocationSnapshot.freeze(data, pending.metadata["model_id"])
             chunk = _Chunk(
                 handle,
                 representation,
@@ -657,12 +734,19 @@ class ActivityRecorder:
                         saved, encoded_bytes = True, 0
                         for data in chunk.encoded_chunks():
                             encoded_bytes += len(data)
-                            if not store.append(
-                                chunk.handle.request_id,
-                                chunk.invocation_id,
-                                chunk.representation,
-                                data,
-                            ):
+                            accepted = (
+                                store.save_invocation(
+                                    chunk.handle.request_id, chunk.invocation_id, data
+                                )
+                                if isinstance(chunk.data, InvocationSnapshot)
+                                else store.append(
+                                    chunk.handle.request_id,
+                                    chunk.invocation_id,
+                                    chunk.representation,
+                                    data,
+                                )
+                            )
+                            if not accepted:
                                 saved = False
                                 break
                         # The loop variable otherwise retains the final buffer.

@@ -10,8 +10,9 @@ from pathlib import Path
 
 from .config import ActivitySettings
 from .coverage import evidence_coverage
+from .invocations import MAX_INVOCATION_BYTES, MAX_INVOCATIONS
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 MAX_CHUNK_BYTES = 256 * 1024
 MAX_READ_BYTES = 1024 * 1024
 TERMINAL_STATES = frozenset(
@@ -49,7 +50,7 @@ class ActivityStore:
         self.db = db
         try:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, 1, SCHEMA_VERSION):
+            if version not in (0, 1, 2, SCHEMA_VERSION):
                 raise ValueError(
                     "Unsupported Activity schema; existing store preserved"
                 )
@@ -104,7 +105,13 @@ class ActivityStore:
                     data BLOB,
                     PRIMARY KEY(request_id, attachment_id)
                 );
-                PRAGMA user_version=2;
+                CREATE TABLE IF NOT EXISTS invocations (
+                    request_id TEXT NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+                    invocation_id TEXT NOT NULL,
+                    metadata TEXT NOT NULL,
+                    PRIMARY KEY(request_id, invocation_id)
+                );
+                PRAGMA user_version=3;
                 COMMIT;
                 """
             )
@@ -197,6 +204,50 @@ class ActivityStore:
             self.db.execute(
                 "UPDATE requests SET captured_bytes=captured_bytes+? WHERE id=?",
                 (len(data), request_id),
+            )
+        return True
+
+    def save_invocation(self, request_id, invocation_id, data):
+        """Merge a bounded immutable update, never recreating a deleted request."""
+        if (
+            type(invocation_id) is not str
+            or not invocation_id.isascii()
+            or not invocation_id.isdecimal()
+            or len(invocation_id) > 3
+            or not 1 <= int(invocation_id) <= MAX_INVOCATIONS
+            or str(int(invocation_id)) != invocation_id
+        ):
+            return False
+        if not data or len(data) > MAX_INVOCATION_BYTES:
+            raise ValueError("Activity invocation update outside bounds")
+        if not self._make_room(MAX_INVOCATION_BYTES * 2 + 16384):
+            return False
+        with self.db:
+            request = self.db.execute(
+                "SELECT captured_bytes FROM requests WHERE id=?", (request_id,)
+            ).fetchone()
+            if request is None:
+                return False
+            previous = self.db.execute(
+                "SELECT metadata FROM invocations WHERE request_id=? AND invocation_id=?",
+                (request_id, invocation_id),
+            ).fetchone()
+            record = json.loads(previous[0]) if previous else {}
+            record.update(json.loads(data))
+            encoded = json.dumps(record, ensure_ascii=True)
+            if len(encoded) > MAX_INVOCATION_BYTES:
+                return False
+            delta = len(encoded) - (len(previous[0]) if previous else 0)
+            if request[0] + delta > self.settings.max_request_bytes:
+                return False
+            self.db.execute(
+                "INSERT INTO invocations VALUES (?,?,?) ON CONFLICT(request_id,invocation_id) "
+                "DO UPDATE SET metadata=excluded.metadata",
+                (request_id, invocation_id, encoded),
+            )
+            self.db.execute(
+                "UPDATE requests SET captured_bytes=captured_bytes+? WHERE id=?",
+                (delta, request_id),
             )
         return True
 
@@ -331,6 +382,7 @@ class ActivityReader:
         try:
             if db.execute("PRAGMA user_version").fetchone()[0] not in (
                 1,
+                2,
                 SCHEMA_VERSION,
             ):
                 raise ValueError("Unsupported Activity history schema")
@@ -419,7 +471,7 @@ class ActivityReader:
         args.append(limit)
         return [self._record(row) for row in db.execute(query, args)]
 
-    def _detail(self, db, request_id):
+    def _detail(self, db, request_id, *, invocation_summary=False):
         row = db.execute("SELECT * FROM requests WHERE id=?", (request_id,)).fetchone()
         if row is None:
             return None
@@ -442,6 +494,11 @@ class ActivityReader:
             )
         ]
         result["attachments"] = self._attachments(db, request_id)
+        result["invocations"] = self._invocations(
+            db, request_id, result, summary=invocation_summary
+        )
+        result["invocation_detail_scope"] = "budgeted_snapshots_may_have_gaps"
+        result["invocation_options_included"] = not invocation_summary
         result["producer_output_layer"] = (
             "engine output before API formatting; native engine parsers may already have transformed text"
         )
@@ -471,6 +528,45 @@ class ActivityReader:
         result["version"] = hashlib.sha256(
             json.dumps(result, sort_keys=True, ensure_ascii=True).encode()
         ).hexdigest()
+        return result
+
+    @staticmethod
+    def _invocations(db, request_id, request, *, summary=False):
+        if db.execute("PRAGMA user_version").fetchone()[0] < 3:
+            return []
+        result = []
+        for row in db.execute(
+            "SELECT invocation_id,metadata FROM invocations WHERE request_id=? "
+            "AND length(metadata)<=? ORDER BY length(invocation_id),invocation_id LIMIT ?",
+            (request_id, MAX_INVOCATION_BYTES, MAX_INVOCATIONS),
+        ):
+            record = json.loads(row["metadata"])
+            record["id"] = row["invocation_id"]
+            record["scope"] = "observed_scheduler_invocation_snapshot"
+            if (
+                request["finished_at"] is not None
+                and record.get("state") not in TERMINAL_STATES
+            ):
+                record["last_observed_state"] = record.get("state")
+                record["state"] = "observation_ended"
+            if summary:
+                record = {
+                    key: value
+                    for key, value in record.items()
+                    if key
+                    in {
+                        "id",
+                        "state",
+                        "last_observed_state",
+                        "input_tokens",
+                        "generated_tokens",
+                        "first_token_ms",
+                        "first_text_ms",
+                        "counter_regressed",
+                        "scope",
+                    }
+                }
+            result.append(record)
         return result
 
     @staticmethod
@@ -550,7 +646,9 @@ class ActivityReader:
                 "recent": recent[:50],
                 "active_more": len(active) > 50,
                 "recent_more": len(recent) > 50,
-                "detail": self._detail(db, request_id) if request_id else None,
+                "detail": self._detail(db, request_id, invocation_summary=True)
+                if request_id
+                else None,
             }
         finally:
             db.close()
