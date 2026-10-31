@@ -204,6 +204,15 @@ authorization is rechecked throughout a stream; `authorization_lost`,
 `unavailable` and `reconnect` are explicit terminal stream events. Data responses
 are marked no-store. This is not a lossless event-log/replay contract.
 
+An unused bounded replay-buffer component is present in `omlx/activity/replay.py`.
+It retains immutable metadata frames with explicit byte/count/TTL limits and
+returns one contiguous event or a resynchronization result. Its existence does
+not change the live delivery contract above: mutation/publication fencing and
+route/browser cursor integration remain required. Run its focused checks with
+`python -m unittest discover -s tests -p test_activity_replay.py -v`. See the
+[buffer decision](../decisions/request-activity-replay-buffer.md) for bounds and
+failure semantics.
+
 ## Submitted snapshot and media normalization
 
 Submitted input is frozen once before preprocessing into a bounded immutable
