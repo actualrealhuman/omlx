@@ -53,7 +53,7 @@ function render(reindex = false) {
     const start = Math.max(0, viewport.row - 10);
     const targetRow = search.target ? documentView.rowFor(search.target.key, search.target.offset) : -1;
     const current = documentView.sections.find(s => viewport.row >= s.start && viewport.row < s.start + s.count + 1);
-    postMessage({type: 'render', rows: documentView.window(start, viewport.count).map(line => ({...line, match: line.row === targetRow})), total: documentView.rows,
+    postMessage({type: 'render', mode, rows: documentView.window(start, viewport.count).map(line => ({...line, match: line.row === targetRow})), total: documentView.rows,
         row: viewport.row, loading, limited, bytes,
         projectionState: projectionState(), projectionIncomplete: projectionIncomplete(),
         outputBytes: [...sources.values()].filter(source => source.item.representation === 'raw_output' || (['submitted', 'parsed_output', 'api_response'].includes(mode) && source.item.representation === 'api_response')).reduce((sum, source) => sum + source.offset, 0),
@@ -134,6 +134,16 @@ self.onmessage = ({data}) => {
     } else if (data.type === 'export') {
         const text = documentView.sections.map(s => `${s.label}\n${s.text}`).join('\n\n');
         const blob = new Blob([text], {type: 'text/plain;charset=utf-8'});
-        postMessage({type: 'export', blob, action: data.action, incomplete: loading || limited || !!detail?.capture_gaps || projectionIncomplete()});
+        postMessage({type: 'export', blob, action: data.action, requestToken: data.requestToken,
+            incomplete: loading || limited || !!detail?.capture_gaps || projectionIncomplete()});
+    } else if (data.type === 'export-section') {
+        const section = documentView.sections.find(item => item.key === data.sectionKey);
+        if (!section) {
+            postMessage({type: 'export_error', requestToken: data.requestToken, reason: 'section_unavailable'});
+            return;
+        }
+        const blob = new Blob([`${section.label}\n${section.text}`], {type: 'text/plain;charset=utf-8'});
+        postMessage({type: 'export', blob, action: 'copy-section', sectionKey: section.key,
+            requestToken: data.requestToken, incomplete: loading || limited || !!detail?.capture_gaps || projectionIncomplete()});
     }
 };

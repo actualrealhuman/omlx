@@ -132,12 +132,12 @@
             for (const s of this.sections) {
                 if (s.start >= end) break;
                 if (s.start + s.count < start) continue;
-                if (s.start >= start) result.push({row: s.start, key: `${s.key}:header`, role: s.role, header: true, text: s.label || s.role});
+                if (s.start >= start) result.push({row: s.start, key: `${s.key}:header`, sectionKey: s.key, role: s.role, header: true, text: s.label || s.role});
                 const first = Math.max(0, start - s.start - 1);
                 let offset = this.offset(s, first);
                 for (let i = first; i < s.count && s.start + 1 + i < end; i++) {
                     const next = nextBreak(s.text, offset, this.columns);
-                    result.push({row: s.start + 1 + i, key: `${s.key}:${i}`, role: s.role, text: s.text.slice(offset, next).replace(/\n$/, '')});
+                    result.push({row: s.start + 1 + i, key: `${s.key}:${i}`, sectionKey: s.key, role: s.role, text: s.text.slice(offset, next).replace(/\n$/, '')});
                     offset = next;
                 }
             }

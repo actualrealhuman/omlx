@@ -59,7 +59,7 @@
             <div x-show="selected &amp;&amp; !missing" class="activity-detail">
                 <header class="activity-detail-heading">
                     <button class="activity-back" @click="select('')" aria-label="{{ t('activity.back_to_requests') }}">←</button>
-                    <div class="activity-detail-title"><span class="activity-state badge" :data-state="detail?.state" x-text="stateLabel(detail?.state || 'received')"></span><h2 x-text="detail?.model_id || label('loading')"></h2><p><span x-text="detail?.source_name"></span> · <span class="activity-id" x-text="selected.slice(0, 12)"></span></p></div>
+                    <div class="activity-detail-title"><span class="activity-state badge" :data-state="detail?.state" x-text="stateLabel(detail?.state || 'received')"></span><h2 x-text="detail?.model_id || label('loading')"></h2><p><span x-text="detail?.source_name"></span> · <span class="activity-id" :title="selected" x-text="selected"></span><span class="activity-id-actions"><button type="button" class="activity-inline-copy" @click="copyRequestInfo('id')" :disabled="exporting || authorizationLost" :title="selected" :aria-label="label('copy_request_id') + ' ' + selected" x-text="label('copy_id')"></button><button type="button" class="activity-inline-copy" @click="copyRequestInfo('link')" :disabled="exporting || authorizationLost" :title="selected" :aria-label="label('copy_request_link') + ' ' + selected" x-text="label('copy_link')"></button></span></p></div>
                     <dl class="activity-metrics"><div><dt>{{ t('activity.received') }}</dt><dd x-text="time(detail?.received_at)"></dd></div><div><dt>{{ t('activity.duration') }}</dt><dd x-text="duration(detail)"></dd></div><div><dt>{{ t('activity.retained') }}</dt><dd x-text="bytes(detail?.captured_bytes)"></dd></div></dl>
                 </header>
                 <dl class="activity-evidence-metrics">
@@ -89,9 +89,10 @@
                     </select>
                     <button @click="confirmRemoval('delete')" :disabled="controlBusy">{{ t('activity.delete_request') }}</button>
                     <button x-show="detail?.attachments?.length" @click="toggleAttachments()" :aria-expanded="attachmentsOpen" aria-controls="activity-images" x-text="label('attachments') + ' (' + (detail?.attachments?.length || 0) + ')'"></button>
-                    <button @click="exportView('copy')" :disabled="exporting || loading || !total">{{ t('activity.copy') }}</button>
-                    <button @click="exportView()" :disabled="exporting || loading || !total" x-text="label(exporting ? 'exporting' : 'download')"></button>
+                    <button @click="exportView('copy')" :disabled="exporting || authorizationLost || loading || !total" x-text="label(exporting ? 'exporting' : 'copy')"></button>
+                    <button @click="exportView()" :disabled="exporting || authorizationLost || loading || !total" x-text="label(exporting ? 'exporting' : 'download')"></button>
                 </div>
+                <p x-show="exportError" role="status" class="activity-export-error" x-text="exportError"></p>
                 <p class="activity-fidelity" x-text="label(mode === 'model' ? 'model_fidelity' : mode === 'submitted' ? 'submitted_fidelity' : 'evidence_fidelity')"></p>
                 <p x-show="['submitted', 'parsed_output'].includes(mode)" class="activity-fidelity"><span x-text="label('projection.' + projectionState)"></span> · {{ t('activity.projection_fidelity') }}</p>
                 <p x-show="detail?.submitted_normalized" class="activity-fidelity">{{ t('activity.media_normalized') }}</p>
@@ -113,7 +114,7 @@
                     <aside id="activity-outline" x-show="outlineOpen" class="activity-outline" aria-label="{{ t('activity.outline') }}"><template x-for="section in outline" :key="section.key"><button @click="jump(section.row)" :title="section.label" x-text="section.label"></button></template><p x-show="outlineTruncated">{{ t('activity.outline_limited') }}</p></aside>
                     <div class="activity-document" x-ref="contextViewport" @scroll.passive="onScroll()" tabindex="0" role="region" aria-label="{{ t('activity.context') }}" @keydown.home.ctrl.prevent="jump(0)" @keydown.end.ctrl.prevent="followOutput()">
                         <div :style="'height:' + scrollHeight() + 'px'" class="activity-document-height">
-                            <template x-for="line in rows" :key="line.key"><div class="activity-line" :class="{'activity-line-heading': line.header, 'activity-line-match': line.match}" :data-role="line.role" :style="'transform:translateY(' + lineTop(line) + 'px)'" x-text="line.text"></div></template>
+                            <template x-for="line in rows" :key="line.key"><div class="activity-line" :class="{'activity-line-heading': line.header, 'activity-line-match': line.match}" :data-role="line.role" :style="'transform:translateY(' + lineTop(line) + 'px)'"><span x-text="line.text"></span><button type="button" class="activity-inline-copy" x-show="line.header" @click.stop="exportSection(line.sectionKey, line.copyContext)" :disabled="exporting || authorizationLost || loading" :aria-label="label('copy_section') + ' ' + line.text" :title="line.text" x-text="label('copy_section_short')"></button></div></template>
                         </div>
                         <div x-show="!total" class="activity-document-empty" x-text="label(loading ? 'loading_context' : 'representation_unavailable')"></div>
                     </div>

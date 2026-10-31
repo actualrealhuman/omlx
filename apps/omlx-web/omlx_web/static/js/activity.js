@@ -7,16 +7,16 @@
     function activityInspector() {
         let stream, worker, resize, controller, retry, searchTimer, frame, invocationController;
         let invocationGeneration = 0;
-        let generation = 0, activation = 0, loadedVersion = '', stopped = true, lastFacets = 0;
+        let generation = 0, activation = 0, loadedVersion = '', stopped = true, lastFacets = 0, exportSequence = 0;
         const positions = new Map();
         const label = key => root.t(`activity.${key}`);
         return {
             active: [], recent: [], older: [], detail: null, selected: '', health: {}, facets: {models: [], sources: []},
-            modelFilter: '', sourceFilter: '', connection: 'connecting', error: '', missing: false,
+            modelFilter: '', sourceFilter: '', connection: 'connecting', error: '', missing: false, authorizationLost: false,
             mode: 'submitted', follow: true, loading: false, limited: false, rows: [], outline: [], total: 0,
             outlineOpen: false, outlineTruncated: false, current: null, row: 0, visibleRows: 25, columns: 100,
             searchQuery: '', searchResult: {count: 0, match: 0, marks: []}, activeMore: false, recentMore: false,
-            pageCursor: '', pageScope: 'recent', paging: false, exporting: false, newOutput: false, viewReady: false, outputBytes: 0,
+            pageCursor: '', pageScope: 'recent', paging: false, exporting: false, exportError: '', exportContext: null, newOutput: false, viewReady: false, outputBytes: 0,
             settingsOpen: false, settingsDraft: {enabled: false, retain_images: true, max_requests: 1000, max_age_days: 7, storageGiB: 5},
             attachmentsOpen: false, previewId: '', previewFailed: false,
             projectionState: 'waiting', projectionIncomplete: false,
@@ -46,6 +46,7 @@
                     this.attachmentsOpen = false; this.previewId = '';
                     this.resetInvocationDetail();
                     this.exporting = false;
+                    this.exportContext = null;
                     stopped = true; generation++; activation++; stream?.close(); stream = null;
                     worker?.terminate(); worker = null; controller?.abort();
                     clearTimeout(retry); clearTimeout(searchTimer); cancelAnimationFrame(frame);
@@ -59,6 +60,7 @@
                 try {
                     const status = await this.read('/status');
                     if (stopped || token !== activation) return;
+                    this.authorizationLost = false;
                     this.health = status.health;
                     this.configVersion = status.config_version || '';
                     await this.loadFacets();
@@ -136,6 +138,7 @@
                     if (stream !== current || stopped) return;
                     try {
                         const snapshot = JSON.parse(event.data);
+                        this.authorizationLost = false;
                         this.connection = 'live'; this.error = '';
                         this.active = snapshot.active; this.recent = snapshot.recent;
                         this.activeMore = snapshot.active_more; this.recentMore = snapshot.recent_more;
@@ -145,7 +148,7 @@
                             this.missing = !snapshot.detail;
                             this.detail = snapshot.detail;
                             if (snapshot.detail && snapshot.detail.id === this.selected) this.inspect(snapshot.detail);
-                            else if (!snapshot.detail) { this.resetInvocationDetail(); this.attachmentsOpen = false; this.previewId = ''; generation++; worker?.terminate(); worker = null; loadedVersion = ''; this.rows = []; this.outline = []; this.current = null; this.total = 0; }
+                            else if (!snapshot.detail) { this.resetInvocationDetail(); this.exportContext = null; this.exporting = false; this.exportError = ''; this.attachmentsOpen = false; this.previewId = ''; generation++; worker?.terminate(); worker = null; loadedVersion = ''; this.rows = []; this.outline = []; this.current = null; this.total = 0; }
                         }
                         this.loadFacets().catch(() => {});
                     } catch (_) { this.error = label('invalid_snapshot'); }
@@ -153,8 +156,8 @@
                 current.addEventListener('resync_required', () => { this.connection = 'connecting'; });
                 for (const type of ['reconnect', 'unavailable', 'authorization_lost']) current.addEventListener(type, () => {
                     if (stream !== current) return;
-                    current.close(); this.connection = 'disconnected';
-                    if (type === 'authorization_lost') { this.resetInvocationDetail(); this.error = label('sign_in'); this.attachmentsOpen = false; this.previewId = ''; }
+                    current.close(); stream = null; this.connection = 'disconnected';
+                    if (type === 'authorization_lost') { this.authorizationLost = true; this.resetInvocationDetail(); this.exportContext = null; this.exporting = false; this.exportError = label('sign_in'); this.error = label('sign_in'); this.attachmentsOpen = false; this.previewId = ''; }
                     else { if (type === 'unavailable') this.error = label('unavailable'); retry = setTimeout(() => this.connect(), 3000); }
                 });
                 current.onerror = () => { if (stream === current) this.connection = 'reconnecting'; };
@@ -173,6 +176,7 @@
                 }
                 generation++; worker?.terminate(); worker = null; loadedVersion = '';
                 this.selected = id; this.detail = null; this.missing = false; this.error = '';
+                this.exportContext = null; this.exporting = false; this.exportError = '';
                 this.attachmentsOpen = false; this.previewId = ''; this.previewFailed = false;
                 this.rows = []; this.outline = []; this.total = 0; this.loading = !!id;
                 this.current = null; this.viewReady = false; this.outputBytes = 0; this.exporting = false;
@@ -200,16 +204,18 @@
                     worker.onmessage = ({data}) => {
                         if (token !== generation || stopped) return;
                         if (data.type === 'error') { this.error = data.message; this.loading = false; return; }
-                        if (data.type === 'export') { this.saveExport(data); return; }
+                        if (data.type === 'export' || data.type === 'export_error') { this.saveExport(data); return; }
                         if (data.type !== 'render') return;
+                        if (data.mode !== undefined && data.mode !== this.mode) return;
                         if (!this.follow && this.viewReady && data.outputBytes > this.outputBytes) this.newOutput = true;
                         const previous = new Map(this.rows.map(line => [line.key, line]));
+                        const copyContext = {...this.exportIdentity()};
                         this.rows = data.rows.map(line => {
                             const existing = previous.get(line.key);
-                            if (!existing) return line;
+                            if (!existing) return {...line, copyContext};
                             // Preserve mounted line identity and avoid rewriting unchanged
                             // text nodes when output elsewhere in the document grows.
-                            Object.assign(existing, line); return existing;
+                            Object.assign(existing, line, {copyContext}); return existing;
                         });
                         this.outline = data.outline; this.total = data.total;
                         this.outputBytes = data.outputBytes || 0;
@@ -265,6 +271,7 @@
                 generation++; worker?.terminate(); worker = null; loadedVersion = '';
                 this.rows = []; this.outline = []; this.total = 0; this.current = null; this.viewReady = false; this.outputBytes = 0;
                 this.loading = !!this.detail; this.newOutput = false; this.exporting = false;
+                this.exportContext = null; this.exportError = '';
                 if (this.detail) this.inspect(this.detail);
             },
             async toggleInvocationOptions() {
@@ -290,6 +297,7 @@
                 return this.invocationDetail?.admission_options ? JSON.stringify(this.invocationDetail.admission_options, null, 2) : label('invocation.unavailable');
             },
             toggleAttachments() {
+                if (this.authorizationLost) { this.attachmentsOpen = false; this.previewId = ''; return; }
                 this.attachmentsOpen = !this.attachmentsOpen; this.previewFailed = false;
                 this.previewId = this.attachmentsOpen ? (this.detail?.attachments?.find(item => item.status === 'retained') || this.detail?.attachments?.[0])?.id || '' : '';
             },
@@ -351,6 +359,7 @@
                 if (this.invocationId && !['model', 'raw_output', 'model_tokens'].includes(this.mode)) {
                     const mode = this.mode; this.chooseInvocation(''); this.mode = mode;
                 }
+                if (this.exportContext) { this.exportContext = null; this.exporting = false; this.exportError = label('selection_changed'); }
                 this.row = 0; this.follow = false; worker?.postMessage({type: 'mode', mode: this.mode});
             },
             jump(row) { this.follow = false; worker?.postMessage({type: 'jump', row}); },
@@ -384,22 +393,92 @@
                     this.pageCursor = data.next_cursor || '';
                 } catch (error) { this.error = error.message; } finally { this.paging = false; }
             },
-            exportView(action = 'download') { this.exporting = true; worker?.postMessage({type: 'export', action}); },
+            exportIdentity() {
+                return {requestId: this.selected, view: this.mode, invocationId: this.invocationId,
+                    epoch: generation};
+            },
+            exportSelectionIsCurrent(context) {
+                return !!context && !this.authorizationLost && !stopped && context.epoch === generation
+                    && context.requestId === this.selected && context.view === this.mode
+                    && context.invocationId === this.invocationId;
+            },
+            exportIsCurrent(context) {
+                return this.exportContext?.requestToken === context?.requestToken && this.exportSelectionIsCurrent(context);
+            },
+            beginExport(extra = {}) {
+                const requestToken = ++exportSequence;
+                const context = {...this.exportIdentity(), ...extra, requestToken};
+                this.exportContext = context; this.exporting = true; this.exportError = '';
+                return context;
+            },
+            exportView(action = 'download') {
+                if (!worker || !this.selected || stopped || this.authorizationLost) return;
+                const context = this.beginExport();
+                worker.postMessage({type: 'export', action, requestToken: context.requestToken});
+            },
+            exportSection(sectionKey, origin) {
+                if (!worker || !this.selected || stopped || this.authorizationLost || typeof sectionKey !== 'string' || !sectionKey) return;
+                if (!this.exportSelectionIsCurrent(origin)) { this.exportError = label('selection_changed'); return; }
+                const context = this.beginExport({sectionKey});
+                worker.postMessage({type: 'export-section', sectionKey, requestToken: context.requestToken});
+            },
+            async copyRequestInfo(kind) {
+                if (!this.selected || stopped || this.authorizationLost || !['id', 'link'].includes(kind)) return;
+                const context = this.beginExport(), id = context.requestId;
+                const text = kind === 'id' ? id : (() => {
+                    const url = new URL('/admin/dashboard', window.location.origin);
+                    url.searchParams.set('tab', 'activity'); url.searchParams.set('request', id);
+                    return url.href;
+                })();
+                await this.writeClipboardOrDownload(text, `activity-request-${kind}-${id}.txt`, context);
+            },
+            async writeClipboardOrDownload(text, filename, context) {
+                if (!this.exportIsCurrent(context)) return;
+                try {
+                    await navigator.clipboard.writeText(text);
+                    if (this.exportIsCurrent(context)) { this.exporting = false; this.exportContext = null; }
+                    return;
+                } catch (_) {
+                    if (!this.exportIsCurrent(context)) return;
+                    try { this.downloadBlob(new Blob([text], {type: 'text/plain;charset=utf-8'}), filename); }
+                    catch (error) { if (this.exportIsCurrent(context)) this.exportError = error.message || label('copy_failed'); }
+                    if (this.exportIsCurrent(context)) { this.exporting = false; this.exportContext = null; }
+                }
+            },
+            downloadBlob(blob, filename) {
+                const url = URL.createObjectURL(blob), link = document.createElement('a');
+                link.href = url; link.download = filename; link.click();
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+            },
             async saveExport(data) {
-                const token = generation;
-                if (data.action === 'copy') {
+                const context = this.exportContext;
+                if (!this.exportIsCurrent(context) || data.requestToken !== context.requestToken
+                    || (data.action === 'copy-section' && data.sectionKey !== context.sectionKey)) return;
+                if (data.type === 'export_error') {
+                    this.exportError = label(data.reason === 'section_unavailable' ? 'section_unavailable' : 'copy_failed');
+                    this.exporting = false; this.exportContext = null;
+                    return;
+                }
+                if (data.action === 'copy' || data.action === 'copy-section') {
                     try {
                         const text = await data.blob.text();
-                        if (token !== generation || stopped) return;
+                        if (!this.exportIsCurrent(context)) return;
                         await navigator.clipboard.writeText(text);
-                        if (token === generation) this.exporting = false;
+                        if (this.exportIsCurrent(context)) { this.exporting = false; this.exportContext = null; }
                         return;
-                    } catch (_) { /* A download is the fallback for denied clipboard access. */ }
+                    } catch (_) {
+                        if (!this.exportIsCurrent(context)) return;
+                        try {
+                            this.downloadBlob(data.blob, `activity-${context.requestId}${context.invocationId ? '-generation-' + context.invocationId : ''}${data.action === 'copy-section' ? '-section' : ''}.txt`);
+                        } catch (error) { if (this.exportIsCurrent(context)) this.exportError = error.message || label('copy_failed'); }
+                        if (this.exportIsCurrent(context)) { this.exporting = false; this.exportContext = null; }
+                        return;
+                    }
                 }
-                if (token !== generation || stopped) return;
-                const url = URL.createObjectURL(data.blob), link = document.createElement('a');
-                link.href = url; link.download = `activity-${this.selected}${this.invocationId ? '-generation-' + this.invocationId : ''}.txt`; link.click();
-                setTimeout(() => URL.revokeObjectURL(url), 1000); this.exporting = false;
+                if (!this.exportIsCurrent(context)) return;
+                try { this.downloadBlob(data.blob, `activity-${context.requestId}${context.invocationId ? '-generation-' + context.invocationId : ''}.txt`); }
+                catch (error) { if (this.exportIsCurrent(context)) this.exportError = error.message || label('copy_failed'); }
+                if (this.exportIsCurrent(context)) { this.exporting = false; this.exportContext = null; }
             },
             label, stateLabel(value) { return label(`state.${value}`); },
             bytes(value) { if (!value) return '0 B'; const unit = Math.min(3, Math.floor(Math.log(value) / Math.log(1024))); return `${(value / 1024 ** unit).toFixed(unit ? 1 : 0)} ${['B', 'KiB', 'MiB', 'GiB'][unit]}`; },

@@ -7,18 +7,20 @@ const path = require('node:path');
 const js = path.join(__dirname, '../omlx_web/static/js');
 
 function harness() {
-    const streams = [], workers = [], listeners = new Map();
+    const streams = [], workers = [], downloads = [], listeners = new Map();
     const window = {t: key => key, location: new URL('http://test.invalid/admin/dashboard?tab=activity&request=first'),
         history: {pushState(_state, _title, url) { window.location = new URL(url); }, replaceState(_state, _title, url) { window.location = new URL(url); }},
         addEventListener(name, callback) { listeners.set(name, callback); }, removeEventListener(name) { listeners.delete(name); },
         dispatchEvent(event) { listeners.get(event.type)?.(event); },
     };
-    const context = {window, localStorage: {getItem: () => null}, URL, URLSearchParams, AbortController,
+    const context = {window, localStorage: {getItem: () => null}, URL, URLSearchParams, AbortController, Blob,
         Event, Date, console, setTimeout, clearTimeout, requestAnimationFrame: callback => { callback(); return 1; }, cancelAnimationFrame() {},
         ResizeObserver: class { observe() {} disconnect() {} },
         EventSource: class { constructor(url) {this.url = url; this.events = {}; streams.push(this);} addEventListener(name, callback) {this.events[name] = callback;} close() {this.closed = true;} },
         Worker: class { constructor() {this.messages = []; workers.push(this);} postMessage(message) {this.messages.push(message);} terminate() {this.terminated = true;} },
-        document: {hidden: false, addEventListener() {}, removeEventListener() {}, createElement: () => ({getContext: () => ({measureText: () => ({width: 8})})})},
+        document: {hidden: false, addEventListener() {}, removeEventListener() {}, createElement: tag => tag === 'canvas'
+            ? {getContext: () => ({measureText: () => ({width: 8})})}
+            : {click() { this.clicked = true; downloads.push(this); }}},
         getComputedStyle: () => ({font: '12px monospace'}),
         fetch: async url => ({ok: true, json: async () => url.endsWith('/status') ? {health: {enabled: true}} : {models: [], sources: []}}),
     };
@@ -28,7 +30,7 @@ function harness() {
     const app = window.activityInspector();
     Object.assign(app, {mainTab: 'activity', $watch() {}, $nextTick: callback => callback(),
         $refs: {contextViewport: {clientWidth: 600, clientHeight: 440, scrollTop: 0}}, $el: {dataset: {workerUrl: '/worker.js'}}});
-    return {app, context, window, streams, workers};
+    return {app, context, window, streams, workers, downloads};
 }
 
 test('inspector resynchronizes, ignores old selections and stops all work when hidden', async () => {
@@ -183,6 +185,7 @@ test('image previews load one admin URL lazily and invalidate on selection, expi
     assert.equal(app.imageUrl('attachment-2'), null);
     app.toggleAttachments();
     streams.at(-1).events.snapshot(snapshot(null));
+    assert.equal(app.authorizationLost, true);
     assert.equal(app.attachmentsOpen, false);
     app.select('second');
     assert.equal(app.previewId, '');
@@ -365,13 +368,186 @@ test('switching invocation invalidates a deferred clipboard export', async () =>
     streams.at(-1).events.snapshot({data: JSON.stringify({active: [], recent: [], health: {}, detail: {id: 'first', version: '1', representations: [], invocations: [{id: '1'}, {id: '2'}]}})});
     const copied = []; let resolve;
     context.navigator = {clipboard: {writeText: async text => copied.push(text)}};
-    app.chooseInvocation('1'); app.exporting = true;
-    const pending = app.saveExport({action: 'copy', blob: {text: () => new Promise(done => {resolve = done;})}});
+    app.chooseInvocation('1');
+    const exportContext = app.beginExport();
+    const pending = app.saveExport({type: 'export', action: 'copy', requestToken: exportContext.requestToken,
+        blob: {text: () => new Promise(done => {resolve = done;})}});
     app.chooseInvocation('2');
     resolve('old generation'); await pending;
     assert.deepEqual(copied, []);
     assert.equal(app.exporting, false);
     await app.activate(false);
+});
+
+test('worker copies one complete stored section and leaves full export unchanged', async () => {
+    const content = JSON.stringify({messages: [
+        {role: 'user', content: 'first message'},
+        {role: 'assistant', content: 'second message outside the mounted window'},
+    ]});
+    const output = [];
+    const reader = {ActivityDocumentTools: require('../omlx_web/static/js/activity_document.js'),
+        ActivityOutputTools: require('../omlx_web/static/js/activity_output.js'), importScripts() {},
+        TextDecoder, URLSearchParams, Blob, self: {}, postMessage: value => output.push(value),
+        fetch: async url => {
+            const params = new URL(url, 'http://test.invalid').searchParams;
+            const bytes = Buffer.from(content).subarray(Number(params.get('offset')), Number(params.get('offset')) + Number(params.get('limit')));
+            return {ok: true, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)};
+        },
+    };
+    vm.createContext(reader);
+    vm.runInContext(fs.readFileSync(path.join(js, 'activity_worker.js'), 'utf8'), reader);
+    reader.self.onmessage({data: {type: 'mode', mode: 'submitted'}});
+    reader.self.onmessage({data: {type: 'viewport', row: 0, count: 2, columns: 100, follow: false}});
+    reader.self.onmessage({data: {type: 'sync', detail: {id: 'first', endpoint: 'chat', representations: [
+        {representation: 'submitted', invocation_id: '0', bytes: Buffer.byteLength(content)},
+    ]}, labels: {user: 'user', assistant: 'assistant'}}});
+    for (let attempt = 0; attempt < 100 && !output.some(item => item.type === 'render' && !item.loading && item.total > 0); attempt++) await new Promise(resolve => setImmediate(resolve));
+    assert.equal(output.findLast(item => item.type === 'render').mode, 'submitted');
+    reader.self.onmessage({data: {type: 'viewport', row: 0, count: 100, columns: 100, follow: false}});
+    const secondHeader = output.at(-1).rows.find(row => row.header && row.text.startsWith('assistant'));
+    const secondKey = secondHeader.sectionKey;
+    assert.ok(secondKey);
+    reader.self.onmessage({data: {type: 'viewport', row: 0, count: 2, columns: 100, follow: false}});
+    assert.ok(!output.findLast(item => item.type === 'render').rows.some(row => row.sectionKey === secondKey));
+    reader.self.onmessage({data: {type: 'export-section', sectionKey: secondKey, requestToken: 7}});
+    const single = await output.at(-1).blob.text();
+    assert.ok(single.includes('assistant · 2'));
+    assert.ok(single.includes('second message outside the mounted window'));
+    assert.ok(!single.includes('first message'));
+    reader.self.onmessage({data: {type: 'export-section', sectionKey: 'stale-section', requestToken: 8}});
+    assert.equal(output.at(-1).type, 'export_error');
+    assert.equal(output.at(-1).requestToken, 8);
+    assert.equal(output.at(-1).reason, 'section_unavailable');
+    reader.self.onmessage({data: {type: 'export', action: 'copy', requestToken: 9}});
+    const full = await output.at(-1).blob.text();
+    assert.ok(full.includes('first message') && full.includes('second message outside the mounted window'));
+});
+
+test('stale rendered section keys cannot export after a view change', async () => {
+    const {app, streams, workers} = harness();
+    await app.activate(true);
+    streams.at(-1).events.snapshot({data: JSON.stringify({active: [], recent: [], health: {}, detail: {
+        id: 'first', version: 'v1', representations: [],
+    }})});
+    const worker = workers.at(-1);
+    worker.onmessage({data: {type: 'render', rows: [{key: 'heading', sectionKey: 'submitted:0:message-0', header: true, text: 'user'}],
+        outline: [], total: 1, row: 0, loading: false, limited: false, search: {count: 0, marks: []}}});
+    const old = app.rows[0].copyContext;
+    assert.equal(old.view, 'submitted');
+    app.mode = 'model'; app.changeMode();
+    const before = worker.messages.length;
+    app.exportSection('submitted:0:message-0', old);
+    assert.equal(worker.messages.length, before);
+    assert.equal(app.exportError, 'activity.selection_changed');
+    await app.activate(false);
+});
+
+test('delayed old-mode renders cannot replace the current view rows', async () => {
+    const {app, streams, workers} = harness();
+    await app.activate(true);
+    streams.at(-1).events.snapshot({data: JSON.stringify({active: [], recent: [], health: {}, detail: {
+        id: 'first', version: 'v1', representations: [],
+    }})});
+    const worker = workers.at(-1);
+    worker.onmessage({data: {type: 'render', mode: 'model', rows: [{key: 'old', text: 'old mode'}], outline: [], total: 1, row: 0, loading: false}});
+    assert.equal(app.rows.length, 0);
+    worker.onmessage({data: {type: 'render', mode: 'submitted', rows: [{key: 'current', text: 'current mode'}], outline: [], total: 1, row: 0, loading: false}});
+    assert.equal(app.rows[0].key, 'current');
+    await app.activate(false);
+});
+
+test('request ID/link copying is canonical and deferred fallback is fenced after selection change', async () => {
+    const {app, streams, context, window, downloads} = harness();
+    const requestId = 'req-full-id-0123456789';
+    window.location = new URL(`http://test.invalid/admin/dashboard?tab=activity&request=${requestId}&other=keep#fragment`);
+    await app.activate(true);
+    streams.at(-1).events.snapshot({data: JSON.stringify({active: [], recent: [], health: {}, detail: {id: requestId, version: 'v1', representations: []}})});
+    const copied = [];
+    context.navigator = {clipboard: {writeText: async text => copied.push(text)}};
+    await app.copyRequestInfo('id');
+    await app.copyRequestInfo('link');
+    assert.deepEqual(copied, [requestId, `http://test.invalid/admin/dashboard?tab=activity&request=${requestId}`]);
+    assert.equal(app.exportContext, null);
+
+    context.navigator.clipboard.writeText = async () => { throw new Error('clipboard denied'); };
+    await app.copyRequestInfo('id');
+    assert.equal(downloads.at(-1).download, `activity-request-id-${requestId}.txt`);
+    assert.equal(app.exporting, false);
+
+    let rejectClipboard;
+    context.navigator.clipboard.writeText = () => new Promise((_resolve, reject) => { rejectClipboard = reject; });
+    const pending = app.copyRequestInfo('id');
+    app.select('other');
+    rejectClipboard(new Error('permission denied'));
+    await pending;
+    assert.equal(app.exporting, false);
+    assert.equal(app.exportError, '');
+    await app.activate(false);
+});
+
+test('pending clipboard rejection cannot fall back after hide, auth loss, deletion, view or invocation change', async () => {
+    const changes = [
+        async app => app.select('other'),
+        async app => { app.mode = 'model'; app.changeMode(); },
+        async app => app.chooseInvocation('1'),
+        async (app, streams) => streams.at(-1).events.authorization_lost(),
+        async (app, streams) => streams.at(-1).events.snapshot({data: JSON.stringify({active: [], recent: [], health: {}, detail: null})}),
+        async app => app.activate(false),
+    ];
+    for (const change of changes) {
+        const {app, streams, context, downloads} = harness();
+        await app.activate(true);
+        streams.at(-1).events.snapshot({data: JSON.stringify({active: [], recent: [], health: {}, detail: {
+            id: 'first', version: 'v1', representations: [], invocations: [{id: '1'}],
+        }})});
+        let rejectClipboard, writes = 0;
+        context.navigator = {clipboard: {writeText: () => { writes++; return new Promise((_resolve, reject) => { rejectClipboard = reject; }); }}};
+        const pending = app.copyRequestInfo('id');
+        await change(app, streams);
+        rejectClipboard(new Error('clipboard denied'));
+        await pending;
+        assert.equal(writes, 1);
+        assert.equal(downloads.length, 0);
+        assert.equal(app.exporting, false);
+        await app.activate(false);
+    }
+});
+
+test('auth loss blocks new copy actions until authenticated activation and metadata updates do not cancel copies', async () => {
+    const {app, streams, workers, context, downloads} = harness();
+    await app.activate(true);
+    const first = {id: 'first', version: 'v1', representations: []};
+    streams.at(-1).events.snapshot({data: JSON.stringify({active: [], recent: [], health: {}, detail: first})});
+    const worker = workers.at(-1), messageCount = worker.messages.length;
+    streams.at(-1).events.authorization_lost();
+    context.navigator = {clipboard: {writeText: async () => { throw new Error('unexpected clipboard call'); }}};
+    app.exportView('copy');
+    await app.copyRequestInfo('id');
+    assert.equal(app.authorizationLost, true);
+    assert.equal(worker.messages.length, messageCount);
+    assert.equal(downloads.length, 0);
+
+    await app.activate(false);
+    await app.activate(true);
+    assert.equal(app.authorizationLost, false);
+    await app.activate(false);
+
+    const {app: live, streams: liveStreams, context: liveContext, downloads: liveDownloads} = harness();
+    await live.activate(true);
+    liveStreams.at(-1).events.snapshot({data: JSON.stringify({active: [], recent: [], health: {}, detail: first})});
+    liveContext.URL.createObjectURL = () => 'blob:test';
+    let finishText, copied = [];
+    liveContext.navigator = {clipboard: {writeText: async text => { copied.push(text); throw new Error('clipboard denied'); }}};
+    const contextBefore = live.beginExport();
+    const pending = live.saveExport({type: 'export', action: 'copy', requestToken: contextBefore.requestToken,
+        blob: {text: () => new Promise(resolve => { finishText = resolve; })}});
+    liveStreams.at(-1).events.snapshot({data: JSON.stringify({active: [], recent: [], health: {}, detail: {...first, version: 'v2'}})});
+    finishText('stable retained view');
+    await pending;
+    assert.deepEqual(copied, ['stable retained view']);
+    assert.equal(liveDownloads.length, 1);
+    assert.equal(live.exporting, false);
+    await live.activate(false);
 });
 
 test('deferred scroll restoration from an older worker cannot move the new invocation viewport', async () => {

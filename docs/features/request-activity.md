@@ -366,6 +366,16 @@ explicitly restores the previous full-request position/mode/follow preference.
 Session reading positions retain the invocation selection. Downloads include
 the generation ID in their filename.
 
+The inspector header copies the full request ID or a canonical Activity link.
+Each message/section heading can copy its complete retained worker text,
+including content outside the mounted viewport; missing section keys fail
+explicitly. Whole-view copy/download remains available. Clipboard failures fall
+back to a text download. Pending exports retain request/view/generation identity
+and stop on selection changes, hiding, deletion or lost authorization. Ordinary
+live metadata updates do not cancel same-view copies. Old-mode worker renders
+cannot replace the current view. Rendered-browser clipboard behavior is still
+unqualified.
+
 Admission options load only when expanded, through one single-invocation read;
 there is no options polling or retained multi-invocation options cache. One
 bounded detail stays mounted, with explicit missing/error/retry and omitted-field
@@ -651,8 +661,8 @@ of model/raw/JSON evidence modes. Rendered-browser behavior remains unqualified.
 - Actual image-preview interaction, browser pixel-decoder memory, repeated
   large-image throughput and native restart/long-running viewer lifecycle remain
   to be qualified. The first source slice now includes supported inline previews.
-- Actual rendered-browser validation, text selection across virtualized windows,
-  per-message copying, complete large-outline
+- Actual rendered-browser validation, text selection and message-copy interaction
+  across virtualized windows, complete large-outline
   navigation and deep-link history polish remain to be qualified or completed.
   Native browser Find sees only mounted text; use the inspector search instead.
 
