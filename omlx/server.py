@@ -72,6 +72,7 @@ from .activity import ActivityRecorder, ActivitySettings
 from .activity.identity import credential_source
 from .activity.middleware import ActivityTransportMiddleware
 from .activity.runtime import (
+    api_failure as activity_api_failure,
     capture_enabled as activity_capture_enabled,
     configure_recorder,
     inference_request_id as activity_request_id,
@@ -1151,11 +1152,24 @@ def _streaming_error_payload(e: Exception, context: str) -> dict:
     handler in ``_with_sse_keepalive`` never sees the exception because the
     generator's own handler is the innermost one (#3036).
     """
+    _observe_api_exception(e)
     if isinstance(e, PrefillMemoryExceededError):
         logger.warning(f"{context} prefill rejected: {e}")
         return _prefill_memory_openai_error_body(e)
     logger.error(f"Error during {context}: {e}")
     return {"error": {"message": str(e), "type": "server_error"}}
+
+
+def _observe_api_exception(exc: Exception) -> None:
+    """Classify only an exception being surfaced by an API terminal handler."""
+    activity_api_failure(
+        "cancelled"
+        if isinstance(exc, (RequestAbortedError, PrefillMemoryAbortedError))
+        else "rejected"
+        if isinstance(exc, PrefillMemoryExceededError)
+        or (isinstance(exc, HTTPException) and 400 <= exc.status_code < 500)
+        else "error"
+    )
 
 
 def _prefill_memory_openai_error_body(
@@ -3059,6 +3073,7 @@ async def _with_sse_keepalive(
                 try:
                     result = task.result()
                 except Exception as e:
+                    _observe_api_exception(e)
                     if isinstance(e, PrefillMemoryExceededError):
                         logger.warning(f"SSE generator prefill rejected: {e}")
                         error_data = _prefill_memory_openai_error_body(e)
@@ -3178,14 +3193,17 @@ async def _with_json_keepalive(
         try:
             result = task.result()
         except PrefillMemoryExceededError as e:
+            _observe_api_exception(e)
             logger.warning(f"JSON keepalive prefill rejected: {e}")
             yield json.dumps(_prefill_memory_openai_error_body(e))
             return
         except RequestAbortedError as e:
+            _observe_api_exception(e)
             logger.warning("JSON keepalive request aborted: %s", e)
             yield json.dumps(_openai_error_body(str(e), 409))
             return
         except HTTPException as e:
+            _observe_api_exception(e)
             # Headers are already sent; preserve the API error in the body.
             logger.warning(
                 "JSON keepalive request failed (%d): %s", e.status_code, e.detail
@@ -6935,6 +6953,7 @@ async def stream_chat_completion(
             yield event
 
     if tool_failure:
+        activity_api_failure("error")
         yield f"data: {json.dumps(tool_failure)}\n\n"
         yield "data: [DONE]\n\n"
         return
@@ -7267,6 +7286,7 @@ async def stream_anthropic_messages(
             if output.finished:
                 break
     except Exception as e:
+        _observe_api_exception(e)
         if isinstance(e, PrefillMemoryExceededError):
             # Same shadowing as the OpenAI generators (#3036): keep the
             # rejection classifiable. invalid_request_error is the Anthropic
@@ -7471,6 +7491,7 @@ async def stream_anthropic_messages(
             yield create_content_block_stop_event(index=i)
 
     if tool_failure:
+        activity_api_failure("error")
         error = tool_failure["error"]
         yield format_sse_event(
             "error",
@@ -9146,6 +9167,7 @@ async def stream_responses_api(
                             },
                         )
     except Exception as e:
+        _observe_api_exception(e)
         if isinstance(e, PrefillMemoryExceededError):
             # Same shadowing as the chat generator (#3036): surface the
             # guard's code and message in the response.failed error object
@@ -9524,6 +9546,7 @@ async def stream_responses_api(
             next_output_index = output_index
 
     if tool_failure:
+        activity_api_failure("error")
         seq = stream_state.next_sequence()
         yield format_sse_event(
             "response.failed",

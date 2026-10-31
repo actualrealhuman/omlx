@@ -463,6 +463,26 @@ class ActivityRecorder:
         self._wake.set()
         return True
 
+    def api_failure(self, handle, outcome):
+        """Protected scalar metadata, independent of the content queue."""
+        if outcome not in {"error", "rejected", "cancelled"}:
+            return False
+        with self._lock:
+            pending = self._lookup(handle)
+            if (
+                pending is None
+                or not self.settings.enabled
+                or pending.metadata["finished_at"] is not None
+            ):
+                return False
+            if pending.metadata.get("api_failure_outcome") == outcome:
+                return True
+            pending.metadata["api_failure_outcome"] = outcome
+            pending.metadata["api_failure_source"] = "api_formatter"
+            pending.version += 1
+        self._wake.set()
+        return True
+
     def _control(self, kind, request_id=None):
         future = Future()
         with self._lock:

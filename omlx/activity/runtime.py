@@ -39,6 +39,12 @@ def current_capture():
     return _current.get()
 
 
+def api_failure(outcome="error"):
+    """Signal an error the API actually emits; do not inspect response bytes."""
+    capture = _current.get()
+    return capture.api_failure(outcome) if capture is not None else False
+
+
 def inference_request_id(http_request):
     capture = getattr(http_request.state, "activity_capture", None)
     return capture.handle.request_id if capture is not None else str(uuid.uuid4())
@@ -62,6 +68,7 @@ class RequestCapture:
         self._active = 0
         self._api_outcome = None
         self._engine_outcomes = set()
+        self._api_failures = set()
         self._lock = threading.Lock()
         self._finalized = False
         self._require_transport = require_transport
@@ -126,6 +133,20 @@ class RequestCapture:
         if final is not None:
             self.recorder.finish(self.handle, final)
 
+    def api_failure(self, outcome="error"):
+        if outcome not in {"error", "rejected", "cancelled"}:
+            return False
+        with self._lock:
+            if self._finalized:
+                return False
+            self._api_failures.add(outcome)
+            strongest = next(
+                value
+                for value in ("rejected", "error", "cancelled")
+                if value in self._api_failures
+            )
+            return self.recorder.api_failure(self.handle, strongest)
+
     def transport_done(self, outcome):
         with self._lock:
             self._transport_done = True
@@ -143,7 +164,7 @@ class RequestCapture:
         ):
             return
         self._finalized = True
-        outcomes = self._engine_outcomes | {self._api_outcome}
+        outcomes = self._engine_outcomes | self._api_failures | {self._api_outcome}
         outcome = next(
             (
                 value

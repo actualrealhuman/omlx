@@ -290,6 +290,35 @@ report the evidence sources and retained representations. Engine-producer text
 is still not universally pre-parser text; unobserved backends and later sparse/
 requeue/attention transformations remain qualification work.
 
+## API errors and request outcomes
+
+A completed HTTP200 stream is not necessarily successful inference. The four
+API formatters and JSON/SSE keepalive handlers signal a terminal semantic
+failure separately when they actually surface one. Activity retains an
+`api_failure_outcome` and `api_failure_source: api_formatter` in protected
+metadata, even if the content queue cannot retain the error body. It combines
+that signal with existing engine and transport outcomes; later HTTP completion
+cannot erase it, and finalization still waits for observed engine invocations.
+No response-body parsing, error-message copying or additional engine cancellation
+occurs on the inference path.
+
+On these instrumented paths, guard rejections remain rejected, request/mid-prefill
+aborts are signaled cancelled, and formatter/terminal tool failures are errors.
+Existing outcome precedence still reconciles independently observed engine and
+transport failures. A recovered tool-marker quotation in prose does not signal
+failure. Signals are request-scoped, idempotent and fenced by capture disable,
+clear/delete and terminal finalization. Ordinary HTTP exceptions and unhandled
+iterator errors keep their existing status/transport observation paths.
+
+`tests/test_activity_failures.py` first reproduced all four formatter errors
+being recorded as completed under HTTP200. It now checks the actual formatters
+inside the observer/ASGI transport, completed/no observed invocation variants,
+actual JSON grace and JSON/SSE keepalive classification, outstanding engine work,
+content-capture refusal, disabled/closed scopes, terminal tool failure versus
+recovered prose and concurrent success/failure isolation. These synthetic checks
+qualify that integration boundary, not every backend's abort or full endpoint
+behavior. Real-model and native lifecycle qualification remain pending.
+
 ## Browser inspector
 
 The Activity tab opens independently of capture being enabled. The list reads
