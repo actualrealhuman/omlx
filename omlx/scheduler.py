@@ -10709,6 +10709,9 @@ class Scheduler:
         self.requests[request.request_id] = request
         self.waiting.append(request)
 
+        if request.activity is not None:
+            request.activity.prepared(request.prompt, request.prompt_token_ids)
+
         logger.debug(
             f"Added request {request.request_id} with {request.num_prompt_tokens} prompt tokens"
         )

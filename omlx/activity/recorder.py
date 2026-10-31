@@ -295,6 +295,17 @@ class ActivityRecorder:
         self._wake.set()
         return True
 
+    def gap(self, handle, reason):
+        if not isinstance(reason, str) or len(reason) > 256:
+            return False
+        with self._lock:
+            pending = self._lookup(handle)
+            if pending is None:
+                return False
+            self._gap(pending, reason)
+        self._wake.set()
+        return True
+
     def _control(self, kind, request_id=None):
         future = Future()
         with self._lock:

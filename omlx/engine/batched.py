@@ -13,6 +13,7 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
+from ..activity.runtime import current_capture
 from ..api.tool_calling import convert_tools_for_template
 from ..api.utils import clean_special_tokens, detect_and_strip_partial
 from ..model_settings import (
@@ -1188,6 +1189,9 @@ class BatchedEngine(BaseEngine):
         # SpecPrefill: forward per-request overrides to the engine, mirroring
         # stream_generate so the non-streaming path is not silently ignored.
         specprefill_kwargs = self._pop_specprefill_kwargs(kwargs)
+        activity_prompt = kwargs.pop("_activity_prompt", None)
+        if activity_prompt is not None:
+            specprefill_kwargs["activity_prompt"] = activity_prompt
         tools = kwargs.pop("tools", None)
 
         output = await self._engine.generate(
@@ -1273,6 +1277,9 @@ class BatchedEngine(BaseEngine):
 
         # SpecPrefill: pass per-request overrides to engine
         specprefill_kwargs = self._pop_specprefill_kwargs(kwargs)
+        activity_prompt = kwargs.pop("_activity_prompt", None)
+        if activity_prompt is not None:
+            specprefill_kwargs["activity_prompt"] = activity_prompt
         tools = kwargs.pop("tools", None)
 
         engine = self._engine
@@ -1417,6 +1424,8 @@ class BatchedEngine(BaseEngine):
             kwargs["generation_prompt_text"] = generation_prompt
             kwargs["generation_prompt_persists"] = persists
 
+        if current_capture() is not None:
+            kwargs["_activity_prompt"] = prompt
         return await self.generate(
             prompt=prepared[1] if prepared is not None else prompt,
             max_tokens=max_tokens,
@@ -1581,6 +1590,8 @@ class BatchedEngine(BaseEngine):
             kwargs["generation_prompt_text"] = generation_prompt
             kwargs["generation_prompt_persists"] = persists
 
+        if current_capture() is not None:
+            kwargs["_activity_prompt"] = prompt
         async for output in self.stream_generate(
             prompt=prepared[1] if prepared is not None else prompt,
             max_tokens=max_tokens,

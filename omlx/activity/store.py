@@ -24,7 +24,15 @@ STATES = TERMINAL_STATES | {
     "generating",
 }
 REPRESENTATIONS = frozenset(
-    {"submitted", "model_input", "model_tokens", "raw_output", "output"}
+    {
+        "submitted",
+        "model_input",
+        "model_tokens",
+        "raw_output",
+        "output",
+        "api_response",
+        "events",
+    }
 )
 
 

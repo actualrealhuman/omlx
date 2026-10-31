@@ -68,6 +68,16 @@ from pydantic import BaseModel
 
 from omlx._version import __version__
 
+from .activity import ActivityRecorder, ActivitySettings
+from .activity.identity import credential_source
+from .activity.runtime import (
+    configure_recorder,
+    get_recorder as get_activity_recorder,
+    inference_request_id as activity_request_id,
+    observe_request,
+    phase as activity_phase,
+)
+
 from .api.anthropic_models import (
     MessagesRequest as AnthropicMessagesRequest,
 )
@@ -381,6 +391,8 @@ async def verify_api_key(
     # A missing key is accepted only when the configured bind is loopback-only.
     if _server_state.api_key is None:
         if loopback_only:
+            if get_activity_recorder() is not None:
+                request.state.activity_source = ("anonymous", "Unauthenticated")
             return True
         raise HTTPException(status_code=401, detail="API key required")
 
@@ -390,6 +402,8 @@ async def verify_api_key(
         and global_settings.auth.skip_api_key_verification
         and loopback_only
     ):
+        if get_activity_recorder() is not None:
+            request.state.activity_source = ("bypass", "Verification bypassed")
         return True
 
     # Extract API key from Bearer token or x-api-key header
@@ -414,6 +428,10 @@ async def verify_api_key(
         logger.warning("Rejected API key (fp=%s)", fingerprint_key(api_key_value))
         raise HTTPException(status_code=401, detail="Invalid API key")
 
+    if get_activity_recorder() is not None:
+        request.state.activity_source = credential_source(
+            api_key_value, _server_state.api_key, sub_keys
+        )
     return True
 
 
@@ -431,6 +449,8 @@ async def verify_inference_api_key(
 ) -> bool:
     """Allow the manual inference opt-in without changing management auth."""
     if allows_unauthenticated_inference():
+        if get_activity_recorder() is not None:
+            request.state.activity_source = ("anonymous", "Unauthenticated")
         return True
     return await verify_api_key(request, credentials)
 
@@ -735,6 +755,9 @@ async def lifespan(app: FastAPI):
         with suppress(asyncio.CancelledError):
             await preload_task
     get_server_metrics().close()
+    activity = configure_recorder(None)
+    if activity is not None:
+        await asyncio.to_thread(activity.close)
     if ttl_task is not None:
         ttl_task.cancel()
         try:
@@ -1716,6 +1739,7 @@ async def get_engine_for_model(
     Raises:
         HTTPException: If model not found or memory error
     """
+    activity_phase("loading")
     if lease is None:
         return await get_engine(model, EngineType.LLM)
 
@@ -1736,7 +1760,9 @@ def _serving_model_id(
     requested_model: str | None,
 ) -> str | None:
     """Return the exact pool model selected for an LLM request."""
-    return lease.model_id or resolve_model_id(requested_model) or requested_model
+    model_id = lease.model_id or resolve_model_id(requested_model) or requested_model
+    activity_phase("preparing", model_id=model_id)
+    return model_id
 
 
 async def get_embedding_engine(model: str) -> EmbeddingEngine:
@@ -2575,6 +2601,19 @@ def init_server(
             getattr(global_settings, "usage", None), "usage_history", True
         ),
     )
+
+    previous_activity = configure_recorder(None)
+    if previous_activity is not None:
+        previous_activity.close()
+    activity_settings = getattr(global_settings, "activity", None)
+    if isinstance(activity_settings, ActivitySettings) and activity_settings.enabled:
+        try:
+            global_settings.ensure_activity_source_ids()
+            configure_recorder(
+                ActivityRecorder(base_path / "activity.sqlite3", activity_settings)
+            )
+        except Exception:
+            logger.warning("Activity capture unavailable; serving continues")
 
     logger.info(
         f"Server initialized with {_server_state.engine_pool.model_count} models"
@@ -4449,6 +4488,7 @@ async def _decisions_body(
 
 
 @app.post("/v1/completions")
+@observe_request
 async def create_completion(
     request: CompletionRequest,
     http_request: FastAPIRequest,
@@ -4490,7 +4530,7 @@ async def create_completion(
         for prompt in prompts:
             await engine.preflight_completion(prompt, request_id=upstream_request_id)
         await _raise_if_llm_lease_abort_requested(lease)
-        inference_request_id = str(uuid.uuid4())
+        inference_request_id = activity_request_id(http_request)
 
         if request.stream:
             response_id = f"cmpl-{uuid.uuid4().hex[:8]}"
@@ -4862,6 +4902,7 @@ def _apply_preserve_thinking_default(
 
 
 @app.post("/v1/chat/completions")
+@observe_request
 async def create_chat_completion(
     request: ChatCompletionRequest,
     http_request: FastAPIRequest,
@@ -5140,7 +5181,7 @@ async def create_chat_completion(
         )
 
         await _raise_if_llm_lease_abort_requested(lease)
-        inference_request_id = str(uuid.uuid4())
+        inference_request_id = activity_request_id(http_request)
         chat_kwargs["_request_id"] = inference_request_id
 
         if request.stream:
@@ -7485,6 +7526,7 @@ async def stream_anthropic_messages(
 
 
 @app.post("/v1/messages")
+@observe_request
 async def create_anthropic_message(
     request: AnthropicMessagesRequest,
     http_request: FastAPIRequest,
@@ -7780,7 +7822,7 @@ async def create_anthropic_message(
             **chat_kwargs,
         )
         await _raise_if_llm_lease_abort_requested(lease)
-        inference_request_id = str(uuid.uuid4())
+        inference_request_id = activity_request_id(http_request)
         chat_kwargs["_request_id"] = inference_request_id
 
         if request.stream:
@@ -8236,6 +8278,7 @@ def _store_response_state(
 
 
 @app.post("/v1/responses")
+@observe_request
 async def create_response(
     request: ResponsesRequest,
     http_request: FastAPIRequest,
@@ -8543,7 +8586,7 @@ async def create_response(
             **chat_kwargs,
         )
         await _raise_if_llm_lease_abort_requested(lease)
-        inference_request_id = str(uuid.uuid4())
+        inference_request_id = activity_request_id(http_request)
         chat_kwargs["_request_id"] = inference_request_id
 
         if request.stream:

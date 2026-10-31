@@ -37,6 +37,7 @@ from typing import (
 
 import mlx.core as mx
 
+from .activity.runtime import current_capture
 from .custom_kernels.quant_matmul.fast import share_command_queue
 from .exceptions import (
     PrefillMemoryAbortedError,
@@ -421,6 +422,7 @@ class EngineCore:
 
         # Output collectors for low-latency streaming (vLLM pattern)
         self._output_collectors: Dict[str, RequestOutputCollector] = {}
+        self._activity_invocations = None
         self._stream_states: Dict[str, RequestStreamState] = {}
         self._finished_events: Dict[str, asyncio.Event] = {}
         # Finish timestamps for orphan-collector reaping (#1154).
@@ -605,6 +607,10 @@ class EngineCore:
 
                         for req_output in outputs:
                             rid = req_output.request_id
+                            activities = getattr(self, "_activity_invocations", None)
+                            observation = activities.get(rid) if activities else None
+                            if observation is not None:
+                                observation.output(req_output)
                             collector = collectors.get(rid)
 
                             if collector is not None:
@@ -738,6 +744,7 @@ class EngineCore:
         benchmark_trace: bool = False,
         benchmark_ane_sequence_length: int = 0,
         tools: list[dict[str, Any]] | None = None,
+        activity_prompt: str | None = None,
     ) -> str:
         """
         Add a request for processing.
@@ -781,6 +788,14 @@ class EngineCore:
             benchmark_trace=benchmark_trace,
             benchmark_ane_sequence_length=benchmark_ane_sequence_length,
         )
+        capture = current_capture()
+        if capture is not None:
+            observation = capture.invocation(request_id, prepared_text=activity_prompt)
+            if observation is not None:
+                if getattr(self, "_activity_invocations", None) is None:
+                    self._activity_invocations = {}
+                self._activity_invocations[request_id] = observation
+                request.activity = observation
 
         # SpecPrefill: resolve per-request settings.
         # The scheduler checks _specprefill_enabled to decide whether to score.
@@ -839,6 +854,8 @@ class EngineCore:
                 logger.debug(
                     f"Abort of partial insert for {request_id} failed: {abort_exc}"
                 )
+            if request.activity is not None:
+                request.activity.end("error")
             self._cleanup_request(request_id)
             raise
         self._wake_engine_loop()
@@ -1049,6 +1066,11 @@ class EngineCore:
         The grace period guarantees a live consumer (which drains in the same
         event-loop turn the request finishes) has already self-cleaned.
         """
+        activities = getattr(self, "_activity_invocations", None)
+        if activities:
+            for rid, observation in list(activities.items()):
+                if observation.done and rid not in self._output_collectors:
+                    activities.pop(rid, None)
         if not self._finished_at:
             return 0
         stale = [rid for rid, ts in self._finished_at.items() if now - ts >= grace]
@@ -1058,6 +1080,9 @@ class EngineCore:
             self._stream_states.pop(rid, None)
             self._finished_events.pop(rid, None)
             self._finished_at.pop(rid, None)
+            activities = getattr(self, "_activity_invocations", None)
+            if activities and rid in activities and activities[rid].done:
+                activities.pop(rid)
         if stale:
             logger.debug(
                 "Reaped %d orphaned output collector(s) after disconnect: %s",
@@ -1073,6 +1098,11 @@ class EngineCore:
         Scheduler state is cleaned by _do_abort_request (deferred abort)
         or _cleanup_finished (normal completion).
         """
+        activities = getattr(self, "_activity_invocations", None)
+        if activities and request_id in activities:
+            observation = activities[request_id]
+            if observation.done:
+                activities.pop(request_id)
         collector = self._output_collectors.pop(request_id, None)
         if collector:
             collector.clear()
@@ -1397,6 +1427,11 @@ class EngineCore:
         for collector in self._output_collectors.values():
             collector.clear()
         self._output_collectors.clear()
+        activities = getattr(self, "_activity_invocations", None)
+        if activities:
+            for observation in activities.values():
+                observation.end("interrupted")
+            activities.clear()
         self._stream_states.clear()
         self._finished_events.clear()
         self._finished_at.clear()

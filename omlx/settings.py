@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import shutil
+import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -635,6 +636,7 @@ class SubKeyEntry:
     key: str
     name: str = ""
     created_at: str = ""
+    id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
@@ -642,15 +644,25 @@ class SubKeyEntry:
             "key": self.key,
             "name": self.name,
             "created_at": self.created_at,
+            "id": self.id,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SubKeyEntry:
         """Create from dictionary."""
+        identity = data.get("id")
+        if not (
+            isinstance(identity, str)
+            and len(identity) == 32
+            and all(c in "0123456789abcdef" for c in identity)
+            and identity != data.get("key")
+        ):
+            identity = uuid.uuid4().hex
         return cls(
             key=data.get("key", ""),
             name=data.get("name", ""),
             created_at=data.get("created_at", ""),
+            id=identity,
         )
 
 
@@ -1575,6 +1587,27 @@ class GlobalSettings:
         auth["allow_unauthenticated_inference"] = False
         self.base_path.mkdir(parents=True, exist_ok=True)
         self._save_data(data)
+
+    def ensure_activity_source_ids(self) -> None:
+        """Persist opaque IDs for legacy keys without writing runtime overrides."""
+        path = self.base_path / "settings.json"
+        if not path.exists():
+            return
+        data = json.loads(path.read_text(encoding="utf-8"))
+        seen = set()
+        for entry in self.auth.sub_keys:
+            if entry.id in seen or entry.id == entry.key:
+                entry.id = uuid.uuid4().hex
+            seen.add(entry.id)
+        by_key = {entry.key: entry.id for entry in self.auth.sub_keys}
+        changed = False
+        for stored in data.get("auth", {}).get("sub_keys", []):
+            identity = by_key.get(stored.get("key"))
+            if identity is not None and stored.get("id") != identity:
+                stored["id"] = identity
+                changed = True
+        if changed:
+            self._save_data(data)
 
     def _save_data(self, data: dict[str, Any]) -> None:
         settings_file = self.base_path / "settings.json"

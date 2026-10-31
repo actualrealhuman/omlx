@@ -127,6 +127,8 @@ class Request:
     sampling_params: SamplingParams
     arrival_time: float = field(default_factory=time.monotonic)
     priority: int = 0  # Lower is higher priority
+    # CPU-only observer, never an engine/model/cache reference.
+    activity: Any = field(default=None, repr=False, compare=False, kw_only=True)
 
     # Set after tokenization
     prompt_token_ids: Optional[List[int]] = None
@@ -301,6 +303,11 @@ class Request:
         """Mark the request as finished."""
         self.status = status
         self.finish_reason = reason or RequestStatus.get_finish_reason(status)
+        if self.activity is not None and self.finish_reason == "abort":
+            # The scheduler has applied its deferred abort, not merely received
+            # a client cancellation request. Normal completion is observed at
+            # engine output delivery so the final text is captured first.
+            self.activity.end("cancelled")
 
     def __lt__(self, other: "Request") -> bool:
         """Compare requests for priority queue ordering."""
