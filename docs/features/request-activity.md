@@ -10,9 +10,11 @@ foundation, settings persistence, request lifecycle and initial engine hooks.
 The four generation API families capture accepted semantic input and their API
 response stream when explicitly enabled. Local scheduler/core hooks additionally
 capture prepared input/tokens and producer output. Admin read endpoints and
-snapshot-based live delivery are present; the Activity browser interface is not
-available yet. This is not a complete feature
-or an independently qualified adoption snapshot.
+snapshot-based live delivery feed a top-level Activity browser tab. The initial
+inspector has submitted/prepared views, an outline, a semantic rail, literal
+search, follow-output and copy/download. This is not a complete feature or an
+independently qualified adoption snapshot; rendered-browser and real-model
+qualification remain pending.
 
 The foundation uses one background SQLite writer and separately bounded content
 and lifecycle metadata. Producer methods enqueue immutable CPU observations;
@@ -47,7 +49,8 @@ content is distinct from aggregate serving statistics and reusable KV caches.
   `omlx/settings.py`, generation endpoint/startup/auth hooks in `omlx/server.py`,
   input/output/lifecycle hooks in `omlx/engine_core.py`, `omlx/scheduler.py`,
   `omlx/request.py` and `omlx/engine/batched.py`, the admin router inclusion,
-  plus `tests/test_activity*.py`.
+  the Activity web assets/templates and dashboard links, plus server Activity
+  tests and focused web tests.
 - Foundation dependencies: Python standard library only. Server and UI wiring
   will use the application's existing packages. No dependency on downstream
   scheduling controls or browser chat storage is intended; full isolation
@@ -82,6 +85,20 @@ shared test imports may initialize Metal even though no real model is loaded.
 pagination/filtering, snapshot consistency, reconnect/session revalidation,
 reader cancellation and stream admission. `tests/test_activity_transport.py`
 covers handled exceptions and responses whose iterators never begin.
+`tests/test_activity_dashboard.py` checks parent identity correlation for actual
+waiting/prefill/generation row construction. Web tests compile the Alpine
+expressions and render the real dashboard template. Run the standalone behavior
+checks with:
+
+```sh
+node --test apps/omlx-web/tests/activity_document.test.cjs apps/omlx-web/tests/activity_ui.test.cjs
+```
+
+These exercise large single messages, long lines, sparse indexing, Unicode/range
+boundaries, complete literal search of loaded retained text, bounded match/DOM
+metadata, stable character anchors, reader suspension, stale-response exclusion,
+URL navigation and browser-height limits. Synthetic checks do not substitute for
+actual light/dark/mobile browser review.
 
 ## Admin read interface
 
@@ -118,6 +135,35 @@ authorization is rechecked throughout a stream; `authorization_lost`,
 `unavailable` and `reconnect` are explicit terminal stream events. Data responses
 are marked no-store. This is not a lossless event-log/replay contract.
 
+## Browser inspector
+
+The Activity tab opens independently of capture being enabled. The list reads
+metadata; selecting a request loads its bounded retained ranges in a dedicated
+browser worker. Submitted messages and engine output share one view. Model
+input shows observed prepared text followed by engine output; input token IDs,
+API wire response and invocation events remain distinct evidence choices.
+Unavailable representations and capture gaps are labeled.
+
+The worker keeps full retained text for literal, case-sensitive search and
+copy/download, with a 64 MiB per-selection preview ceiling. Search and exports
+are explicitly partial during loading or at that ceiling. No prompt bodies are
+written to browser localStorage. At most 20 request reading positions persist
+in memory during the page session; subscriptions, worker reads and timers stop
+when Activity or the browser page is hidden.
+
+Sparse line checkpoints subdivide huge messages, newline-free lines and runs
+of combining characters. Only a bounded viewport is mounted, with at most 200
+text rows per worker response. A bounded physical scroll axis avoids browser
+maximum element-height limits for very tall documents. The semantic rail,
+outline and search target logical message/character anchors. Live appends retain
+that anchor unless Follow output is selected. Outline/rail metadata is capped
+at 2,000 sections; search rail marks at 500, with full match counts retained.
+
+Observed dashboard waiting/prefill/generation rows link to the parent Activity
+request. Links support modified clicks and browser history. Uncorrelated or
+synthetic aggregate rows remain unlinked. Interface strings use locale keys;
+new non-English entries currently use the repository's English fallback.
+
 ## Limitations and remaining work
 
 - Complete richer capability reporting, invocation metadata/timings,
@@ -138,9 +184,13 @@ are marked no-store. This is not a lossless event-log/replay contract.
 - Validate a fully composed private build separately from the focused source.
 - Semantic input export currently runs once at API ingress before preprocessing;
   its cost on very large payloads and media normalization still need qualification.
-- Live settings, clear/delete HTTP controls, attachments, inspector search and
-  the native restart/long-running viewer lifecycle remain to be completed or
-  qualified. The current admin interface is read-only.
+- Live settings, clear/delete HTTP controls, attachments and the native restart/
+  long-running viewer lifecycle remain to be completed or qualified. The current
+  admin interface is read-only. Images are inert placeholders, not previews.
+- Actual rendered-browser validation, text selection across virtualized windows,
+  per-message copying, richer parsed reasoning/tool output, complete large-outline
+  navigation and deep-link history polish remain to be qualified or completed.
+  Native browser Find sees only mounted text; use the inspector search instead.
 
 No source publication, packaged binary, compatibility guarantee or upstream
 submission is implied by this in-progress recipe.

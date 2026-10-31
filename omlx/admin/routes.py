@@ -6847,6 +6847,18 @@ async def get_server_activity(is_admin: bool = Depends(require_admin)):
     return {"active_models": _build_active_models_data()}
 
 
+def _activity_request_id(request=None, *, core=None, request_id=None):
+    """Return an observed parent identity, never guess from an engine/aggregate ID."""
+    observation = getattr(request, "activity", None)
+    if observation is None and core is not None:
+        observations = getattr(core, "_activity_invocations", None)
+        if observations is not None:
+            observation = observations.get(request_id)
+    capture = getattr(observation, "request", None)
+    handle = getattr(capture, "handle", None)
+    return getattr(handle, "request_id", None)
+
+
 def _build_active_models_data() -> dict:
     """Build active models status for the dashboard Active Models card."""
     from ..model_discovery import format_size
@@ -6906,6 +6918,7 @@ def _build_active_models_data() -> dict:
 
         # Get per-model active/waiting request counts.
         # Follow the same pattern as server.py /api/status endpoint.
+        core = None
         collector_request_ids: set = set()
         active_request_ids: set = set()
         activity_requests = 0
@@ -6940,6 +6953,7 @@ def _build_active_models_data() -> dict:
                 waiting = [
                     {
                         "request_id": req.request_id,
+                        "activity_request_id": _activity_request_id(req),
                         "queue_position": idx,
                         "elapsed_seconds": max(0.0, now - req.arrival_time),
                         "prompt_tokens": getattr(req, "num_prompt_tokens", 0),
@@ -6976,7 +6990,17 @@ def _build_active_models_data() -> dict:
             else None
         )
 
-        prefilling = tracker.get_model_progress(model_id)
+        prefilling = [
+            {
+                **row,
+                "activity_request_id": _activity_request_id(
+                    running_by_id.get(row["request_id"]),
+                    core=core,
+                    request_id=row["request_id"],
+                ),
+            }
+            for row in tracker.get_model_progress(model_id)
+        ]
         prefilling_ids = {p["request_id"] for p in prefilling}
         if has_scheduler_snapshot:
             active_request_ids = set(running_by_id) | prefilling_ids
@@ -7007,6 +7031,9 @@ def _build_active_models_data() -> dict:
             generating.append(
                 {
                     "request_id": rid,
+                    "activity_request_id": _activity_request_id(
+                        req, core=core, request_id=rid
+                    ),
                     "elapsed_seconds": elapsed,
                     "generated_tokens": generated_tokens,
                     "tokens_per_second": tokens_per_second,

@@ -5,6 +5,7 @@
 {% block head %}
 <link rel="stylesheet" href="{{ static('css/gridstack.min.css') }}">
 <link rel="stylesheet" href="{{ static('css/dashboard.css') }}">
+<link rel="stylesheet" href="{{ static('css/activity.css') }}">
 {% endblock %}
 
 {% block content %}
@@ -24,6 +25,8 @@
         <div class="mx-auto px-4 sm:px-6 py-6 sm:py-10 relative z-10" :class="mainTab === 'status' ? dashboardWidthClass : 'max-w-7xl'">
             <!-- Status Main Tab -->
             {% include "dashboard/_status.html" %}
+
+            {% include "dashboard/_activity.html" %}
 
             <!-- Cluster Main Tab: the v2 wizard is the sole dashboard flow. -->
             {% include "dashboard/_cluster_v2.html" %}
@@ -110,5 +113,6 @@
 <script src="{{ static('js/gridstack-all.js') }}"></script>
 <script src="{{ static('js/dashboard_layout.js') }}"></script>
 <script src="{{ static('js/logs.js') }}"></script>
+<script src="{{ static('js/activity.js') }}"></script>
 <script src="{{ static('js/dashboard.js') }}"></script>
 {% endblock %}

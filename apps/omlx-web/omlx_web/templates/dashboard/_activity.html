@@ -1,0 +1,92 @@
+<section x-show="mainTab === 'activity'" x-cloak role="tabpanel" id="panel-activity" aria-labelledby="tab-activity"
+         x-data="activityInspector()" x-init="boot()" data-worker-url="{{ static('js/activity_worker.js') }}" class="activity-panel">
+    <header class="activity-heading">
+        <div><p class="activity-eyebrow">{{ t('activity.eyebrow') }}</p><h1>{{ t('navbar.tab.activity') }}</h1><p class="activity-muted">{{ t('activity.subtitle') }}</p></div>
+        <div class="activity-signal" :data-state="connection"><span></span><span x-text="label('connection.' + connection)"></span></div>
+    </header>
+    <div x-show="error" class="activity-notice" role="alert"><span x-text="error"></span> <a x-show="connection === 'disconnected'" href="/admin/login">{{ t('activity.sign_in_link') }}</a></div>
+    <div x-show="!health.enabled" class="activity-notice">{{ t('activity.capture_disabled') }}</div>
+    <div x-show="health.error" class="activity-notice" role="status">{{ t('activity.capture_degraded') }}</div>
+    <div class="activity-workspace">
+        <aside class="activity-requests" :class="selected ? 'activity-mobile-hidden' : ''" aria-label="{{ t('activity.requests') }}">
+            <div class="activity-filters">
+                <label><span>{{ t('activity.model') }}</span><select x-model="modelFilter" @change="filtersChanged()"><option value="">{{ t('activity.all_models') }}</option><template x-for="model in facets.models" :key="model"><option :value="model" x-text="model"></option></template></select></label>
+                <label><span>{{ t('activity.source') }}</span><select x-model="sourceFilter" @change="filtersChanged()"><option value="">{{ t('activity.all_sources') }}</option><template x-for="source in facets.sources" :key="source.source_id"><option :value="source.source_id" x-text="source.source_name"></option></template></select></label>
+            </div>
+            <div class="activity-request-scroll">
+                <template x-for="group in [{title: label('active'), rows: active, more: activeMore, scope: 'active'}, {title: label('recent'), rows: recent, more: recentMore, scope: 'recent'}]" :key="group.scope">
+                    <div>
+                        <div class="activity-list-heading"><h2 x-text="group.title"></h2><span x-text="group.rows.length + (group.more ? '+' : '')"></span></div>
+                        <p x-show="!group.rows.length" class="activity-list-empty" x-text="label(group.scope === 'active' ? 'no_active' : 'no_recent')"></p>
+                        <template x-for="record in group.rows" :key="record.id">
+                            <a class="activity-request" :class="selected === record.id ? 'is-selected' : ''" :aria-current="selected === record.id ? 'true' : null"
+                               :href="'/admin/dashboard?tab=activity&request=' + encodeURIComponent(record.id)"
+                               @click="if (!$event.metaKey &amp;&amp; !$event.ctrlKey &amp;&amp; !$event.shiftKey &amp;&amp; !$event.altKey) { $event.preventDefault(); select(record.id); }">
+                                <div><span class="activity-state badge" :data-state="record.state" x-text="stateLabel(record.state)"></span><time x-text="time(record.received_at)"></time></div>
+                                <strong x-text="record.model_id || label('unknown_model')"></strong>
+                                <div><span x-text="record.source_name"></span><span x-text="bytes(record.captured_bytes)"></span></div>
+                                <span x-show="record.capture_gaps" class="activity-gap" x-text="label('gaps')"></span>
+                            </a>
+                        </template>
+                        <button x-show="group.more" class="activity-page-button" @click="pageCursor = ''; more(group.scope)" :disabled="paging" x-text="label('browse_more')"></button>
+                    </div>
+                </template>
+                <template x-for="record in older" :key="'older-' + record.id">
+                    <a class="activity-request" :href="'/admin/dashboard?tab=activity&request=' + encodeURIComponent(record.id)"
+                       @click="if (!$event.metaKey &amp;&amp; !$event.ctrlKey &amp;&amp; !$event.shiftKey &amp;&amp; !$event.altKey) { $event.preventDefault(); select(record.id); }">
+                        <div><span x-text="stateLabel(record.state)"></span><time x-text="time(record.received_at)"></time></div><strong x-text="record.model_id"></strong><span x-text="record.source_name"></span>
+                    </a>
+                </template>
+                <button x-show="pageCursor" class="activity-page-button" @click="more(pageScope)" :disabled="paging">{{ t('activity.next_page') }}</button>
+            </div>
+            <p class="activity-source-hint">{{ t('activity.source_hint') }}</p>
+        </aside>
+        <div class="activity-inspector" :class="!selected ? 'activity-mobile-hidden' : ''">
+            <div x-show="!selected" class="activity-empty"><i data-lucide="scan-text" class="w-9 h-9"></i><h2>{{ t('activity.choose_request') }}</h2><p>{{ t('activity.choose_hint') }}</p></div>
+            <div x-show="selected &amp;&amp; missing" class="activity-empty"><h2>{{ t('activity.not_retained') }}</h2><p>{{ t('activity.not_retained_hint') }}</p><button @click="select('')">{{ t('activity.back_to_requests') }}</button></div>
+            <div x-show="selected &amp;&amp; !missing" class="activity-detail">
+                <header class="activity-detail-heading">
+                    <button class="activity-back" @click="select('')" aria-label="{{ t('activity.back_to_requests') }}">←</button>
+                    <div class="activity-detail-title"><span class="activity-state badge" :data-state="detail?.state" x-text="stateLabel(detail?.state || 'received')"></span><h2 x-text="detail?.model_id || label('loading')"></h2><p><span x-text="detail?.source_name"></span> · <span class="activity-id" x-text="selected.slice(0, 12)"></span></p></div>
+                    <dl class="activity-metrics"><div><dt>{{ t('activity.received') }}</dt><dd x-text="time(detail?.received_at)"></dd></div><div><dt>{{ t('activity.duration') }}</dt><dd x-text="duration(detail)"></dd></div><div><dt>{{ t('activity.retained') }}</dt><dd x-text="bytes(detail?.captured_bytes)"></dd></div></dl>
+                </header>
+                <div x-show="detail?.capture_gaps" class="activity-capture-warning"><strong>{{ t('activity.gaps') }}</strong><span x-text="detail?.capture_reason || label('gap_hint')"></span></div>
+                <div class="activity-view-controls">
+                    <div class="activity-view-tabs segmented segmented--sm" role="group" aria-label="{{ t('activity.view') }}">
+                        <button class="segmented__item" :class="mode === 'submitted' ? 'segmented__item--active' : ''" :aria-pressed="mode === 'submitted'" @click="mode = 'submitted'; changeMode()">{{ t('activity.submitted_view') }}</button>
+                        <button class="segmented__item" :class="mode === 'model' ? 'segmented__item--active' : ''" :aria-pressed="mode === 'model'" @click="mode = 'model'; changeMode()">{{ t('activity.model_view') }}</button>
+                    </div>
+                    <select aria-label="{{ t('activity.evidence') }}" :value="['submitted', 'model'].includes(mode) ? '' : mode" @change="if ($event.target.value) { mode = $event.target.value; changeMode(); }">
+                        <option value="">{{ t('activity.evidence') }}</option><option value="model_tokens">{{ t('activity.role.model_tokens') }}</option><option value="api_response">{{ t('activity.role.api_response') }}</option><option value="events">{{ t('activity.role.events') }}</option>
+                    </select>
+                    <button @click="exportView('copy')" :disabled="exporting || loading || !total">{{ t('activity.copy') }}</button>
+                    <button @click="exportView()" :disabled="exporting || loading || !total" x-text="label(exporting ? 'exporting' : 'download')"></button>
+                </div>
+                <p class="activity-fidelity" x-text="label(mode === 'model' ? 'model_fidelity' : mode === 'submitted' ? 'submitted_fidelity' : 'evidence_fidelity')"></p>
+                <div class="activity-navigation">
+                    <button @click="outlineOpen = !outlineOpen" :aria-expanded="outlineOpen" aria-controls="activity-outline">{{ t('activity.outline') }}</button>
+                    <button class="activity-icon-button" @click="navigate(-1)" :disabled="!total" aria-label="{{ t('activity.previous_message') }}">↑</button><button class="activity-icon-button" @click="navigate(1)" :disabled="!total" aria-label="{{ t('activity.next_message') }}">↓</button>
+                    <button @click="jump(0)" :disabled="!total">{{ t('activity.first') }}</button>
+                    <label class="activity-search"><span class="activity-sr-only">{{ t('activity.search') }}</span><input type="search" x-model="searchQuery" @input="search()" @keydown.enter.prevent="search($event.shiftKey ? -1 : 1)" placeholder="{{ t('activity.search') }}" maxlength="512"><span x-show="searchQuery" :title="label(loading || limited ? 'search_partial' : 'search_complete')" x-text="(searchResult.count ? searchResult.match + 1 : 0) + '/' + searchResult.count"></span></label>
+                    <button class="activity-icon-button" @click="search(-1)" :disabled="!searchResult.count" aria-label="{{ t('activity.previous_match') }}">‹</button><button class="activity-icon-button" @click="search(1)" :disabled="!searchResult.count" aria-label="{{ t('activity.next_match') }}">›</button>
+                </div>
+                <div class="activity-document-shell">
+                    <aside id="activity-outline" x-show="outlineOpen" class="activity-outline" aria-label="{{ t('activity.outline') }}"><template x-for="section in outline" :key="section.key"><button @click="jump(section.row)" :title="section.label" x-text="section.label"></button></template><p x-show="outlineTruncated">{{ t('activity.outline_limited') }}</p></aside>
+                    <div class="activity-document" x-ref="contextViewport" @scroll.passive="onScroll()" tabindex="0" role="region" aria-label="{{ t('activity.context') }}" @keydown.home.ctrl.prevent="jump(0)" @keydown.end.ctrl.prevent="followOutput()">
+                        <div :style="'height:' + scrollHeight() + 'px'" class="activity-document-height">
+                            <template x-for="line in rows" :key="line.key"><div class="activity-line" :class="{'activity-line-heading': line.header, 'activity-line-match': line.match}" :data-role="line.role" :style="'transform:translateY(' + lineTop(line) + 'px)'" x-text="line.text"></div></template>
+                        </div>
+                        <div x-show="!total" class="activity-document-empty" x-text="label(loading ? 'loading_context' : 'representation_unavailable')"></div>
+                    </div>
+                    <div class="activity-rail" role="slider" tabindex="0" aria-label="{{ t('activity.context_position') }}" aria-valuemin="0" :aria-valuemax="Math.max(0, total - 1)" :aria-valuenow="Math.min(row, Math.max(0, total - 1))" :aria-valuetext="currentSection()?.label || ''"
+                         @pointerdown.prevent="$el.setPointerCapture($event.pointerId); railJump($event)" @pointermove="if ($event.buttons) railJump($event)" @keydown.arrow-up.prevent="navigate(-1)" @keydown.arrow-down.prevent="navigate(1)" @keydown.home.prevent="jump(0)" @keydown.end.prevent="followOutput()">
+                        <template x-for="section in outline" :key="section.key"><span class="activity-rail-section" :data-role="section.role" :title="section.label" :style="'top:' + section.row / Math.max(1,total) * 100 + '%;height:' + Math.max(.2, section.rows / Math.max(1,total) * 100) + '%'"></span></template>
+                        <template x-for="(mark, i) in searchResult.marks" :key="i"><span class="activity-rail-match" :style="'top:' + mark / Math.max(1,total) * 100 + '%'"></span></template>
+                        <span class="activity-rail-viewport" :style="'top:' + Math.min(100, row / Math.max(1,total) * 100) + '%;height:' + Math.min(100, Math.max(1, visibleRows / Math.max(1,total) * 100)) + '%'"></span>
+                    </div>
+                </div>
+                <footer class="activity-document-footer"><span x-text="currentSection()?.label || label('context')"></span><span x-show="searchQuery &amp;&amp; (loading || limited)">{{ t('activity.partial_scan') }}</span><span x-show="loading">{{ t('activity.loading_context') }}</span><span x-show="limited">{{ t('activity.browser_limit') }}</span><button @click="followOutput()" :aria-pressed="follow" x-text="label(newOutput ? 'new_output' : follow ? 'following' : 'follow_output')"></button></footer>
+            </div>
+        </div>
+    </div>
+</section>

@@ -90,7 +90,7 @@
     const DFLASH_DRAFTER_CONFIG_MODEL_TYPES = new Set([
         'muse_glimmer_assistant',
     ]);
-    const DASHBOARD_MAIN_TABS = new Set(['status', 'cluster', 'settings', 'models', 'logs', 'bench']);
+    const DASHBOARD_MAIN_TABS = new Set(['status', 'activity', 'cluster', 'settings', 'models', 'logs', 'bench']);
     const DASHBOARD_SETTINGS_TABS = new Set(['global', 'integrations', 'models']);
     const DASHBOARD_MODELS_TABS = new Set(['manager', 'downloader', 'quantizer', 'uploader']);
     const DASHBOARD_BENCH_TABS = new Set(['throughput', 'accuracy', 'context']);
@@ -153,6 +153,7 @@
 
             // Main tab state (Status, Settings, or Logs)
             mainTab: 'status',
+            activityActiveCount: null,
 
             activeTab: 'global',
             settingsDropdown: false,
@@ -942,6 +943,8 @@
                 const url = new URL(window.location.href);
                 url.searchParams.set('tab', this.mainTab);
 
+                if (this.mainTab !== 'activity') url.searchParams.delete('request');
+
                 if (this.mainTab === 'settings') {
                     url.searchParams.set('settingsTab', this.activeTab);
                 } else {
@@ -981,6 +984,22 @@
                 if (tab === 'cluster' && !this.globalSettings.server.distributed_inference_active) return;
                 this.mainTab = tab;
                 this.syncTabStateToUrl();
+            },
+
+            activityRequestHref(id) {
+                return '/admin/dashboard?tab=activity&request=' + encodeURIComponent(id);
+            },
+
+            openActivityRequest(event, id) {
+                if (!id || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button > 0) return;
+                event.preventDefault();
+                this.mainTab = 'activity';
+                const url = new URL(window.location.href);
+                url.searchParams.set('tab', 'activity');
+                url.searchParams.set('request', id);
+                url.hash = '';
+                window.history.pushState({}, '', url);
+                window.dispatchEvent(new Event('activity:open'));
             },
 
             handleMainTabKeydown(event) {
