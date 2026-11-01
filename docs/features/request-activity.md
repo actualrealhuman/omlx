@@ -69,7 +69,7 @@ memory configurations may need a smaller active limit or a larger memory budget.
   snapshot is offered for adoption yet.
 - Discovery branch: `feature/request-activity`.
 - Implementation snapshot for local qualification:
-  `8ceaf04f28d5f4ed85a8b114a45919a7b34f2975`. This is a source reference,
+  `7fe132c12c3890bf1d744f70a0073e29db05d103`. This is a source reference,
   not a release, installation or public-availability claim.
 - Baseline: stable `v0.7.1`, full commit
   `bd1e9b112474862ebed550a9c83b4316038a1d74`.
@@ -107,15 +107,14 @@ still required. VLM submitted images and lazy previews are implemented, with
 actual model/media and broader rendered-browser qualification pending. The evidence
 matrix below distinguishes other engine paths from instrumented local text.
 
-The preceding implementation snapshot
-`a96413af8ddadef1f112f2edae039aff4617f4bc` passed 1,721 Python checks with one
-existing unbuilt native-extension skip, plus 69 Node checks. The current snapshot
-changes only web UI assets, its template and regression checks. The JavaScript
-and regression snapshot at `7b7037bfa02545d0be57270e29f22f91827a5d17` passed
-70 Node checks and two template checks. The mobile and slider-semantics follow-ups
-each passed both template checks and focused browser checks; JavaScript and
-backend files are unchanged. The backend suite has not been rerun for these UI
-snapshots. Initial synthetic browser spot checks covered
+The current implementation snapshot passed 1,828 Python checks and 18 subtests,
+with one existing unbuilt native-extension skip. This includes the pinned-reader
+storage regression and related API, scheduler/core, authentication, streaming and
+dashboard checks. The JavaScript and regression snapshot at
+`7b7037bfa02545d0be57270e29f22f91827a5d17` passed 70 standalone Node checks;
+those JavaScript and Node test files are unchanged. The mobile and slider-semantics
+follow-ups also passed focused template and browser checks. Initial synthetic
+browser spot checks covered
 desktop light/dark rendering, narrow-screen reselection, elapsed spans, retained
 image decoding, far-tail search, navigation, filters, paging, basic live following,
 preserved reading position during appends, and a complete synthetic text download.
@@ -137,6 +136,12 @@ settings round-trip, source/model filtering, pagination, compressed Unicode
 ranges, large text/token snapshots, concurrent producers, saturated/stalled
 writers, request limits, lifecycle capacity, clear/delete fences, terminal
 retention, partial shutdown/restart and corrupt/newer store preservation.
+`tests/test_activity_pinned_reader.py` holds a real independent SQLite read
+transaction while bounded incompressible output competes with wide Unicode
+metadata under a small storage budget. It checks visible storage gaps without
+worker suspension, retained terminal metadata and continued capture after the
+reader is released. It does not establish an unconditional instantaneous sidecar
+ceiling while checkpointing is blocked.
 These checks do not qualify inference integration, browser UI, real models or
 performance. Run relevant subsystem tests after their hooks are implemented.
 `tests/test_activity_runtime.py` exercises endpoint validation/auth ordering,
@@ -813,6 +818,8 @@ of model/raw/JSON evidence modes. Rendered-browser behavior remains unqualified.
   readers, reclamation/migration and very large histories. Current page limits
   conservatively reserve part of the budget for WAL/sidecars; configured disk
   bytes are not a promise of equal logical content capacity.
+  The focused pinned-reader case now passes; it does not replace sustained,
+  multi-request, disk-full or large-history qualification.
 - Qualify hot-path overhead, worker memory, faithful raw/parsed output,
   cancellations, all required API modes and optional-engine boundaries.
 - Validate a fully composed private build separately from the focused source.

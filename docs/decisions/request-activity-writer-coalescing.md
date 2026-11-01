@@ -25,3 +25,18 @@ bypass collection delay but cannot interrupt an active SQLite call. Synthetic
 write-count/ordering/resource checks do not establish real serving overhead;
 high-cardinality CPU, pinned readers, physical limits under sustained load and
 real inference remain explicit qualification work.
+
+Content, invocation snapshots and attachment admission leave an additional
+128 KiB of headroom within the existing physical/page-budget estimate. Without
+that margin, accepted content could consume the page allowance needed to save
+the subsequent capture-gap metadata, suspending the observer worker when content
+was refused. Metadata admission and the bounded existing-row terminal-update
+exception remain unchanged; ordinary row updates do not bypass budget checks.
+
+This is conservative headroom for a later bounded metadata update, not an
+aggregate reservation for every active request or protection against arbitrary
+disk/SQLite failures. Small storage budgets consequently admit less content.
+A real pinned-reader fixture covers pressure, wide Unicode identities and
+finish metadata, visible incomplete capture and continued capture after release.
+Blocked checkpoints can still retain sidecars; no unconditional instantaneous
+physical-size or process-memory guarantee follows from this test.
