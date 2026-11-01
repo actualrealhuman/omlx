@@ -26,7 +26,7 @@ function harness() {
         requestAnimationFrame: callback => { callback(); return 1; }, cancelAnimationFrame() {},
         ResizeObserver: class { observe() {} disconnect() {} },
         EventSource: class { constructor(url) {this.url = url; this.events = {}; streams.push(this);} addEventListener(name, callback) {this.events[name] = name === 'snapshot' ? event => callback({...event, lastEventId: Object.hasOwn(event, 'lastEventId') ? event.lastEventId : syntheticCursor(++nextEventSequence)}) : callback;} close() {this.closed = true;} },
-        Worker: class { constructor() {this.messages = []; workers.push(this);} postMessage(message) {this.messages.push(message);} terminate() {this.terminated = true;} },
+        Worker: class { constructor(url) {this.url = url; this.messages = []; workers.push(this);} postMessage(message) {this.messages.push(message);} terminate() {this.terminated = true;} },
         document: {hidden: false, addEventListener() {}, removeEventListener() {}, createElement: tag => tag === 'canvas'
             ? {getContext: () => ({measureText: () => ({width: 8})})}
             : {click() { this.clicked = true; downloads.push(this); }}},
@@ -38,7 +38,7 @@ function harness() {
     vm.runInContext(fs.readFileSync(path.join(js, 'dashboard.js'), 'utf8'), context);
     const app = window.activityInspector();
     Object.assign(app, {mainTab: 'activity', $watch() {}, $nextTick: callback => callback(),
-        $refs: {contextViewport: {clientWidth: 600, clientHeight: 440, scrollTop: 0}}, $el: {dataset: {workerUrl: '/worker.js'}}});
+        $refs: {contextViewport: {clientWidth: 600, clientHeight: 440, scrollTop: 0}}, $el: {dataset: {workerUrl: '/worker.js'}}, $root: {dataset: {workerUrl: '/worker.js'}}});
     return {app, context, window, streams, workers, downloads, intervals, timeouts, runTimeout(id) {const timer = timeouts.get(id); assert.ok(timer); timeouts.delete(id); timer.callback();},
         setNow(value) {now = value; monotonic = value;},
         setWallNow(value) {now = value;}, setMonotonic(value) {monotonic = value;}};
@@ -53,12 +53,14 @@ test('inspector resynchronizes, ignores old selections and stops all work when h
     streams.at(-1).events.snapshot({data: snapshot({id: 'first', version: '1', representations: []})});
     const oldWorker = workers.at(-1);
     assert.ok(oldWorker.messages.some(message => message.type === 'sync'));
+    app.$el = {dataset: {}}; // A row/button event scope is not the component root.
     app.select('second');
     assert.equal(oldWorker.terminated, true);
     oldWorker.onmessage({data: {type: 'error', message: 'stale response'}});
     assert.notEqual(app.error, 'stale response');
     const current = streams.at(-1);
     current.events.snapshot({data: snapshot({id: 'second', version: '2', representations: []})});
+    assert.equal(workers.at(-1).url, '/worker.js', 'reselection uses the stable component root');
     workers.at(-1).onmessage({data: {type: 'render', rows: [], outline: [], total: 1000, row: 200, loading: false, limited: false, search: {count: 0, marks: []}}});
     assert.equal(app.$refs.contextViewport.scrollTop, 4400);
     await app.activate(false);
@@ -289,6 +291,19 @@ test('active list rows use one shared visible receipt clock without a selected r
     assert.equal(intervals.size, 0, 'clock stops when loaded rows are terminal or absent');
     tick();
     assert.equal(app.observationNow, null);
+    await app.activate(false);
+});
+
+test('active list elapsed accepts framework proxy copies by loaded request id only', async () => {
+    const {app, streams, intervals} = harness();
+    await app.activate(true);
+    app.selected = '';
+    const active = {id: 'loaded', received_at: 2, finished_at: null, state: 'generating'};
+    streams.at(-1).events.snapshot({data: JSON.stringify({active: [active], recent: [], health: {}, detail: null})});
+    assert.equal(intervals.size, 1);
+    assert.equal(app.duration({...active}), '8.0 s', 'a wrapper copy of a loaded row shares its live duration');
+    assert.equal(app.duration({id: 'foreign', received_at: 2, finished_at: null}), '—', 'unloaded IDs remain ineligible');
+    assert.equal(app.duration({id: 'loaded', received_at: 2, finished_at: 1}), '0.0 s', 'terminal rows use their recorded duration');
     await app.activate(false);
 });
 

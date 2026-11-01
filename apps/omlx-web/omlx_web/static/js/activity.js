@@ -319,7 +319,7 @@
                 if (!worker) {
                     const token = generation;
                     loadedVersion = '';
-                    worker = new Worker(this.$el.dataset.workerUrl);
+                    worker = new Worker(this.$root.dataset.workerUrl);
                     worker.onmessage = ({data}) => {
                         if (token !== generation || stopped) return;
                         if (data.type === 'error') { this.error = data.message; this.loading = false; return; }
@@ -685,7 +685,9 @@
                 return `${Math.max(0, this.observationNow / 1000 - received).toFixed(1)} s`;
             },
             observationEligible(record) {
-                const loaded = record === this.detail || this.active.includes(record) || this.recent.includes(record) || this.older.includes(record);
+                const id = record?.id;
+                const loaded = typeof id === 'string' && id.length > 0 && id.length <= 128
+                    && [this.detail, ...this.active, ...this.recent, ...this.older].some(item => item?.id === id);
                 return !stopped && this.mainTab === 'activity' && !document.hidden && !this.authorizationLost
                     && loaded && record?.finished_at === null
                     && typeof record.received_at === 'number' && Number.isFinite(record.received_at) && record.received_at >= 0;

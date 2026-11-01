@@ -87,7 +87,7 @@ def test_full_dashboard_renders_activity_with_local_assets_and_translatable_text
     assert "activityRequestHref(wait.activity_request_id)" in rendered
     activity = (ROOT / "templates/dashboard/_activity.html").read_text()
     assert "x-html=" not in activity
-    assert "detail?.requested_model_id !== undefined" in activity
+    assert "detail?.requested_model_id !== detail?.model_id" in activity
     assert "detail?.model_resolution_observed === true" in activity
     assert "activity.duration_hint" in activity
     assert activity.count("record.id") >= 4
@@ -96,7 +96,14 @@ def test_full_dashboard_renders_activity_with_local_assets_and_translatable_text
     assert activity.count("observed_generated_tokens") >= 2
     assert activity.count("modelSummary(record)") >= 4
     assert activity.count("duration(record)") >= 2
-    assert "label('counts_scope')" in activity
+    assert "activity.counts_scope" in activity
+    coverage_detail = activity.split('id="activity-coverage-detail"', 1)[1].split('<div x-show="detail?.capture_gaps"', 1)[0]
+    assert "activity.duration_hint" in coverage_detail
+    assert "activity.counts_scope" in coverage_detail
+    assert "submitted_fidelity" in coverage_detail
+    assert "projection_fidelity" in coverage_detail
+    assert "media_normalized" in coverage_detail
+    assert "label('projection.' + projectionState)" in activity
     expected = {key for key in locale if key.startswith("activity.")}
     for file in (ROOT / "i18n").glob("*.json"):
         translated = json.loads(file.read_text())
