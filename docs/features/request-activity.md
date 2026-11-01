@@ -13,8 +13,8 @@ capture prepared input/tokens and producer output. Admin read endpoints and
 snapshot-based live delivery feed a top-level Activity browser tab. The initial
 inspector has submitted/prepared views, an outline, a semantic rail, literal
 search, follow-output and copy/download. This is not a complete feature or an
-independently qualified adoption snapshot; rendered-browser and real-model
-qualification remain pending.
+independently qualified adoption snapshot; initial synthetic browser spot checks
+have passed, while broader browser and real-model qualification remain pending.
 
 The foundation uses one background SQLite writer and separately bounded content
 and lifecycle metadata. Producer methods enqueue immutable CPU observations;
@@ -69,7 +69,7 @@ memory configurations may need a smaller active limit or a larger memory budget.
   snapshot is offered for adoption yet.
 - Discovery branch: `feature/request-activity`.
 - Implementation snapshot for local qualification:
-  `a96413af8ddadef1f112f2edae039aff4617f4bc`. This is a source reference,
+  `7b7037bfa02545d0be57270e29f22f91827a5d17`. This is a source reference,
   not a release, installation or public-availability claim.
 - Baseline: stable `v0.7.1`, full commit
   `bd1e9b112474862ebed550a9c83b4316038a1d74`.
@@ -104,14 +104,20 @@ The four required text families (`/v1/completions`, `/v1/chat/completions`,
 Production-route fixtures, synthetic engine output and mocked scheduler/core
 paths cover their contracts; full real-model endpoint/backend qualification is
 still required. VLM submitted images and lazy previews are implemented, with
-actual model/media and rendered-browser qualification pending. The evidence
+actual model/media and broader rendered-browser qualification pending. The evidence
 matrix below distinguishes other engine paths from instrumented local text.
 
-This snapshot passed 1,721 Python checks with one existing unbuilt native-extension
-skip, plus 69 Node checks. The checks cover the focused source and related
-scheduler/core/admin/dashboard behavior. They do not establish real-browser,
-serving-overhead, native-build or private-trial readiness. Those gates, source
-publication and catalog/agent-guide reconciliation remain open.
+The preceding implementation snapshot
+`a96413af8ddadef1f112f2edae039aff4617f4bc` passed 1,721 Python checks with one
+existing unbuilt native-extension skip, plus 69 Node checks. The current snapshot
+changes only web UI assets, its template and regression checks; its exact changed
+files passed 70 Node checks and two template checks. The backend suite has not
+been rerun for this UI snapshot. Initial synthetic browser spot checks covered
+desktop light/dark rendering, narrow-screen reselection, elapsed spans, retained
+image decoding, far-tail search, navigation, filters and paging. They do not
+establish comprehensive browser, serving-overhead, native-build or private-trial
+readiness. Those gates, source publication and catalog/agent-guide reconciliation
+remain open.
 
 ## Validation
 
@@ -497,7 +503,9 @@ authorization loss or removal invalidates/aborts that detail read. Live scalar
 summaries take precedence over loaded detail for counts/phases. Deferred exports
 and scroll restoration are fenced when selection changes. Expanded panels scroll
 within bounded heights, while a minimum context height and inspector overflow
-keep content reachable on short screens; actual browser layout remains unqualified.
+keep content reachable on short screens. Initial narrow-screen checks found no
+horizontal overflow and confirmed back/reselection behavior; the small reading
+viewport and nested scrolling still need usability work.
 
 The controller checks selection isolation, restored reading position, lazy reads,
 stale results, hidden/auth/deletion fences and invalid IDs; the exact filtered
@@ -626,7 +634,9 @@ unknown subclasses, proxy identity alongside local-core evidence, VLM ID-only
 input and content loss versus unavailable signals. These fixtures qualify the
 classification/recording contract; real backend execution, all endpoint modes
 and full composition still require qualification. The panel's controller and real
-template have local behavior/render checks; actual browser review is pending.
+template have local behavior/render checks; comprehensive browser review remains
+pending. Duration, count and representation-provenance explanations live in this
+disclosure, while capture gaps and projection availability stay visible outside it.
 
 ## Internal work and background scope
 
@@ -684,6 +694,11 @@ is unavailable, the submitted view retains a separately labeled producer fallbac
 Input token IDs, producer text, original API wire and invocation events remain
 distinct evidence choices.
 Unavailable representations and capture gaps are labeled.
+The reader worker is addressed through the stable inspector component root,
+including when request selection originates from a nested list/button scope.
+Elapsed spans match loaded request IDs across framework proxy wrappers. Metadata
+and status foregrounds use Activity-scoped theme mixes; representative light/dark
+contrast checks passed, without implying a complete accessibility audit.
 
 The worker keeps full retained text for literal, case-sensitive search and
 copy/download, with a 64 MiB per-selection preview ceiling. Search and exports
@@ -775,8 +790,9 @@ of model/raw/JSON evidence modes. Rendered-browser behavior remains unqualified.
 - `raw_output` currently means engine-producer text before API formatting.
   Engines with their own native parsers may already have transformed it;
   universal pre-parser raw generation is not yet qualified.
-- Qualify the initial inspector, navigation, dashboard links and live controls
-  in an actual browser. Qualify original-image previews and browser pixel budgets;
+- Complete browser qualification of the inspector, navigation, dashboard links
+  and live controls beyond the initial synthetic spot checks. Qualify larger
+  original-image previews and browser pixel budgets;
   supported retained images use lazy previews and unsupported media remain inert.
 - Qualify physical-budget behavior under disk-full conditions, pinned SQLite
   readers, reclamation/migration and very large histories. Current page limits
@@ -788,7 +804,8 @@ of model/raw/JSON evidence modes. Rendered-browser behavior remains unqualified.
 - The bounded semantic walk runs once before preprocessing. Qualify its overhead
   with concurrent requests, large structures and actual model serving; the current
   checks prove structural caps and handoff behavior, not serving performance.
-- Actual image-preview interaction, browser pixel-decoder memory, repeated
+- A small retained PNG was decoded through the actual preview route in the
+  browser. Browser pixel-decoder memory, repeated
   large-image throughput and native restart/long-running viewer lifecycle remain
   to be qualified. The first source slice now includes supported inline previews.
 - Actual rendered-browser validation, text selection and message-copy interaction
