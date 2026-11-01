@@ -76,9 +76,12 @@ memory configurations may need a smaller active limit or a larger memory budget.
   two route-only test fixtures so composed suites cannot inherit unrelated
   background policy services. Production behavior is unchanged.
 - Qualification source snapshot:
-  `dbb3e19ccce92c7e46c549b0ff5b1d0282a8799b`. This includes that fixture
-  follow-up and the isolated OS file-limit regression; production code is
-  unchanged from the implementation snapshot above.
+  `f745cf23f1a7527303807a5fd8f62b0c83c4fae1`. This includes that fixture
+  follow-up, the isolated OS file-limit regression and an inspector resize fix.
+  Backend production code is unchanged from the implementation snapshot above.
+  The inspector preserves semantic reading anchors across width changes,
+  rejects stale layout renders and deferred scroll callbacks, and retains
+  tail-following across height-only changes.
 - Baseline: stable `v0.7.1`, full commit
   `bd1e9b112474862ebed550a9c83b4316038a1d74`.
 - Current boundary: `omlx/activity/`, Activity settings and credential IDs in
@@ -126,8 +129,16 @@ capture refusal and fresh-recorder recovery with an independent `quick_check`
 and content round-trip. This is per-file OS-limit evidence, not actual disk
 exhaustion or a new full-suite result. The JavaScript and regression snapshot at
 `7b7037bfa02545d0be57270e29f22f91827a5d17` passed 70 standalone Node checks;
-those JavaScript and Node test files are unchanged. The mobile and slider-semantics
-follow-ups also passed focused template and browser checks. Initial synthetic
+that is historical evidence. The resize-fix snapshot separately passed 62 checks
+across the inspector, document and output Node suites, including an exact
+pre-fix reproduction and stale-render/deferred-scroll regressions. An in-app
+browser stress fixture retained 4,514,988 bytes and 1,004 messages, with giant
+unbroken text, JSON tool output and multilingual text. After the fix, a far-tail
+match remained visible across desktop/mobile/desktop reflow; settled height-only
+resizing retained follow mode, and ordinary scrolling still disabled it.
+Heap, frame-time and controlled inference-overhead measurements remain pending.
+The mobile and slider-semantics follow-ups also passed focused template and
+browser checks. Initial synthetic
 browser spot checks covered
 desktop light/dark rendering, narrow-screen reselection, elapsed spans, retained
 image decoding, far-tail search, navigation, filters, paging, basic live following,
@@ -136,6 +147,11 @@ They do not
 establish comprehensive browser, serving-overhead, native-build or private-trial
 readiness. Those gates, source publication and catalog/agent-guide reconciliation
 remain open.
+
+One loading-time search case still needs follow-up: a query entered before the
+submitted representation finishes loading can report a later match without
+moving to it until Enter is pressed again. Clipboard transport and selection
+qualification also remain incomplete.
 
 ## Validation
 
