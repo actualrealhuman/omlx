@@ -69,7 +69,7 @@ memory configurations may need a smaller active limit or a larger memory budget.
   snapshot is offered for adoption yet.
 - Discovery branch: `feature/request-activity`.
 - Implementation snapshot for local qualification:
-  `7b7037bfa02545d0be57270e29f22f91827a5d17`. This is a source reference,
+  `c8aefd09f638082ffafbd1260dd3148d8c14fa3d`. This is a source reference,
   not a release, installation or public-availability claim.
 - Baseline: stable `v0.7.1`, full commit
   `bd1e9b112474862ebed550a9c83b4316038a1d74`.
@@ -110,11 +110,16 @@ matrix below distinguishes other engine paths from instrumented local text.
 The preceding implementation snapshot
 `a96413af8ddadef1f112f2edae039aff4617f4bc` passed 1,721 Python checks with one
 existing unbuilt native-extension skip, plus 69 Node checks. The current snapshot
-changes only web UI assets, its template and regression checks; its exact changed
-files passed 70 Node checks and two template checks. The backend suite has not
-been rerun for this UI snapshot. Initial synthetic browser spot checks covered
+changes only web UI assets, its template and regression checks. The JavaScript
+and regression snapshot at `7b7037bfa02545d0be57270e29f22f91827a5d17` passed
+70 Node checks and two template checks. The current mobile CSS/template follow-up
+passed both template checks and actual responsive browser checks; JavaScript and
+backend files are unchanged. The backend suite has not been rerun for these UI
+snapshots. Initial synthetic browser spot checks covered
 desktop light/dark rendering, narrow-screen reselection, elapsed spans, retained
-image decoding, far-tail search, navigation, filters and paging. They do not
+image decoding, far-tail search, navigation, filters, paging, basic live following,
+preserved reading position during appends, and a complete synthetic text download.
+They do not
 establish comprehensive browser, serving-overhead, native-build or private-trial
 readiness. Those gates, source publication and catalog/agent-guide reconciliation
 remain open.
@@ -503,9 +508,14 @@ authorization loss or removal invalidates/aborts that detail read. Live scalar
 summaries take precedence over loaded detail for counts/phases. Deferred exports
 and scroll restoration are fenced when selection changes. Expanded panels scroll
 within bounded heights, while a minimum context height and inspector overflow
-keep content reachable on short screens. Initial narrow-screen checks found no
-horizontal overflow and confirmed back/reselection behavior; the small reading
-viewport and nested scrolling still need usability work.
+keep content reachable on short screens. On mobile, selected detail expands with
+normal page scrolling; the virtualized reader keeps a separate viewport between
+264 and 600 CSS pixels, using 55% of the dynamic viewport height within those
+bounds. The inspector itself adds no nested scroll area in this layout. List-only
+mobile scrolling and desktop sizing are unchanged. Synthetic browser checks at
+390 by 844 and 375 by 667 CSS pixels verified 464- and 367-pixel readers, no
+horizontal page overflow, evidence expansion and back/reselection. Broader touch,
+keyboard, text-selection and accessibility qualification remains pending.
 
 The controller checks selection isolation, restored reading position, lazy reads,
 stale results, hidden/auth/deletion fences and invalid IDs; the exact filtered
