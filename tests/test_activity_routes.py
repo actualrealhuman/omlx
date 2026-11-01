@@ -67,6 +67,7 @@ class ActivityRouteTests(unittest.TestCase):
         source="source-a",
         terminal=True,
         text="payload",
+        counts=None,
         **kwargs,
     ):
         handle = self.recorder.begin(
@@ -83,6 +84,8 @@ class ActivityRouteTests(unittest.TestCase):
             json.dumps({"messages": [{"role": "user", "content": text}]}),
         )
         self.recorder.append_text(handle, "raw_output", "answer", invocation_id="1")
+        if counts is not None:
+            self.assertTrue(self.recorder.metrics(handle, counts=counts))
         if terminal:
             self.recorder.finish(handle)
         self.assertTrue(self.recorder.flush())
@@ -124,7 +127,15 @@ class ActivityRouteTests(unittest.TestCase):
         self.assertEqual(status.headers["cache-control"], "no-store")
 
     def test_list_does_not_read_context_blobs_and_supports_stable_pagination(self):
-        ids = [self.request(received_at=time.time() + i).request_id for i in range(4)]
+        ids = [
+            self.request(
+                received_at=time.time() + i,
+                counts={"observed_input_tokens": 0, "observed_generated_tokens": 7}
+                if i == 3
+                else None,
+            ).request_id
+            for i in range(4)
+        ]
         with patch.object(
             self.recorder.reader.__class__,
             "content",
@@ -137,6 +148,15 @@ class ActivityRouteTests(unittest.TestCase):
         self.assertEqual(
             {row["id"] for row in page["requests"] + next_page["requests"]}, set(ids)
         )
+        row = page["requests"][0]
+        self.assertEqual(row["endpoint"], "/v1/messages")
+        self.assertIn("requested_model_id", row)
+        self.assertIn("model_resolution_observed", row)
+        self.assertEqual(row["observed_input_tokens"], 0)
+        self.assertEqual(row["observed_generated_tokens"], 7)
+        unknown = next(item for item in page["requests"] if item["id"] != row["id"])
+        self.assertNotIn("observed_input_tokens", unknown)
+        self.assertNotIn("observed_generated_tokens", unknown)
         self.assertNotIn("payload", json.dumps(page))
         for cursor in ("bad!", "bnVsbA", "WzBd"):
             self.assertEqual(

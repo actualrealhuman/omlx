@@ -26,6 +26,13 @@
 .activity-request.is-selected { background:var(--bg-primary); border-color:var(--border-normal); box-shadow:inset 3px 0 var(--activity-accent); }
 .activity-request > div { display:flex; justify-content:space-between; gap:8px; align-items:center; }
 .activity-request strong { display:block; font-size:12px; font-weight:600; color:var(--text-primary); margin:7px 0 5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.activity-request .activity-request-id,.activity-request .activity-request-endpoint,.activity-request .activity-request-model { display:block; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.activity-request .activity-request-id { font:10px ui-monospace,monospace; color:var(--text-muted); }
+.activity-request .activity-request-endpoint { margin:4px 0; }
+.activity-request .activity-request-model { font-size:11px; color:var(--text-muted); }
+.activity-request .activity-request-facts { justify-content:flex-start; flex-wrap:wrap; gap:3px 10px; margin:5px 0; font-size:11px; color:var(--text-muted); }
+.activity-request .activity-request-facts b { font:10px ui-monospace,monospace; color:var(--text-secondary); }
+.activity-request .activity-request-span { font:10px ui-monospace,monospace; color:var(--text-muted); white-space:nowrap; }
 .activity-request time { font:10px ui-monospace,monospace; color:var(--text-muted); }
 .activity-request > div:last-of-type > span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .activity-state { font-weight:600; text-transform:uppercase; letter-spacing:.05em; }

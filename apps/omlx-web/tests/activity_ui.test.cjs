@@ -265,6 +265,46 @@ test('selected active detail uses one visible receipt clock and freezes terminal
     await app.activate(false);
 });
 
+test('active list rows use one shared visible receipt clock without a selected request', async () => {
+    const {app, streams, intervals, setNow} = harness();
+    await app.activate(true);
+    app.selected = '';
+    const active = (id, received_at) => ({id, received_at, finished_at: null, state: 'generating'});
+    const snapshot = rows => JSON.stringify({active: rows, recent: [], health: {enabled: true}, detail: null});
+    streams.at(-1).events.snapshot({data: snapshot([active('a', 0), active('b', 2)])});
+    assert.equal(intervals.size, 1);
+    assert.equal(app.duration(app.active[0]), '10.0 s');
+    assert.equal(app.duration(app.active[1]), '8.0 s');
+    const tick = [...intervals.values()][0].callback;
+    setNow(12000); tick();
+    assert.equal(app.duration(app.active[0]), '12.0 s');
+    streams.at(-1).events.snapshot({data: snapshot([active('a', 0), active('b', 2)])});
+    assert.equal(intervals.size, 1, 'additional active rows share the existing clock');
+    app.selected = 'expired';
+    streams.at(-1).events.snapshot({data: snapshot([active('a', 0)])});
+    assert.equal(app.missing, true);
+    assert.equal(intervals.size, 1, 'a missing selected request cannot stop active list clocks');
+    assert.equal(app.duration(app.active[0]), '12.0 s');
+    streams.at(-1).events.snapshot({data: JSON.stringify({active: [], recent: [], health: {}, detail: null})});
+    assert.equal(intervals.size, 0, 'clock stops when loaded rows are terminal or absent');
+    tick();
+    assert.equal(app.observationNow, null);
+    await app.activate(false);
+});
+
+test('list model and token summaries preserve legacy evidence and unknown counts', () => {
+    const {app} = harness();
+    assert.equal(app.modelTitle({model_id: 'legacy-model'}), 'legacy-model');
+    assert.equal(app.modelSummary({model_id: 'legacy-model'}), 'activity.resolution_unobserved');
+    const alias = app.modelSummary({requested_model_id: 'alias', model_id: 'canonical', model_resolution_observed: true});
+    assert.ok(alias.includes('alias'));
+    assert.ok(alias.includes('canonical'));
+    assert.equal(app.modelSummary({requested_model_id: 'same', model_id: 'same', model_resolution_observed: true}), '');
+    assert.equal(app.count(0), '0');
+    assert.equal(app.count(undefined), '—');
+    assert.equal(app.count(null), '—');
+});
+
 test('invalid and unobserved model times stay unknown and auth loss stops the clock', async () => {
     const {app, streams, intervals, setNow} = harness();
     await app.activate(true);

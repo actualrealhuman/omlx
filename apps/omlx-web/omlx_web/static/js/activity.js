@@ -213,10 +213,10 @@
                         if (this.selected) {
                             this.missing = !snapshot.detail;
                             this.detail = snapshot.detail;
-                            this.syncObservationClock();
                             if (snapshot.detail && snapshot.detail.id === this.selected) this.inspect(snapshot.detail);
-                            else if (!snapshot.detail) { this.stopObservationClock(); this.resetInvocationDetail(); this.exportContext = null; this.exporting = false; this.exportError = ''; this.attachmentsOpen = false; this.previewId = ''; generation++; worker?.terminate(); worker = null; loadedVersion = ''; this.rows = []; this.outline = []; this.rail = []; this.current = null; this.total = 0; this.outlineOffset = 0; this.outlineTotal = 0; }
+                            else if (!snapshot.detail) { this.resetInvocationDetail(); this.exportContext = null; this.exporting = false; this.exportError = ''; this.attachmentsOpen = false; this.previewId = ''; generation++; worker?.terminate(); worker = null; loadedVersion = ''; this.rows = []; this.outline = []; this.rail = []; this.current = null; this.total = 0; this.outlineOffset = 0; this.outlineTotal = 0; }
                         }
+                        this.syncObservationClock();
                         this.loadFacets().catch(() => {});
                         appliedCursor = cursor;
                         resumeCursor = event.lastEventId;
@@ -261,6 +261,13 @@
             },
             modelRequestTitle(record) {
                 return record?.requested_model_id === '<default>' ? label('default_model') : record?.requested_model_id || '';
+            },
+            modelSummary(record) {
+                const requested = this.modelRequestTitle(record);
+                const serving = record?.model_resolution_observed === true ? (record.model_id || '') : label('resolution_unobserved');
+                return requested && (record?.model_resolution_observed !== true || requested !== serving)
+                    ? `${label('requested_model')}: ${requested} · ${label('serving_model')}: ${serving}`
+                    : record?.model_resolution_observed === true ? '' : label('resolution_unobserved');
             },
             rangeError() {
                 const since = this.localTimeSeconds(this.receivedFrom), until = this.localTimeSeconds(this.receivedUntil);
@@ -571,6 +578,7 @@
                     const shownIds = new Set([...this.active, ...this.recent].map(record => record.id));
                     this.older = data.requests.filter(record => !shownIds.has(record.id));
                     this.pageCursor = data.next_cursor || '';
+                    this.syncObservationClock();
                 } catch (error) { if (token === pageGeneration && error.name !== 'AbortError') this.error = error.message; }
                 finally { if (token === pageGeneration) this.paging = false; }
             },
@@ -677,9 +685,13 @@
                 return `${Math.max(0, this.observationNow / 1000 - received).toFixed(1)} s`;
             },
             observationEligible(record) {
+                const loaded = record === this.detail || this.active.includes(record) || this.recent.includes(record) || this.older.includes(record);
                 return !stopped && this.mainTab === 'activity' && !document.hidden && !this.authorizationLost
-                    && !!this.selected && record?.id === this.selected && record.finished_at === null
+                    && loaded && record?.finished_at === null
                     && typeof record.received_at === 'number' && Number.isFinite(record.received_at) && record.received_at >= 0;
+            },
+            needsObservationClock() {
+                return [...this.active, ...this.recent, ...this.older, this.detail].some(record => this.observationEligible(record));
             },
             stopObservationClock() {
                 observationGeneration++;
@@ -688,7 +700,7 @@
                 this.observationNow = null;
             },
             syncObservationClock() {
-                if (!this.observationEligible(this.detail)) {
+                if (!this.needsObservationClock()) {
                     this.stopObservationClock();
                     return;
                 }
@@ -698,7 +710,7 @@
                 const token = ++observationGeneration;
                 observationTimer = setInterval(() => {
                     if (token !== observationGeneration) return;
-                    if (!this.observationEligible(this.detail)) {
+                    if (!this.needsObservationClock()) {
                         this.stopObservationClock();
                         return;
                     }

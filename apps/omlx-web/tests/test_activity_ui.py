@@ -90,6 +90,13 @@ def test_full_dashboard_renders_activity_with_local_assets_and_translatable_text
     assert "detail?.requested_model_id !== undefined" in activity
     assert "detail?.model_resolution_observed === true" in activity
     assert "activity.duration_hint" in activity
+    assert activity.count("record.id") >= 4
+    assert activity.count("record.endpoint") >= 4
+    assert activity.count("observed_input_tokens") >= 2
+    assert activity.count("observed_generated_tokens") >= 2
+    assert activity.count("modelSummary(record)") >= 4
+    assert activity.count("duration(record)") >= 2
+    assert "label('counts_scope')" in activity
     expected = {key for key in locale if key.startswith("activity.")}
     for file in (ROOT / "i18n").glob("*.json"):
         translated = json.loads(file.read_text())

@@ -40,8 +40,12 @@
                                :href="'/admin/dashboard?tab=activity&request=' + encodeURIComponent(record.id)"
                                @click="if (!$event.metaKey &amp;&amp; !$event.ctrlKey &amp;&amp; !$event.shiftKey &amp;&amp; !$event.altKey) { $event.preventDefault(); select(record.id); }">
                                 <div><span class="activity-state badge" :data-state="record.state" x-text="stateLabel(record.state)"></span><time x-text="time(record.received_at)"></time></div>
-                                <strong x-text="modelTitle(record)"></strong>
-                                <div><span x-text="record.source_name"></span><span x-text="bytes(record.captured_bytes)"></span></div>
+                                <span class="activity-request-id" :title="record.id" x-text="record.id"></span>
+                                <strong :title="modelTitle(record)" x-text="modelTitle(record)"></strong>
+                                <span class="activity-request-endpoint" :title="record.endpoint || ''" x-text="record.endpoint || '—'"></span>
+                                <span class="activity-request-model" x-show="modelSummary(record)" :title="modelSummary(record)" x-text="modelSummary(record)"></span>
+                                <div class="activity-request-facts" :title="label('counts_scope')"><span><span x-text="label('input_tokens')"></span> <b x-text="count(record.observed_input_tokens)"></b></span><span><span x-text="label('generated_tokens')"></span> <b x-text="count(record.observed_generated_tokens)"></b></span></div>
+                                <div><span x-text="record.source_name"></span><span class="activity-request-span" :title="label('duration_hint')" x-text="duration(record)"></span><span x-text="bytes(record.captured_bytes)"></span></div>
                                 <span x-show="record.capture_gaps" class="activity-gap" x-text="label('gaps')"></span>
                             </a>
                         </template>
@@ -51,7 +55,14 @@
                 <template x-for="record in older" :key="'older-' + record.id">
                     <a class="activity-request" :href="'/admin/dashboard?tab=activity&request=' + encodeURIComponent(record.id)"
                        @click="if (!$event.metaKey &amp;&amp; !$event.ctrlKey &amp;&amp; !$event.shiftKey &amp;&amp; !$event.altKey) { $event.preventDefault(); select(record.id); }">
-                        <div><span x-text="stateLabel(record.state)"></span><time x-text="time(record.received_at)"></time></div><strong x-text="modelTitle(record)"></strong><span x-text="record.source_name"></span>
+                        <div><span class="activity-state badge" :data-state="record.state" x-text="stateLabel(record.state)"></span><time x-text="time(record.received_at)"></time></div>
+                        <span class="activity-request-id" :title="record.id" x-text="record.id"></span>
+                        <strong :title="modelTitle(record)" x-text="modelTitle(record)"></strong>
+                                <span class="activity-request-endpoint" :title="record.endpoint || ''" x-text="record.endpoint || '—'"></span>
+                        <span class="activity-request-model" x-show="modelSummary(record)" :title="modelSummary(record)" x-text="modelSummary(record)"></span>
+                        <div class="activity-request-facts" :title="label('counts_scope')"><span><span x-text="label('input_tokens')"></span> <b x-text="count(record.observed_input_tokens)"></b></span><span><span x-text="label('generated_tokens')"></span> <b x-text="count(record.observed_generated_tokens)"></b></span></div>
+                        <div><span x-text="record.source_name"></span><span class="activity-request-span" :title="label('duration_hint')" x-text="duration(record)"></span><span x-text="bytes(record.captured_bytes)"></span></div>
+                        <span x-show="record.capture_gaps" class="activity-gap" x-text="label('gaps')"></span>
                     </a>
                 </template>
                 <button x-show="pageCursor" class="activity-page-button" @click="more(pageScope)" :disabled="paging">{{ t('activity.next_page') }}</button>

@@ -37,9 +37,14 @@ New records retain the bounded requested model separately from the current
 serving/filter model. A resolution marker is set only when the serving-model
 hook supplies an ID, including same-name resolution. Unresolved/default choices
 and older rows without this evidence remain distinguishable; historical aliases
-are not reconstructed. The selected inspector's receipt-based elapsed span uses
-one visible-only clock, which stops on hiding, deselection, authorization loss
-or completion. Live ticks use monotonic browser time after the initial elapsed
+are not reconstructed. Current and paged list cards expose request ID, endpoint,
+model attribution, observed input/generated token counts, elapsed receipt span,
+source and capture status without reading context bodies. Unknown counts remain
+unavailable rather than zero; older rows keep their known model name.
+
+List rows and the selected inspector share one visible-only receipt clock,
+which stops on hiding, authorization loss or when no loaded unfinished records
+remain. Live ticks use monotonic browser time after the initial elapsed
 estimate is anchored to receipt. Terminal spans use their saved finish time.
 This is observation time rather than decoding latency.
 
