@@ -19,6 +19,10 @@ from .invocations import (
 SCHEMA_VERSION = 3
 MAX_CHUNK_BYTES = 256 * 1024
 MAX_READ_BYTES = 1024 * 1024
+# Leave bounded room for lifecycle/gap metadata writes after content admission.
+# This is a per-content-operation reserve, not an aggregate metadata bank or a
+# guarantee against unrelated SQLite/disk failures.
+_CONTENT_METADATA_HEADROOM_BYTES = 128 * 1024
 TERMINAL_STATES = frozenset(
     {"completed", "rejected", "cancelled", "error", "interrupted", "capture_stopped"}
 )
@@ -181,7 +185,7 @@ class ActivityStore:
         compressed = len(packed) < len(data)
         if not compressed:
             packed = data
-        if not self._make_room(len(packed) * 2 + 16384):
+        if not self._make_content_room(len(packed) * 2 + 16384):
             return False
         with self.db:
             # Unknown/deleted requests must never be recreated by late output.
@@ -224,7 +228,7 @@ class ActivityStore:
             return False
         if not data or len(data) > MAX_INVOCATION_BYTES:
             raise ValueError("Activity invocation update outside bounds")
-        if not self._make_room(MAX_INVOCATION_BYTES * 2 + 16384):
+        if not self._make_content_room(MAX_INVOCATION_BYTES * 2 + 16384):
             return False
         with self.db:
             request = self.db.execute(
@@ -263,7 +267,7 @@ class ActivityStore:
             raise ValueError("Activity attachment outside bounds")
         size = len(data) if data is not None else 0
         encoded = json.dumps(metadata, ensure_ascii=True)
-        if not self._make_room(size * 2 + len(encoded) * 2 + 16384):
+        if not self._make_content_room(size * 2 + len(encoded) * 2 + 16384):
             return False
         with self.db:
             row = self.db.execute(
@@ -340,6 +344,10 @@ class ActivityStore:
                 return False
             self.delete(row[0])
         return True
+
+    def _make_content_room(self, extra: int):
+        """Reserve space for content plus a later bounded lifecycle update."""
+        return self._make_room(extra + _CONTENT_METADATA_HEADROOM_BYTES)
 
     def prune(self, now=None):
         cutoff = (
