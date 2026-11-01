@@ -5,10 +5,12 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const js = path.join(__dirname, '../omlx_web/static/js');
+const backendCursorFixture = '00000000000000000000000000000001:00000000000000000000000000000002:1';
+const syntheticCursor = sequence => `${'a'.repeat(32)}:${'b'.repeat(32)}:${sequence}`;
 
 function harness() {
-    const streams = [], workers = [], downloads = [], listeners = new Map(), intervals = new Map();
-    let nextInterval = 0, now = 10000, monotonic = 10000;
+    const streams = [], workers = [], downloads = [], listeners = new Map(), intervals = new Map(), timeouts = new Map();
+    let nextInterval = 0, nextTimeout = 0, nextEventSequence = 0, now = 10000, monotonic = 10000;
     class TestDate extends Date { static now() { return now; } }
     const window = {t: key => key, location: new URL('http://test.invalid/admin/dashboard?tab=activity&request=first'),
         history: {pushState(_state, _title, url) { window.location = new URL(url); }, replaceState(_state, _title, url) { window.location = new URL(url); }},
@@ -16,12 +18,14 @@ function harness() {
         dispatchEvent(event) { listeners.get(event.type)?.(event); },
     };
     const context = {window, localStorage: {getItem: () => null}, URL, URLSearchParams, AbortController, Blob, performance: {now: () => monotonic},
-        Event, Date: TestDate, console, setTimeout, clearTimeout,
+        Event, Date: TestDate, console,
+        setTimeout(callback, delay) {const id = ++nextTimeout; timeouts.set(id, {callback, delay}); return id;},
+        clearTimeout(id) {timeouts.delete(id);},
         setInterval(callback, delay) {const id = ++nextInterval; intervals.set(id, {callback, delay}); return id;},
         clearInterval(id) {intervals.delete(id);},
         requestAnimationFrame: callback => { callback(); return 1; }, cancelAnimationFrame() {},
         ResizeObserver: class { observe() {} disconnect() {} },
-        EventSource: class { constructor(url) {this.url = url; this.events = {}; streams.push(this);} addEventListener(name, callback) {this.events[name] = callback;} close() {this.closed = true;} },
+        EventSource: class { constructor(url) {this.url = url; this.events = {}; streams.push(this);} addEventListener(name, callback) {this.events[name] = name === 'snapshot' ? event => callback({...event, lastEventId: Object.hasOwn(event, 'lastEventId') ? event.lastEventId : syntheticCursor(++nextEventSequence)}) : callback;} close() {this.closed = true;} },
         Worker: class { constructor() {this.messages = []; workers.push(this);} postMessage(message) {this.messages.push(message);} terminate() {this.terminated = true;} },
         document: {hidden: false, addEventListener() {}, removeEventListener() {}, createElement: tag => tag === 'canvas'
             ? {getContext: () => ({measureText: () => ({width: 8})})}
@@ -35,7 +39,8 @@ function harness() {
     const app = window.activityInspector();
     Object.assign(app, {mainTab: 'activity', $watch() {}, $nextTick: callback => callback(),
         $refs: {contextViewport: {clientWidth: 600, clientHeight: 440, scrollTop: 0}}, $el: {dataset: {workerUrl: '/worker.js'}}});
-    return {app, context, window, streams, workers, downloads, intervals, setNow(value) {now = value; monotonic = value;},
+    return {app, context, window, streams, workers, downloads, intervals, timeouts, runTimeout(id) {const timer = timeouts.get(id); assert.ok(timer); timeouts.delete(id); timer.callback();},
+        setNow(value) {now = value; monotonic = value;},
         setWallNow(value) {now = value;}, setMonotonic(value) {monotonic = value;}};
 }
 
@@ -63,6 +68,158 @@ test('inspector resynchronizes, ignores old selections and stops all work when h
     assert.equal(app.selected, 'second');
     assert.equal(app.row, 200);
     await app.activate(false);
+});
+
+test('metadata cursors compare uint64 sequences exactly and ignore duplicate snapshots', async () => {
+    const {app, streams, workers} = harness();
+    await app.activate(true);
+    const stream = streams.at(-1), snapshot = detail => JSON.stringify({active: [], recent: [], health: {}, detail});
+    const cursor = sequence => syntheticCursor(sequence);
+    stream.events.snapshot({data: snapshot({id: 'first', version: 'before-max', representations: []}), lastEventId: cursor('18446744073709551614')});
+    const worker = workers.at(-1), firstCount = worker.messages.length;
+    stream.events.snapshot({data: snapshot({id: 'first', version: 'max', representations: []}), lastEventId: cursor('18446744073709551615')});
+    assert.equal(worker.messages.length, firstCount + 1);
+    assert.equal(app.detail.version, 'max');
+    const countAtMax = worker.messages.length;
+    stream.events.snapshot({data: snapshot({id: 'first', version: 'duplicate', representations: []}), lastEventId: cursor('18446744073709551615')});
+    stream.events.snapshot({data: snapshot({id: 'first', version: 'lower', representations: []}), lastEventId: cursor('18446744073709551614')});
+    assert.equal(worker.messages.length, countAtMax);
+    assert.equal(app.detail.version, 'max');
+    assert.equal(app.connection, 'live');
+    assert.equal(app.filtersLoading, false);
+    app.activate(false);
+});
+
+test('accepts the literal cursor format emitted by the replay frame encoder', async () => {
+    const {app, streams} = harness();
+    await app.activate(true);
+    streams.at(-1).events.snapshot({data: JSON.stringify({active: [], recent: [], health: {}, detail: {id: 'first', version: 'wire', representations: []}}), lastEventId: backendCursorFixture});
+    assert.equal(app.detail.version, 'wire');
+    app.activate(false);
+});
+
+test('explicit reconnect resumes the channel cursor and duplicate bootstrap preserves the selected view', async () => {
+    const {app, streams, workers, timeouts, runTimeout} = harness();
+    await app.activate(true);
+    const original = streams.at(-1), id = syntheticCursor(17);
+    const snapshot = detail => JSON.stringify({active: [], recent: [], health: {}, selected_outside_filters: {id: 'keep'}, detail});
+    original.events.snapshot({data: snapshot({id: 'first', version: 'one', representations: []}), lastEventId: id});
+    app.pageCursor = 'older-page';
+    original.onerror();
+    original.events.snapshot({data: snapshot({id: 'first', version: 'native-duplicate', representations: []}), lastEventId: id});
+    assert.equal(app.detail.version, 'one');
+    assert.equal(app.connection, 'live');
+    original.events.reconnect({});
+    const timer = [...timeouts].find(([, value]) => value.delay === 3000)[0];
+    runTimeout(timer);
+    const resumed = streams.at(-1);
+    assert.equal(new URL(resumed.url, 'http://test.invalid').searchParams.get('cursor'), id);
+    resumed.events.snapshot({data: snapshot({id: 'first', version: 'duplicate', representations: []}), lastEventId: id});
+    assert.equal(app.detail.version, 'one');
+    assert.equal(app.selectedOutsideFilters.id, 'keep');
+    assert.equal(workers.at(-1).messages.filter(message => message.type === 'sync').length, 1);
+    assert.equal(app.pageCursor, 'older-page');
+    app.activate(false);
+});
+
+test('malformed event IDs and JSON do not advance the applied cursor', async () => {
+    const invalidIds = ['x'.repeat(64) + '1', `${'a'.repeat(32)}${'b'.repeat(32)}1`, `${'A'.repeat(32)}:${'b'.repeat(32)}:1`, `${'a'.repeat(32)}:${'b'.repeat(32)}:01`, `${'a'.repeat(32)}:${'b'.repeat(32)}:18446744073709551616`, `${'a'.repeat(32)}:${'b'.repeat(32)}:1` + 'x'.repeat(65)];
+    invalidIds.push(syntheticCursor(1) + '\n', syntheticCursor(1) + '\r', syntheticCursor(1) + 'é');
+    for (const invalid of invalidIds) {
+        const {app, streams, workers} = harness();
+        await app.activate(true);
+        streams.at(-1).events.snapshot({data: JSON.stringify({active: [], recent: [], health: {}, detail: {id: 'first', version: 'invalid', representations: []}}), lastEventId: invalid});
+        assert.equal(app.detail, null);
+        assert.equal(workers.length, 0);
+        app.activate(false);
+    }
+    const {app, streams} = harness();
+    await app.activate(true);
+    const stream = streams.at(-1), id = syntheticCursor(9);
+    const snapshot = detail => JSON.stringify({active: [], recent: [], health: {}, detail});
+    stream.events.snapshot({data: '{', lastEventId: id});
+    assert.equal(app.detail, null);
+    stream.events.snapshot({data: snapshot({id: 'first', version: 'valid', representations: []}), lastEventId: id});
+    assert.equal(app.detail.version, 'valid');
+    app.activate(false);
+});
+
+test('resync-required accepts a fresh baseline on the current stream', async () => {
+    const {app, streams} = harness();
+    await app.activate(true);
+    const current = streams.at(-1), oldId = syntheticCursor(1);
+    const snapshot = version => JSON.stringify({active: [], recent: [], health: {}, detail: {id: 'first', version, representations: []}});
+    current.events.snapshot({data: snapshot('old'), lastEventId: oldId});
+    current.events.resync_required({});
+    assert.equal(streams.length, 1);
+    current.events.snapshot({data: snapshot('new-epoch'), lastEventId: `${'c'.repeat(32)}:${'d'.repeat(32)}:1`});
+    assert.equal(app.detail.version, 'new-epoch');
+    app.activate(false);
+});
+
+test('malformed and foreign cursors get one bounded fresh-head retry', async () => {
+    const {app, streams, timeouts, runTimeout} = harness();
+    await app.activate(true);
+    const first = streams.at(-1), payload = JSON.stringify({active: [], recent: [], health: {}, detail: null});
+    first.events.snapshot({data: payload, lastEventId: `${'a'.repeat(32)}:${'b'.repeat(32)}:1`});
+    first.events.snapshot({data: payload, lastEventId: `${'c'.repeat(32)}:${'d'.repeat(32)}:1`});
+    assert.equal(first.closed, true);
+    const timer = [...timeouts].find(([, value]) => value.delay === 3000)[0];
+    runTimeout(timer);
+    const retry = streams.at(-1);
+    assert.notEqual(retry, first);
+    assert.equal(new URL(retry.url, 'http://test.invalid').searchParams.has('cursor'), false);
+    retry.events.snapshot({data: payload, lastEventId: 'malformed'});
+    assert.equal(retry.closed, true);
+    assert.equal([...timeouts.values()].some(value => value.delay === 3000), false);
+    app.connect();
+    const manual = streams.at(-1);
+    assert.notEqual(manual, retry);
+    manual.events.snapshot({data: payload, lastEventId: `${'3'.repeat(32)}:${'4'.repeat(32)}:1`});
+    assert.equal(app.connection, 'live');
+    app.activate(false);
+});
+
+test('ordinary selection, filter, control, hidden and auth transitions reset metadata resume state', async () => {
+    const {app, streams, timeouts} = harness();
+    await app.activate(true);
+    const payload = detail => JSON.stringify({active: [], recent: [], health: {}, detail});
+    streams.at(-1).events.snapshot({data: payload({id: 'first', version: 'one', representations: []}), lastEventId: syntheticCursor(1)});
+
+    app.filtersChanged();
+    let current = streams.at(-1);
+    assert.equal(new URL(current.url, 'http://test.invalid').searchParams.has('cursor'), false);
+    current.events.snapshot({data: payload({id: 'first', version: 'two', representations: []}), lastEventId: syntheticCursor(2)});
+    const beforeSelect = streams.at(-1);
+    app.select('second');
+    current = streams.at(-1);
+    assert.equal(new URL(current.url, 'http://test.invalid').searchParams.has('cursor'), false);
+    beforeSelect.events.resync_required({});
+    assert.equal(streams.at(-1), current, 'old resync event cannot replace the current selection stream');
+    current.events.snapshot({data: payload({id: 'second', version: 'three', representations: []}), lastEventId: syntheticCursor(3)});
+    app.mainTab = 'settings';
+    current.events.snapshot({data: payload({id: 'second', version: 'hidden-race', representations: []}), lastEventId: syntheticCursor(4)});
+    assert.equal(app.detail.version, 'three');
+    app.mainTab = 'activity';
+
+    app.write = async () => ({health: {}, config_version: 'next'});
+    app.settingsDraft = {enabled: true, retain_images: true, max_requests: 20, max_age_days: 2, storageGiB: 1};
+    await app.saveSettings();
+    current = streams.at(-1);
+    assert.equal(new URL(current.url, 'http://test.invalid').searchParams.has('cursor'), false);
+    app.confirmRemoval('clear');
+    await app.removeConfirmed();
+    current = streams.at(-1);
+    assert.equal(new URL(current.url, 'http://test.invalid').searchParams.has('cursor'), false);
+
+    current.events.authorization_lost({});
+    assert.equal([...timeouts.values()].some(value => value.delay === 3000), false);
+    assert.equal([...streams].length, 5);
+    await app.activate(false);
+    await app.activate(true);
+    current = streams.at(-1);
+    assert.equal(new URL(current.url, 'http://test.invalid').searchParams.has('cursor'), false);
+    app.activate(false);
 });
 
 test('selected active detail uses one visible receipt clock and freezes terminal duration', async () => {

@@ -6,11 +6,23 @@
     const pauseReasons = ['prefill_eviction', 'memory_requeue', 'generation_overflow', 'cache_recovery', 'batch_reset', 'oom_retry'];
     const invocationActiveStates = ['admitted', 'queued', 'prefilling', 'generating'];
     const roles = ['system', 'developer', 'user', 'assistant', 'reasoning', 'output_error', 'output_refusal', 'choice', 'block', 'item', 'tool', 'tool_calls', 'tools', 'options', 'submitted', 'unparsed', 'model_input', 'raw_output', 'api_response', 'model_tokens', 'events'];
+    function parseActivityCursor(value) {
+        if (typeof value !== 'string' || value.length > 128) return null;
+        const match = /^([0-9a-f]{32}):([0-9a-f]{32}):(0|[1-9][0-9]{0,19})$/.exec(value);
+        if (!match || match[0].length !== value.length) return null;
+        const sequence = match[3];
+        if (sequence.length > 20 || (sequence.length === 20 && sequence > '18446744073709551615')) return null;
+        return {epoch: match[1], channel: match[2], sequence};
+    }
+    function compareActivitySequence(left, right) {
+        return left.length === right.length ? (left === right ? 0 : left < right ? -1 : 1) : left.length < right.length ? -1 : 1;
+    }
     function activityInspector() {
         let stream, worker, resize, controller, retry, searchTimer, frame, invocationController, pageController;
         let observationTimer = null, observationGeneration = 0;
         let invocationGeneration = 0;
         let generation = 0, activation = 0, pageGeneration = 0, loadedVersion = '', stopped = true, lastFacets = 0, exportSequence = 0, programmaticScrollRow = null;
+        let resumeCursor = '', appliedCursor = null, streamChannel = '', freshHeadRetried = false;
         const positions = new Map();
         const label = key => root.t(`activity.${key}`);
         return {
@@ -131,7 +143,7 @@
                 } catch (error) { if (error.name !== 'AbortError') this.error = error.message; }
                 finally { this.controlBusy = false; }
             },
-            connect() {
+            connect(preserveCursor = false, freshHead = false) {
                 stream?.close(); clearTimeout(retry);
                 if (stopped) return;
                 this.filterError = this.rangeError();
@@ -140,7 +152,6 @@
                     return;
                 }
                 this.filtersLoading = true;
-                this.selectedOutsideFilters = null;
                 const params = new URLSearchParams();
                 if (this.selected) params.set('request_id', this.selected);
                 params.set('scope', this.scopeFilter);
@@ -150,13 +161,47 @@
                 const since = this.localTimeSeconds(this.receivedFrom), until = this.localTimeSeconds(this.receivedUntil);
                 if (since !== null) params.set('since', since);
                 if (until !== null) params.set('until', until);
+                const channel = params.toString();
+                if (!preserveCursor || channel !== streamChannel) {
+                    resumeCursor = ''; appliedCursor = null;
+                    this.selectedOutsideFilters = null;
+                }
+                if (!preserveCursor && !freshHead) freshHeadRetried = false;
+                streamChannel = channel;
+                if (preserveCursor && resumeCursor) params.set('cursor', resumeCursor);
                 this.connection = 'connecting';
                 const current = new EventSource(`${API}/events?${params}`);
                 stream = current;
+                const rejectCursor = () => {
+                    if (stream !== current || stopped || document.hidden || this.mainTab !== 'activity') return;
+                    this.error = label('invalid_snapshot');
+                    if (freshHeadRetried) {
+                        current.close(); stream = null; clearTimeout(retry);
+                        this.connection = 'disconnected'; this.filtersLoading = false;
+                        return;
+                    }
+                    freshHeadRetried = true; resumeCursor = ''; appliedCursor = null;
+                    current.close(); stream = null; this.filtersLoading = false;
+                    retry = setTimeout(() => this.connect(false, true), 3000);
+                };
                 current.addEventListener('snapshot', event => {
-                    if (stream !== current || stopped) return;
+                    if (stream !== current || stopped || document.hidden || this.mainTab !== 'activity') return;
                     try {
                         const snapshot = JSON.parse(event.data);
+                        const cursor = parseActivityCursor(event.lastEventId);
+                        if (!cursor) {
+                            rejectCursor();
+                            return;
+                        }
+                        if (appliedCursor && (cursor.epoch !== appliedCursor.epoch || cursor.channel !== appliedCursor.channel)) {
+                            rejectCursor();
+                            return;
+                        }
+                        if (appliedCursor && compareActivitySequence(cursor.sequence, appliedCursor.sequence) <= 0) {
+                            this.authorizationLost = false;
+                            this.connection = 'live'; this.error = ''; this.filtersLoading = false;
+                            return;
+                        }
                         this.authorizationLost = false;
                         this.connection = 'live'; this.error = '';
                         this.filtersLoading = false;
@@ -173,15 +218,22 @@
                             else if (!snapshot.detail) { this.stopObservationClock(); this.resetInvocationDetail(); this.exportContext = null; this.exporting = false; this.exportError = ''; this.attachmentsOpen = false; this.previewId = ''; generation++; worker?.terminate(); worker = null; loadedVersion = ''; this.rows = []; this.outline = []; this.rail = []; this.current = null; this.total = 0; this.outlineOffset = 0; this.outlineTotal = 0; }
                         }
                         this.loadFacets().catch(() => {});
+                        appliedCursor = cursor;
+                        resumeCursor = event.lastEventId;
+                        freshHeadRetried = false;
                     } catch (_) { this.error = label('invalid_snapshot'); }
                 });
-                current.addEventListener('resync_required', () => { this.connection = 'connecting'; });
+                current.addEventListener('resync_required', () => {
+                    if (stream !== current || stopped || document.hidden || this.mainTab !== 'activity') return;
+                    resumeCursor = ''; appliedCursor = null;
+                    this.connection = 'connecting'; this.filtersLoading = true;
+                });
                 for (const type of ['reconnect', 'unavailable', 'authorization_lost']) current.addEventListener(type, () => {
                     if (stream !== current) return;
                     current.close(); stream = null; this.connection = 'disconnected';
                     this.filtersLoading = false;
-                    if (type === 'authorization_lost') { this.stopObservationClock(); pageGeneration++; pageController?.abort(); pageController = null; this.paging = false; this.authorizationLost = true; this.resetInvocationDetail(); this.exportContext = null; this.exporting = false; this.exportError = label('sign_in'); this.error = label('sign_in'); this.attachmentsOpen = false; this.previewId = ''; }
-                    else { if (type === 'unavailable') this.error = label('unavailable'); retry = setTimeout(() => this.connect(), 3000); }
+                    if (type === 'authorization_lost') { resumeCursor = ''; appliedCursor = null; this.stopObservationClock(); pageGeneration++; pageController?.abort(); pageController = null; this.paging = false; this.authorizationLost = true; this.resetInvocationDetail(); this.exportContext = null; this.exporting = false; this.exportError = label('sign_in'); this.error = label('sign_in'); this.attachmentsOpen = false; this.previewId = ''; generation++; worker?.terminate(); worker = null; loadedVersion = ''; }
+                    else { if (type === 'unavailable') this.error = label('unavailable'); retry = setTimeout(() => this.connect(true), 3000); }
                 });
                 current.onerror = () => { if (stream === current) { this.connection = 'reconnecting'; this.filtersLoading = false; } };
             },

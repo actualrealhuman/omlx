@@ -215,8 +215,14 @@ seconds, with earlier eviction under pressure. These bounds do not promise a
 minimum replay window or total process RSS. Active channel locks serialize each
 committed read through publication; each viewer follows its own cursor. A fresh
 missing selection bypasses historical selected detail. Service/source changes
-invalidate old reads and replay identities. Browser explicit reconnect-cursor
-and duplicate handling still requires integration. Run focused buffer checks with
+invalidate old reads and replay identities. The browser carries its last applied
+cursor across unchanged-channel network reconnects, compares uint64 sequences
+without floating-point conversion, and ignores duplicates or older frames.
+`resync_required` starts a fresh baseline on the same stream. Selection/filter,
+control, authorization and hidden-inspector rebuilds use a fresh head; history
+pagination has its own independent cursor. Malformed or unannounced foreign
+identities permit one delayed fresh-head retry per consecutive failure. Run
+buffer checks with
 `python -m unittest discover -s tests -p test_activity_replay.py -v`. See the
 [buffer decision](../decisions/request-activity-replay-buffer.md) for bounds and
 failure semantics.
@@ -723,9 +729,9 @@ of model/raw/JSON evidence modes. Rendered-browser behavior remains unqualified.
 
 ## Limitations and remaining work
 
-- Complete browser reconnect-cursor and duplicate handling against the bounded
-  sequenced replay routes, then qualify real-browser reconnect and backpressure
-  behavior. Synthetic route checks cover initial/poll serialization, independent
+- Qualify real-browser reconnect and backpressure behavior against the bounded
+  sequenced replay routes and browser cursor handling. Synthetic route checks
+  cover initial/poll serialization, independent
   channels, shared-head delivery, source changes, session revocation during reads,
   missing selected detail and restart invalidation.
 - Qualify invocation selection/options in a real browser and detailed snapshots

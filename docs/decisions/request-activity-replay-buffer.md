@@ -1,8 +1,9 @@
 # Bounded metadata replay storage
 
 The Activity replay buffer stores immutable, fully framed `snapshot` SSE bytes.
-Admin live routes use it for bounded metadata replay. The browser's explicit
-cursor and duplicate handling remains a separate integration step.
+Admin live routes use it for bounded metadata replay. The browser carries its
+last applied cursor across unchanged-channel network reconnects and rejects
+duplicate or older sequence numbers without converting uint64 values to Number.
 
 Each channel is keyed by a fixed SHA-256 digest of the normalized
 selection, with opaque epoch/channel IDs and bounded sequence numbers. The
@@ -56,6 +57,13 @@ from that budget.
 A fresh missing selected request bypasses old selected history. Once a stream
 observes that absence, it uses fresh heads rather than historical detail frames.
 This does not revoke bytes already sent or make retention observation immediate.
+
+Browser `resync_required` handling resets the applied baseline on the existing
+stream, then accepts its new head. Selection/filter/control/auth changes and
+hidden-inspector rebuilds clear resume state. Invalid or unannounced foreign
+cursor identities get one delayed fresh-head attempt per consecutive failure,
+without a zero-delay reconnect loop. Pagination remains independent of SSE
+cursors. A malformed JSON body does not advance the applied cursor.
 
 ## Publication fencing
 
