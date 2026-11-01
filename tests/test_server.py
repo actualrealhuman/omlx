@@ -1435,6 +1435,8 @@ def test_responses_reasoning_cache_policy(
     monkeypatch, stream, model_type, template_default, kwargs, forced, expected
 ):
     """Exercise cache policy through the real route before generation starts."""
+    # This route-only fixture does not configure background policy services.
+    monkeypatch.setattr(srv._server_state, "global_settings", None)
     engine = MagicMock()
     engine.model_type = model_type
     engine.is_diffusion_model = False
@@ -1492,6 +1494,8 @@ def test_responses_reasoning_cache_policy(
 def test_anthropic_adaptive_thinking_reaches_minimax_m3_template(
     monkeypatch, model_type, thinking_type, expected
 ):
+    # Keep startup independent of settings left by other endpoint fixtures.
+    monkeypatch.setattr(srv._server_state, "global_settings", None)
     engine = MagicMock()
     engine.model_type = model_type
     engine.is_diffusion_model = False
