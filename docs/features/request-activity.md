@@ -69,7 +69,7 @@ memory configurations may need a smaller active limit or a larger memory budget.
   snapshot is offered for adoption yet.
 - Discovery branch: `feature/request-activity`.
 - Implementation snapshot for local qualification:
-  `c8aefd09f638082ffafbd1260dd3148d8c14fa3d`. This is a source reference,
+  `8ceaf04f28d5f4ed85a8b114a45919a7b34f2975`. This is a source reference,
   not a release, installation or public-availability claim.
 - Baseline: stable `v0.7.1`, full commit
   `bd1e9b112474862ebed550a9c83b4316038a1d74`.
@@ -112,8 +112,8 @@ The preceding implementation snapshot
 existing unbuilt native-extension skip, plus 69 Node checks. The current snapshot
 changes only web UI assets, its template and regression checks. The JavaScript
 and regression snapshot at `7b7037bfa02545d0be57270e29f22f91827a5d17` passed
-70 Node checks and two template checks. The current mobile CSS/template follow-up
-passed both template checks and actual responsive browser checks; JavaScript and
+70 Node checks and two template checks. The mobile and slider-semantics follow-ups
+each passed both template checks and focused browser checks; JavaScript and
 backend files are unchanged. The backend suite has not been rerun for these UI
 snapshots. Initial synthetic browser spot checks covered
 desktop light/dark rendering, narrow-screen reselection, elapsed spans, retained
@@ -729,6 +729,11 @@ current index. Scrolling, rail jumps, search and previous/next navigation reveal
 the corresponding outline page; live appends preserve a manually browsed page.
 A Message/block ordinal names the current position in the full section index,
 which also includes tool definitions, options and raw evidence blocks.
+The semantic rail declares a vertical slider with a current section label.
+Home and End move to first input and followed output; Up and Down navigate
+sections. Synthetic browser checks verified those keys, a visible focus outline,
+and keyboard opening/selection in the message outline. This does not qualify
+all screen-reader, touch or text-selection behavior.
 
 The rail covers all indexed rows with at most 256 aggregate segments. Grouped
 segments report their section range/count and mixed roles explicitly; previews
