@@ -133,7 +133,7 @@
                         </div>
                         <div x-show="!total" class="activity-document-empty" x-text="label(loading ? 'loading_context' : 'representation_unavailable')"></div>
                     </div>
-                    <div class="activity-rail" role="slider" tabindex="0" aria-label="{{ t('activity.context_position') }}" aria-valuemin="0" :aria-valuemax="Math.max(0, total - 1)" :aria-valuenow="Math.min(row, Math.max(0, total - 1))" :aria-valuetext="currentSection()?.label || ''"
+                    <div class="activity-rail" role="slider" tabindex="0" aria-orientation="vertical" aria-label="{{ t('activity.context_position') }}" aria-valuemin="0" :aria-valuemax="Math.max(0, total - 1)" :aria-valuenow="Math.min(row, Math.max(0, total - 1))" :aria-valuetext="currentSection()?.label || ''"
                          @pointerdown.prevent="$el.setPointerCapture($event.pointerId); railJump($event)" @pointermove="if ($event.buttons) railJump($event)" @keydown.arrow-up.prevent="navigate(-1)" @keydown.arrow-down.prevent="navigate(1)" @keydown.home.prevent="jump(0)" @keydown.end.prevent="followOutput()">
                         <template x-for="bucket in rail" :key="bucket.from"><span class="activity-rail-section" :data-role="bucket.role" :title="railTitle(bucket)" :style="'top:' + bucket.row / Math.max(1,total) * 100 + '%;height:' + Math.max(.2, bucket.rows / Math.max(1,total) * 100) + '%'"></span></template>
                         <template x-for="(mark, i) in searchResult.marks" :key="i"><span class="activity-rail-match" :style="'top:' + mark / Math.max(1,total) * 100 + '%'"></span></template>
