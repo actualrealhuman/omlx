@@ -5,10 +5,11 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const js = path.join(__dirname, '../omlx_web/static/js');
+const activitySourceOverride = process.env.ACTIVITY_SOURCE_OVERRIDE ? fs.readFileSync(process.env.ACTIVITY_SOURCE_OVERRIDE, 'utf8') : undefined;
 const backendCursorFixture = '00000000000000000000000000000001:00000000000000000000000000000002:1';
 const syntheticCursor = sequence => `${'a'.repeat(32)}:${'b'.repeat(32)}:${sequence}`;
 
-function harness() {
+function harness(activitySource = fs.readFileSync(path.join(js, 'activity.js'), 'utf8')) {
     const streams = [], workers = [], downloads = [], listeners = new Map(), intervals = new Map(), timeouts = new Map();
     let nextInterval = 0, nextTimeout = 0, nextEventSequence = 0, now = 10000, monotonic = 10000;
     class TestDate extends Date { static now() { return now; } }
@@ -34,7 +35,7 @@ function harness() {
         fetch: async url => ({ok: true, json: async () => url.endsWith('/status') ? {health: {enabled: true}} : {models: [], sources: []}}),
     };
     vm.createContext(context);
-    vm.runInContext(fs.readFileSync(path.join(js, 'activity.js'), 'utf8'), context);
+    vm.runInContext(activitySource, context);
     vm.runInContext(fs.readFileSync(path.join(js, 'dashboard.js'), 'utf8'), context);
     const app = window.activityInspector();
     Object.assign(app, {mainTab: 'activity', $watch() {}, $nextTick: callback => callback(),
@@ -516,6 +517,82 @@ test('reading away from the tail disables follow and keeps a stable viewport', a
     assert.equal(app.follow, true);
     assert.equal(app.row, 1000 - app.visibleRows);
     await app.activate(false);
+});
+
+test('resize renders reject stale rows and ignore physical scroll feedback until the new layout is applied', async () => {
+    const {app, streams, workers, context} = harness(activitySourceOverride);
+    await app.activate(true);
+    streams.at(-1).events.snapshot({data: JSON.stringify({active: [], recent: [], health: {}, detail: {id: 'first', version: '1', representations: []}})});
+    const worker = workers.at(-1), viewport = app.$refs.contextViewport;
+    let callback;
+    context.requestAnimationFrame = fn => { callback = fn; return 9; };
+    context.cancelAnimationFrame = () => {};
+    const initialViewport = worker.messages.filter(message => message.type === 'viewport').at(-1);
+    const initialRevision = initialViewport.layoutRevision ?? 0;
+    worker.onmessage({data: {type: 'render', layoutRevision: initialRevision, rows: [], outline: [], total: 3000, row: 1200,
+        loading: false, search: {count: 0, marks: []}}});
+    viewport.scrollTop = app.scrollPixels(1200);
+    app.onScroll();
+    assert.equal(typeof callback, 'function');
+
+    viewport.clientWidth = 240;
+    app.measure();
+    const resizedViewport = worker.messages.filter(message => message.type === 'viewport').at(-1);
+    const resizedRevision = resizedViewport.layoutRevision ?? 0;
+    viewport.scrollTop = 912164; // Browser retains the old physical position as wrapping changes.
+    app.onScroll();
+    callback(); // A queued old-layout RAF must not reinterpret that pixel offset.
+    assert.equal(app.row, 1200);
+    assert.equal(worker.messages.filter(message => message.type === 'viewport').at(-1).row, 1200);
+
+    worker.onmessage({data: {type: 'render', layoutRevision: initialRevision, rows: [], outline: [], total: 4000, row: 1500,
+        loading: false, search: {count: 0, marks: []}}});
+    assert.equal(app.row, 1200, 'late response from the old width is discarded');
+    worker.onmessage({data: {type: 'render', layoutRevision: resizedRevision, rows: [], outline: [], total: 4000, row: 1500,
+        loading: false, search: {count: 0, marks: []}}});
+    assert.equal(app.row, 1500);
+    assert.equal(viewport.scrollTop, app.scrollPixels(1500));
+
+    viewport.scrollTop = app.scrollPixels(800);
+    app.onScroll();
+    callback();
+    assert.equal(app.row, 800, 'genuine scrolling works after the layout acknowledgement');
+    await app.activate(false);
+});
+
+test('deferred DOM writes and scroll callbacks cannot cross width or height layout revisions', async () => {
+    for (const dimension of ['width', 'height']) {
+        const {app, streams, workers, context} = harness();
+        await app.activate(true);
+        streams.at(-1).events.snapshot({data: JSON.stringify({active: [], recent: [], health: {}, detail: {id: 'first', version: '1', representations: []}})});
+        const worker = workers.at(-1), viewport = app.$refs.contextViewport;
+        const initial = worker.messages.filter(message => message.type === 'viewport').at(-1);
+        const render = (revision, row) => worker.onmessage({data: {type: 'render', layoutRevision: revision,
+            rows: [], outline: [], total: 5000, row, loading: false, search: {count: 0, marks: []}}});
+        render(initial.layoutRevision, 1000);
+        let oldScroll;
+        context.requestAnimationFrame = fn => { oldScroll = fn; return 9; };
+        context.cancelAnimationFrame = () => {};
+        app.onScroll();
+        const ticks = [];
+        app.$nextTick = fn => ticks.push(fn);
+        render(initial.layoutRevision, 1001);
+        viewport.scrollTop = 1234;
+        if (dimension === 'width') viewport.clientWidth = 240;
+        else viewport.clientHeight = 880;
+        app.measure();
+        const resized = worker.messages.filter(message => message.type === 'viewport').at(-1);
+        assert.notEqual(resized.layoutRevision, initial.layoutRevision);
+        ticks.shift()();
+        assert.equal(viewport.scrollTop, 1234, 'an old nextTick must not write into the resized DOM');
+        render(resized.layoutRevision, 3000);
+        ticks.shift()();
+        assert.equal(viewport.scrollTop, app.scrollPixels(3000));
+        viewport.scrollTop = 912164;
+        oldScroll();
+        assert.equal(app.row, 3000, 'an old RAF stays stale after the new layout is acknowledged');
+        await app.activate(false);
+    }
 });
 
 test('outline paging is a worker command and invocation replacement clears prior outline position', async () => {

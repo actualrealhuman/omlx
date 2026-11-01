@@ -112,6 +112,42 @@ test('actual worker incrementally decodes split UTF-8 and searches retained cont
     assert.ok(!jsonRows.includes('answer 世界'));
 });
 
+test('actual worker keeps a searched section anchor across width revisions', async () => {
+    const outputs = [], submitted = Buffer.from(JSON.stringify({messages: [{role: 'assistant', content: 'word '.repeat(1200) + 'ACTIVITY_STRESS_TURN_END'}]}));
+    const context = {ActivityDocumentTools: {ActivityDocument, submittedSections}, ActivityOutputTools: require('../omlx_web/static/js/activity_output.js'),
+        importScripts() {}, TextDecoder, URLSearchParams, Blob, self: {}, postMessage: value => outputs.push(value),
+        fetch: async url => {
+            const params = new URL(url, 'http://test.invalid').searchParams, offset = Number(params.get('offset'));
+            return {ok: true, arrayBuffer: async () => submitted.subarray(offset, offset + 65536)};
+        }};
+    vm.createContext(context);
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../omlx_web/static/js/activity_worker.js'), 'utf8'), context);
+    context.self.onmessage({data: {type: 'viewport', row: 0, count: 45, columns: 80, follow: false, layoutRevision: 0}});
+    context.self.onmessage({data: {type: 'sync', detail: {id: 'synthetic', finished_at: 1, representations: [
+        {representation: 'submitted', invocation_id: '0', bytes: submitted.length},
+    ]}}});
+    for (let attempt = 0; attempt < 100 && !outputs.some(value => value.type === 'render' && !value.loading && value.outlineTotal); attempt++) await new Promise(resolve => setImmediate(resolve));
+    context.self.onmessage({data: {type: 'search', query: 'ACTIVITY_STRESS_TURN_END', match: 0}});
+    const before = outputs.at(-1);
+    assert.equal(before.search.count, 1, JSON.stringify({loading: before.loading, current: before.current, rows: before.rows.slice(0, 2)}));
+    const key = before.current.key;
+    assert.equal(key, 'submitted:0:message-0');
+    context.self.onmessage({data: {type: 'viewport', row: before.row, count: 45, columns: 24, follow: false, layoutRevision: 1}});
+    const after = outputs.at(-1);
+    assert.equal(after.layoutRevision, 1);
+    assert.equal(after.search.count, 1);
+    assert.equal(after.current.key, key);
+    assert.equal(after.row, after.search.marks[0]);
+    assert.notEqual(after.row, before.row);
+    context.self.onmessage({data: {type: 'viewport', row: 0, count: 55, columns: 24, follow: true, layoutRevision: 1}});
+    const tail = outputs.at(-1);
+    assert.equal(tail.row, tail.total - 35);
+    context.self.onmessage({data: {type: 'viewport', row: tail.row, count: 60, columns: 24, follow: true, layoutRevision: 1}});
+    assert.equal(outputs.at(-1).row, tail.total - 40, 'height-only resize keeps follow at the actual tail');
+    context.self.onmessage({data: {type: 'viewport', row: 10, count: 60, columns: 24, follow: false, layoutRevision: 1}});
+    assert.equal(outputs.at(-1).row, 10, 'manual scrolling still selects the requested row');
+});
+
 test('worker pages the complete outline and keeps aggregate rail and stable-key navigation bounded', async () => {
     const outputs = [], totalMessages = 4105;
     let submitted = JSON.stringify({messages: Array.from({length: totalMessages}, (_, i) => ({role: i % 2 ? 'assistant' : 'user',

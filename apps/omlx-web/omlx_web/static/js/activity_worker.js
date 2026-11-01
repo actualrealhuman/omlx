@@ -78,7 +78,7 @@ function render(reindex = false) {
         key: section.key, label: boundedText(section.label || section.role, 256), role: section.role,
         row: section.start, rows: section.count + 1, ordinal: outlineOffset + index + 1,
     }));
-    postMessage({type: 'render', mode, rows: documentView.window(start, viewport.count).map(line => ({...line, match: line.row === targetRow})), total: documentView.rows,
+    postMessage({type: 'render', mode, layoutRevision: viewport.layoutRevision || 0, rows: documentView.window(start, viewport.count).map(line => ({...line, match: line.row === targetRow})), total: documentView.rows,
         row: viewport.row, loading, limited, bytes,
         projectionState: projectionState(), projectionIncomplete: projectionIncomplete(),
         outputBytes: [...sources.values()].filter(source => source.item.representation === 'raw_output' || (['submitted', 'parsed_output', 'api_response'].includes(mode) && source.item.representation === 'api_response')).reduce((sum, source) => sum + source.offset, 0),
@@ -136,8 +136,10 @@ self.onmessage = ({data}) => {
         sync();
     } else if (data.type === 'viewport') {
         const changed = data.columns !== viewport.columns;
+        const countChanged = data.count !== viewport.count;
         const moved = data.row !== undefined && data.row !== viewport.row;
         viewport = {...viewport, ...data}; follow = data.follow;
+        if (follow && countChanged && !changed) viewport.row = Math.max(0, documentView.rows - Math.max(1, viewport.count - 20));
         if (moved || data.revealOutline) outlineManual = false;
         render(changed);
     } else if (data.type === 'mode') {

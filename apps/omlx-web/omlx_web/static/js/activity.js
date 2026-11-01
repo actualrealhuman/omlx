@@ -22,6 +22,7 @@
         let observationTimer = null, observationGeneration = 0;
         let invocationGeneration = 0;
         let generation = 0, activation = 0, pageGeneration = 0, loadedVersion = '', stopped = true, lastFacets = 0, exportSequence = 0, programmaticScrollRow = null;
+        let layoutRevision = 0, pendingLayoutRevision = null;
         let resumeCursor = '', appliedCursor = null, streamChannel = '', freshHeadRetried = false;
         const positions = new Map();
         const label = key => root.t(`activity.${key}`);
@@ -326,6 +327,8 @@
                         if (data.type === 'export' || data.type === 'export_error') { this.saveExport(data); return; }
                         if (data.type !== 'render') return;
                         if (data.mode !== undefined && data.mode !== this.mode) return;
+                        const responseLayoutRevision = data.layoutRevision ?? layoutRevision;
+                        if (responseLayoutRevision !== layoutRevision) return;
                         if (!this.follow && this.viewReady && data.outputBytes > this.outputBytes) this.newOutput = true;
                         const previous = new Map(this.rows.map(line => [line.key, line]));
                         const copyContext = {...this.exportIdentity()};
@@ -349,9 +352,10 @@
                         this.searchResult = data.search;
                         this.row = data.row;
                         this.$nextTick(() => {
-                            if (token !== generation || stopped) return;
+                            if (token !== generation || stopped || responseLayoutRevision !== layoutRevision) return;
                             const el = this.$refs.contextViewport, top = this.scrollPixels(data.row);
                             if (Math.abs(el.scrollTop - top) > ROW_HEIGHT) { programmaticScrollRow = data.row; el.scrollTop = top; }
+                            if (pendingLayoutRevision === responseLayoutRevision) pendingLayoutRevision = null;
                         });
                     };
                     worker.onerror = () => { this.error = label('worker_failed'); this.loading = false; };
@@ -488,16 +492,26 @@
                 if (!el?.clientWidth) return;
                 const canvas = document.createElement('canvas'), context = canvas.getContext('2d');
                 context.font = getComputedStyle(el).font;
-                this.columns = Math.max(24, Math.min(240, Math.floor((el.clientWidth - 40) / context.measureText('M').width)));
-                this.visibleRows = Math.ceil(el.clientHeight / ROW_HEIGHT);
+                const columns = Math.max(24, Math.min(240, Math.floor((el.clientWidth - 40) / context.measureText('M').width)));
+                const visibleRows = Math.ceil(el.clientHeight / ROW_HEIGHT);
+                if ((columns !== this.columns || visibleRows !== this.visibleRows) && this.viewReady) {
+                    layoutRevision++;
+                    pendingLayoutRevision = layoutRevision;
+                    cancelAnimationFrame(frame); frame = null;
+                }
+                this.columns = columns;
+                this.visibleRows = visibleRows;
                 this.viewport();
             },
             viewport(revealOutline = false) {
-                worker?.postMessage({type: 'viewport', row: this.row, count: this.visibleRows + 20, columns: this.columns, follow: this.follow, revealOutline});
+                worker?.postMessage({type: 'viewport', row: this.row, count: this.visibleRows + 20, columns: this.columns, follow: this.follow, revealOutline, layoutRevision});
             },
             onScroll() {
+                if (pendingLayoutRevision !== null) return;
+                const scrollLayoutRevision = layoutRevision;
                 cancelAnimationFrame(frame);
                 frame = requestAnimationFrame(() => {
+                    if (pendingLayoutRevision !== null || scrollLayoutRevision !== layoutRevision) return;
                     const physical = this.$refs.contextViewport.scrollTop / ROW_HEIGHT;
                     const next = this.total <= 200000 ? Math.floor(physical) : Math.round(
                         physical / Math.max(1, 200000 - this.visibleRows) * Math.max(0, this.total - this.visibleRows));
