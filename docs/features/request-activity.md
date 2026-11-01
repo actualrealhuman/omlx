@@ -71,6 +71,14 @@ memory configurations may need a smaller active limit or a larger memory budget.
 - Implementation snapshot for local qualification:
   `7fe132c12c3890bf1d744f70a0073e29db05d103`. This is a source reference,
   not a release, installation or public-availability claim.
+- Required fixture-isolation follow-up:
+  `8cebc095cdc4361baa2827982d1d140cff6526c0`. It resets shared settings in
+  two route-only test fixtures so composed suites cannot inherit unrelated
+  background policy services. Production behavior is unchanged.
+- Qualification source snapshot:
+  `dbb3e19ccce92c7e46c549b0ff5b1d0282a8799b`. This includes that fixture
+  follow-up and the isolated OS file-limit regression; production code is
+  unchanged from the implementation snapshot above.
 - Baseline: stable `v0.7.1`, full commit
   `bd1e9b112474862ebed550a9c83b4316038a1d74`.
 - Current boundary: `omlx/activity/`, Activity settings and credential IDs in
@@ -85,8 +93,8 @@ memory configurations may need a smaller active limit or a larger memory budget.
   browser chat storage, extra database package or hosted service is required.
   Full runtime/composed-build isolation qualification remains pending.
 
-Apply the complete focused change from the baseline through that implementation
-snapshot in an isolated target checkout. Later replay or UI commits depend on
+Apply the complete focused change from the baseline through the qualification
+source snapshot in an isolated target checkout. Later replay or UI commits depend on
 the earlier capture, storage and integration work; they are not standalone
 features. Preserve the package, shared hooks, web assets, translations and tests
 together. Port shared-file conflicts against the selected target deliberately;
@@ -110,7 +118,13 @@ matrix below distinguishes other engine paths from instrumented local text.
 The current implementation snapshot passed 1,828 Python checks and 18 subtests,
 with one existing unbuilt native-extension skip. This includes the pinned-reader
 storage regression and related API, scheduler/core, authentication, streaming and
-dashboard checks. The JavaScript and regression snapshot at
+dashboard checks. The fixture-isolation follow-up separately passed all 15
+affected route cases; this is targeted fixture validation, not a new full-suite
+or production qualification result. The OS file-limit regression separately
+passed after a real SQLite `SQLITE_IOERR_WRITE` (778), sanitized writer suspension,
+capture refusal and fresh-recorder recovery with an independent `quick_check`
+and content round-trip. This is per-file OS-limit evidence, not actual disk
+exhaustion or a new full-suite result. The JavaScript and regression snapshot at
 `7b7037bfa02545d0be57270e29f22f91827a5d17` passed 70 standalone Node checks;
 those JavaScript and Node test files are unchanged. The mobile and slider-semantics
 follow-ups also passed focused template and browser checks. Initial synthetic
@@ -129,6 +143,7 @@ Run CPU-only foundation checks from the repository root:
 
 ```sh
 python -m unittest discover -s tests -p test_activity.py -v
+python -m unittest discover -s tests -p test_activity_file_limit.py -v
 ```
 
 They exercise actual recorder/storage behavior, including disabled resources,
@@ -142,6 +157,14 @@ metadata under a small storage budget. It checks visible storage gaps without
 worker suspension, retained terminal metadata and continued capture after the
 reader is released. It does not establish an unconditional instantaneous sidecar
 ceiling while checkpointing is blocked.
+`tests/test_activity_file_limit.py` uses a bounded child process with a disposable
+database and a child-only soft `RLIMIT_FSIZE`. It ignores `SIGXFSZ`, observes a
+real SQLite write error without injecting one, checks sanitized suspension and
+ordinary capture refusal, then restores the limit and verifies a fresh writer
+on the same database. The parent also owns temporary cleanup if the child times
+out. Unsupported platforms skip explicitly. This is an OS per-file size failure,
+typically `EFBIG` through SQLite, not a full-filesystem `ENOSPC` test; it does not
+promise durability for the interrupted request or recovery of the same writer.
 These checks do not qualify inference integration, browser UI, real models or
 performance. Run relevant subsystem tests after their hooks are implemented.
 `tests/test_activity_runtime.py` exercises endpoint validation/auth ordering,
