@@ -68,22 +68,50 @@ memory configurations may need a smaller active limit or a larger memory budget.
 - Availability: local focused implementation in progress; no public source
   snapshot is offered for adoption yet.
 - Discovery branch: `feature/request-activity`.
+- Implementation snapshot for local qualification:
+  `a96413af8ddadef1f112f2edae039aff4617f4bc`. This is a source reference,
+  not a release, installation or public-availability claim.
 - Baseline: stable `v0.7.1`, full commit
   `bd1e9b112474862ebed550a9c83b4316038a1d74`.
 - Current boundary: `omlx/activity/`, Activity settings and credential IDs in
   `omlx/settings.py`, generation endpoint/startup/auth hooks in `omlx/server.py`,
-  input/output/lifecycle hooks in `omlx/engine_core.py`, `omlx/scheduler.py`,
-  `omlx/request.py` and `omlx/engine/batched.py`, the admin router inclusion,
+  input/output/lifecycle and dispatch hooks in `omlx/engine_core.py`,
+  `omlx/scheduler.py`, `omlx/engine_pool.py`, `omlx/request.py` and
+  `omlx/engine/batched.py`, the admin router inclusion,
   the Activity web assets/templates and dashboard links, plus server Activity
   tests and focused web tests.
 - Foundation dependencies: Python standard library only. Server and UI wiring
-  will use the application's existing packages. No dependency on downstream
-  scheduling controls or browser chat storage is intended; full isolation
-  qualification remains pending.
+  use the application's existing packages. No downstream scheduling controls,
+  browser chat storage, extra database package or hosted service is required.
+  Full runtime/composed-build isolation qualification remains pending.
 
-Before a complete source snapshot is offered, this recipe must include the
-immutable feature revision, actual endpoint/backend matrix, activation UI/API,
-full implementation boundary, validation and any remaining prerequisites.
+Apply the complete focused change from the baseline through that implementation
+snapshot in an isolated target checkout. Later replay or UI commits depend on
+the earlier capture, storage and integration work; they are not standalone
+features. Preserve the package, shared hooks, web assets, translations and tests
+together. Port shared-file conflicts against the selected target deliberately;
+do not import a personal integration branch as a prerequisite. No generated app
+or native binary accompanies this source.
+
+Capture starts disabled. An administrator opens Activity's capture/settings
+control and enables it; existing history remains readable with capture disabled.
+The admin session or main API key grants observer access, while named inference
+keys identify sources without granting that access. Opening Activity does not
+load a model. Disabling capture stops observation rather than inference.
+
+The four required text families (`/v1/completions`, `/v1/chat/completions`,
+`/v1/messages`, `/v1/responses`) have source hooks for both HTTP response modes.
+Production-route fixtures, synthetic engine output and mocked scheduler/core
+paths cover their contracts; full real-model endpoint/backend qualification is
+still required. VLM submitted images and lazy previews are implemented, with
+actual model/media and rendered-browser qualification pending. The evidence
+matrix below distinguishes other engine paths from instrumented local text.
+
+This snapshot passed 1,721 Python checks with one existing unbuilt native-extension
+skip, plus 69 Node checks. The checks cover the focused source and related
+scheduler/core/admin/dashboard behavior. They do not establish real-browser,
+serving-overhead, native-build or private-trial readiness. Those gates, source
+publication and catalog/agent-guide reconciliation remain open.
 
 ## Validation
 
