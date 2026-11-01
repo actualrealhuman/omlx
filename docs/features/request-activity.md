@@ -76,12 +76,17 @@ memory configurations may need a smaller active limit or a larger memory budget.
   two route-only test fixtures so composed suites cannot inherit unrelated
   background policy services. Production behavior is unchanged.
 - Qualification source snapshot:
-  `f745cf23f1a7527303807a5fd8f62b0c83c4fae1`. This includes that fixture
-  follow-up, the isolated OS file-limit regression and an inspector resize fix.
+  `4b2f9e0e4f3a7828e6698cd805166eb18ecc3b54`. This includes that fixture
+  follow-up, the isolated OS file-limit regression, the inspector resize fix
+  and loading-time search intent handling.
   Backend production code is unchanged from the implementation snapshot above.
   The inspector preserves semantic reading anchors across width changes,
   rejects stale layout renders and deferred scroll callbacks, and retains
-  tail-following across height-only changes.
+  tail-following across height-only changes. A search entered while retained
+  content loads waits for the complete current index, then jumps once using
+  the final match ordering. Newer navigation, Follow, mode/query changes or a
+  failed load cancel that intent; later output does not repeatedly pull the
+  reader back to a match.
 - Baseline: stable `v0.7.1`, full commit
   `bd1e9b112474862ebed550a9c83b4316038a1d74`.
 - Current boundary: `omlx/activity/`, Activity settings and credential IDs in
@@ -148,10 +153,15 @@ establish comprehensive browser, serving-overhead, native-build or private-trial
 readiness. Those gates, source publication and catalog/agent-guide reconciliation
 remain open.
 
-One loading-time search case still needs follow-up: a query entered before the
-submitted representation finishes loading can report a later match without
-moving to it until Enter is pressed again. Clipboard transport and selection
-qualification also remain incomplete.
+The loading-time search snapshot separately passed 67 checks across the same
+three Node suites. A deferred-content replay against the exact previous source
+reported one match while leaving the reader at row 1 with the target at row 91;
+the changed worker moved to row 91. Regressions cover final input/output ordering,
+width/height feedback, cancellation by newer navigation, errors and no-match
+completion without a later unsolicited jump. No new timer, queue or retained
+hit list is introduced. Browser confirmation of this follow-up remains pending;
+the deterministic worker result does not replace rendered-browser evidence.
+Clipboard transport and selection qualification also remain incomplete.
 
 ## Validation
 
