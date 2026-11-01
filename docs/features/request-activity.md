@@ -197,18 +197,26 @@ same read transaction; it does not infer exclusion from absence on the first
 page. An outside-filter hint appears in the selected inspector, including mobile.
 Missing/deleted selection remains distinct from a filtered selection.
 
-The first event is a `snapshot` with an epoch/sequence ID. Reconnect uses
-`resync_required` followed by a fresh snapshot; replay is explicitly
-`snapshot_only`. Clients fetch new text ranges from retained content. Session
+The first data event is a `snapshot` with an opaque epoch/channel/sequence ID.
+Reconnect accepts `Last-Event-ID`, or an optional `cursor` query when creating a
+new EventSource; the header wins. Valid retained history replays contiguously,
+one metadata frame at a time. Invalid, foreign, future or missing history yields
+`resync_required` before a fresh snapshot. A caught-up new connection receives
+the current head. Clients fetch new text ranges from retained content. Session
 authorization is rechecked throughout a stream; `authorization_lost`,
 `unavailable` and `reconnect` are explicit terminal stream events. Data responses
-are marked no-store. This is not a lossless event-log/replay contract.
+are marked no-store. Replay contains sampled replacement metadata, rather than
+a lossless inference event log or recovered context content.
 
-An unused bounded replay-buffer component is present in `omlx/activity/replay.py`.
-It retains immutable metadata frames with explicit byte/count/TTL limits and
-returns one contiguous event or a resynchronization result. Its existence does
-not change the live delivery contract above: mutation/publication fencing and
-route/browser cursor integration remain required. Run its focused checks with
+The replay cache in `omlx/activity/replay.py` retains at most 2 MiB/128 events
+globally, 64 events and 1 MiB plus framing per channel, 16 channels and eight
+active leases. Events expire after 30 seconds and inactive channels after 60
+seconds, with earlier eviction under pressure. These bounds do not promise a
+minimum replay window or total process RSS. Active channel locks serialize each
+committed read through publication; each viewer follows its own cursor. A fresh
+missing selection bypasses historical selected detail. Service/source changes
+invalidate old reads and replay identities. Browser explicit reconnect-cursor
+and duplicate handling still requires integration. Run focused buffer checks with
 `python -m unittest discover -s tests -p test_activity_replay.py -v`. See the
 [buffer decision](../decisions/request-activity-replay-buffer.md) for bounds and
 failure semantics.
@@ -715,9 +723,11 @@ of model/raw/JSON evidence modes. Rendered-browser behavior remains unqualified.
 
 ## Limitations and remaining work
 
-- Implement bounded sequenced live-event replay and cursor invalidation.
-  Current delivery explicitly resynchronizes with committed snapshots; the
-  accepted replay contract still needs implementation and race/resource checks.
+- Complete browser reconnect-cursor and duplicate handling against the bounded
+  sequenced replay routes, then qualify real-browser reconnect and backpressure
+  behavior. Synthetic route checks cover initial/poll serialization, independent
+  channels, shared-head delivery, source changes, session revocation during reads,
+  missing selected detail and restart invalidation.
 - Qualify invocation selection/options in a real browser and detailed snapshots
   under load. Final backend options and richer cache evidence
   and all backend/endpoint qualification remain. Backend
@@ -727,8 +737,8 @@ of model/raw/JSON evidence modes. Rendered-browser behavior remains unqualified.
   Engines with their own native parsers may already have transformed it;
   universal pre-parser raw generation is not yet qualified.
 - Qualify the initial inspector, navigation, dashboard links and live controls
-  in an actual browser. Qualify original-image previews and browser pixel budgets
-  unnecessarily; current media placeholders are inert.
+  in an actual browser. Qualify original-image previews and browser pixel budgets;
+  supported retained images use lazy previews and unsupported media remain inert.
 - Qualify physical-budget behavior under disk-full conditions, pinned SQLite
   readers, reclamation/migration and very large histories. Current page limits
   conservatively reserve part of the budget for WAL/sidecars; configured disk

@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Small, unused bounded store for immutable Activity SSE replay frames.
+"""Bounded store for immutable Activity SSE replay frames.
 
-This module deliberately has no connection to Activity routes or readers.  A
-future integration must still authenticate each viewer and own stream limits.
+The admin route owns authentication, committed reads and stream admission.
+This component only retains immutable encoded frames within fixed resource caps.
 """
 
 from __future__ import annotations

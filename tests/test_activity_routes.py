@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from activity_replay_test_helpers import replay_stream
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 from starlette.requests import ClientDisconnect
@@ -296,14 +297,10 @@ class ActivityRouteTests(unittest.TestCase):
         async def check():
             reader = self.service.reader()
             initial = reader.snapshot(request_id=handle.request_id)
-            stream = self.service.snapshots(
-                request, reader, handle.request_id, None, None, initial
+            stream = replay_stream(
+                self.service, request, reader, handle.request_id, None, None, initial
             )
             self.assertIn("resync_required", await anext(stream))
-            snapshot = await anext(stream)
-            self.assertIn("event: snapshot", snapshot)
-            self.assertIn(handle.request_id, snapshot)
-            self.assertNotIn("payload", snapshot)
             self.assertIn("authorization_lost", await anext(stream))
             with self.assertRaises(StopAsyncIteration):
                 await anext(stream)
@@ -356,6 +353,153 @@ class ActivityRouteTests(unittest.TestCase):
             )
             self.assertEqual(payload["active"], [])
 
+    def test_events_replay_one_new_snapshot_and_header_cursor_wins(self):
+        selected = self.request(terminal=False)
+        params = {"request_id": selected.request_id}
+
+        def first_event(lines):
+            frame = []
+            for line in lines:
+                frame.append(line)
+                if line == "":
+                    return frame
+            self.fail("stream ended before its first frame")
+
+        with TestClient(self.app) as client:
+            with client.stream(
+                "GET",
+                "/admin/api/activity/events",
+                params=params,
+                headers=self.headers,
+            ) as response:
+                lines = response.iter_lines()
+                initial_frame = first_event(lines)
+                old_cursor = next(
+                    line[4:] for line in initial_frame if line.startswith("id: ")
+                )
+                self.recorder.finish(selected)
+                self.assertTrue(self.recorder.flush())
+                updated_frame = first_event(lines)
+                self.assertNotEqual(
+                    next(line[4:] for line in updated_frame if line.startswith("id: ")),
+                    old_cursor,
+                )
+            with client.stream(
+                "GET",
+                "/admin/api/activity/events",
+                params={**params, "cursor": "invalid-query-cursor"},
+                headers={**self.headers, "last-event-id": old_cursor},
+            ) as response:
+                replay_frame = first_event(response.iter_lines())
+        self.assertIn("event: snapshot", replay_frame, repr(replay_frame))
+        replay_cursor = next(
+            line[4:] for line in replay_frame if line.startswith("id: ")
+        )
+        self.assertNotEqual(replay_cursor, old_cursor)
+        self.assertEqual(replay_cursor.split(":")[:2], old_cursor.split(":")[:2])
+        payload = json.loads(
+            next(line[6:] for line in replay_frame if line.startswith("data: "))
+        )
+        self.assertIn(selected.request_id, json.dumps(payload))
+
+    def test_missing_selected_detail_never_replays_contiguous_old_snapshot(self):
+        selected = self.request(terminal=False)
+        fresh_missing = {
+            "active": [],
+            "recent": [],
+            "recent_more": False,
+            "selected_outside_filters": None,
+            "detail": None,
+        }
+        with TestClient(self.app) as client:
+            with client.stream(
+                "GET",
+                "/admin/api/activity/events",
+                params={"request_id": selected.request_id},
+                headers=self.headers,
+            ) as response:
+                first_frame = []
+                for line in response.iter_lines():
+                    first_frame.append(line)
+                    if line == "":
+                        break
+            old_cursor = next(
+                line[4:] for line in first_frame if line.startswith("id: ")
+            )
+            with (
+                patch.object(
+                    self.service.reader().__class__,
+                    "snapshot",
+                    return_value=fresh_missing,
+                ),
+                client.stream(
+                    "GET",
+                    "/admin/api/activity/events",
+                    params={
+                        "request_id": selected.request_id,
+                        "cursor": old_cursor,
+                    },
+                    headers=self.headers,
+                ) as response,
+            ):
+                lines = response.iter_lines()
+                first = next(lines)
+                self.assertEqual(first, "event: resync_required")
+                for line in lines:
+                    if line == "event: snapshot":
+                        break
+                data = next(line for line in lines if line.startswith("data: "))
+                payload = json.loads(data[6:])
+                self.assertIsNone(payload["detail"])
+                self.assertEqual(payload["active"], [])
+                self.assertEqual(payload["recent"], [])
+
+    def test_second_viewer_receives_head_published_by_first_viewer(self):
+        selected = self.request(terminal=False)
+        with (
+            TestClient(self.app) as client,
+            client.stream(
+                "GET",
+                "/admin/api/activity/events",
+                params={"request_id": selected.request_id},
+                headers=self.headers,
+            ) as second_viewer,
+        ):
+            second_lines = second_viewer.iter_lines()
+            old_frame = []
+            for line in second_lines:
+                old_frame.append(line)
+                if line == "":
+                    break
+            old_cursor = next(line[4:] for line in old_frame if line.startswith("id: "))
+
+            self.recorder.finish(selected)
+            self.assertTrue(self.recorder.flush())
+            with client.stream(
+                "GET",
+                "/admin/api/activity/events",
+                params={"request_id": selected.request_id},
+                headers=self.headers,
+            ) as first_viewer:
+                first_frame = []
+                for line in first_viewer.iter_lines():
+                    first_frame.append(line)
+                    if line == "":
+                        break
+            published_cursor = next(
+                line[4:] for line in first_frame if line.startswith("id: ")
+            )
+            delivered = []
+            for line in second_lines:
+                delivered.append(line)
+                if line == "":
+                    break
+            delivered_cursor = next(
+                line[4:] for line in delivered if line.startswith("id: ")
+            )
+            self.assertNotEqual(old_cursor, published_cursor)
+            self.assertEqual(delivered_cursor, published_cursor)
+
     def test_filtered_sse_refresh_uses_same_predicates_and_reader_admission(self):
         base = time.time() - 10
         first = self.request(received_at=base)
@@ -377,11 +521,20 @@ class ActivityRouteTests(unittest.TestCase):
                 return await admitted_read(function)
 
             with patch.object(self.service, "read", counted_read):
-                stream = self.service.snapshots(
-                    request, reader, None, "model-a", "source-a", initial, **filters
+                stream = replay_stream(
+                    self.service,
+                    request,
+                    reader,
+                    None,
+                    "model-a",
+                    "source-a",
+                    initial,
+                    **filters,
                 )
                 try:
-                    payload = json.loads((await anext(stream)).split("data: ", 1)[1])
+                    payload = json.loads(
+                        (await anext(stream)).decode().split("data: ", 1)[1]
+                    )
                     self.assertEqual(
                         [row["id"] for row in payload["recent"]], [first.request_id]
                     )
@@ -389,7 +542,7 @@ class ActivityRouteTests(unittest.TestCase):
                     self.request(received_at=base + 8)
                     self.request(terminal=False, received_at=base + 2)
                     event = await asyncio.wait_for(anext(stream), 3)
-                    payload = json.loads(event.split("data: ", 1)[1])
+                    payload = json.loads(event.decode().split("data: ", 1)[1])
                     self.assertEqual(
                         {row["id"] for row in payload["recent"]},
                         {first.request_id, second.request_id},
@@ -411,6 +564,59 @@ class ActivityRouteTests(unittest.TestCase):
             close()
         self.assertEqual(self.service._streams, set())
 
+    def test_replay_coordinator_rejects_active_loop_rebind_and_allows_idle_rebind(self):
+        digest = bytes.fromhex("01" * 32)
+
+        async def acquire_first():
+            return self.service.acquire_replay(digest, self.service.publication_stamp())
+
+        lease, first_lock = asyncio.run(acquire_first())
+
+        async def acquire_again():
+            return self.service.acquire_replay(digest, self.service.publication_stamp())
+
+        with self.assertRaises(HTTPException) as error:
+            asyncio.run(acquire_again())
+        self.assertEqual(error.exception.status_code, 503)
+        self.service.release_replay(digest, lease)
+
+        second_lease, second_lock = asyncio.run(acquire_again())
+        self.assertIsNot(first_lock, second_lock)
+        self.service.release_replay(digest, second_lease)
+        self.assertEqual(self.service._coordinators, {})
+
+    def test_replay_coordinator_serializes_same_channel_and_separates_channels(self):
+        async def check():
+            stamp = self.service.publication_stamp()
+            shared = bytes.fromhex("02" * 32)
+            separate = bytes.fromhex("03" * 32)
+            first, first_lock = self.service.acquire_replay(shared, stamp)
+            second, second_lock = self.service.acquire_replay(shared, stamp)
+            third, third_lock = self.service.acquire_replay(separate, stamp)
+            self.assertIs(first_lock, second_lock)
+            self.assertIsNot(first_lock, third_lock)
+
+            entered = asyncio.Event()
+
+            async def wait_for_shared():
+                entered.set()
+                async with second_lock:
+                    return True
+
+            async with first_lock:
+                waiter = asyncio.create_task(wait_for_shared())
+                await entered.wait()
+                await asyncio.sleep(0)
+                self.assertFalse(waiter.done())
+                async with third_lock:
+                    self.assertFalse(waiter.done())
+            self.assertTrue(await waiter)
+            self.service.release_replay(shared, first)
+            self.service.release_replay(shared, second)
+            self.service.release_replay(separate, third)
+
+        asyncio.run(check())
+
     def test_events_rejects_initial_read_when_source_changes_mid_read(self):
         original_read = self.service.read
 
@@ -423,6 +629,374 @@ class ActivityRouteTests(unittest.TestCase):
             response = self.get("/events")
         self.assertEqual(response.status_code, 503)
         self.assertIn("Activity history changed", response.json()["detail"])
+
+    def test_actual_route_serializes_initial_read_after_existing_poll(self):
+        handle = self.request(terminal=False)
+        endpoint = next(
+            route.endpoint
+            for route in self.router.routes
+            if getattr(route, "path", None) == "/api/activity/events"
+        )
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/admin/api/activity/events",
+            "headers": [(b"authorization", b"Bearer synthetic-owner-only")],
+        }
+        request = Request(scope)
+
+        async def invoke_endpoint():
+            return await endpoint(
+                request,
+                request_id=handle.request_id,
+                cursor=None,
+                scope="all",
+                model_id=None,
+                source_id=None,
+                state=None,
+                since=None,
+                until=None,
+            )
+
+        async def check():
+            first_response = await invoke_endpoint()
+            first_frame = await anext(first_response.body_iterator)
+            first_cursor = first_frame.split(b"\n", 1)[0][4:].decode("ascii")
+            self.recorder.finish(handle)
+            self.assertTrue(self.recorder.flush())
+
+            original_read = self.service.read
+            reader_type = type(self.service.reader())
+            original_snapshot = reader_type.snapshot
+            poll_entered = asyncio.Event()
+            release_poll = asyncio.Event()
+            second_route_started = asyncio.Event()
+            read_calls = []
+            snapshots = []
+
+            async def gate_read(operation, *, on_submitted=None):
+                read_calls.append(operation)
+                if len(read_calls) == 1:
+                    poll_entered.set()
+                    await release_poll.wait()
+                return await original_read(operation, on_submitted=on_submitted)
+
+            def snapshot_then_publish(reader, **kwargs):
+                result = original_snapshot(reader, **kwargs)
+                snapshots.append(True)
+                if len(snapshots) == 1:
+                    self.request(text="arrived after the poll read")
+                return result
+
+            with (
+                patch.object(self.service, "read", gate_read),
+                patch.object(reader_type, "snapshot", snapshot_then_publish),
+            ):
+                poll_task = asyncio.create_task(anext(first_response.body_iterator))
+                await asyncio.wait_for(poll_entered.wait(), 2)
+
+                async def second_route():
+                    second_route_started.set()
+                    return await invoke_endpoint()
+
+                route_task = asyncio.create_task(second_route())
+                await asyncio.wait_for(second_route_started.wait(), 2)
+                await asyncio.sleep(0)
+                self.assertEqual(len(read_calls), 1)
+                self.assertFalse(route_task.done())
+
+                release_poll.set()
+                poll_frame = await asyncio.wait_for(poll_task, 2)
+                second_response = await asyncio.wait_for(route_task, 2)
+                second_frame = await anext(second_response.body_iterator)
+                poll_cursor = poll_frame.split(b"\n", 1)[0][4:].decode("ascii")
+                second_cursor = second_frame.split(b"\n", 1)[0][4:].decode("ascii")
+                self.assertNotEqual(first_cursor, poll_cursor)
+                self.assertEqual(
+                    poll_cursor.split(":")[:2], second_cursor.split(":")[:2]
+                )
+                self.assertLess(
+                    int(poll_cursor.rsplit(":", 1)[1]),
+                    int(second_cursor.rsplit(":", 1)[1]),
+                )
+                second_response._release()
+
+            await first_response.body_iterator.aclose()
+            first_response._release()
+
+        asyncio.run(check())
+
+    def test_actual_route_reads_independent_channels_concurrently(self):
+        handle = self.request(terminal=False)
+        endpoint = next(
+            route.endpoint
+            for route in self.router.routes
+            if getattr(route, "path", None) == "/api/activity/events"
+        )
+        request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/admin/api/activity/events",
+                "headers": [(b"authorization", b"Bearer synthetic-owner-only")],
+            }
+        )
+
+        async def invoke(*, model_id=None):
+            return await endpoint(
+                request,
+                request_id=handle.request_id,
+                cursor=None,
+                scope="all",
+                model_id=model_id,
+                source_id=None,
+                state=None,
+                since=None,
+                until=None,
+            )
+
+        async def check():
+            response = await invoke()
+            await anext(response.body_iterator)
+            poll_entered = asyncio.Event()
+            separate_entered = asyncio.Event()
+            release_poll = asyncio.Event()
+            original_read = self.service.read
+            reads = 0
+
+            async def gate_read(operation, *, on_submitted=None):
+                nonlocal reads
+                reads += 1
+                if reads == 1:
+                    poll_entered.set()
+                    await release_poll.wait()
+                elif reads == 2:
+                    separate_entered.set()
+                return await original_read(operation, on_submitted=on_submitted)
+
+            with patch.object(self.service, "read", gate_read):
+                poll = asyncio.create_task(anext(response.body_iterator))
+                try:
+                    await asyncio.wait_for(poll_entered.wait(), 2)
+                    other = await asyncio.wait_for(invoke(model_id="other-model"), 2)
+                    await asyncio.wait_for(separate_entered.wait(), 2)
+                    self.assertEqual(reads, 2)
+                    await anext(other.body_iterator)
+                    other._release()
+                finally:
+                    release_poll.set()
+                    poll.cancel()
+                    await asyncio.gather(poll, return_exceptions=True)
+                    await response.body_iterator.aclose()
+                    response._release()
+
+        asyncio.run(check())
+
+    def test_unstarted_replay_response_rejects_close_start_generation(self):
+        endpoint = next(
+            route.endpoint
+            for route in self.router.routes
+            if getattr(route, "path", None) == "/api/activity/events"
+        )
+        request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/admin/api/activity/events",
+                "headers": [(b"authorization", b"Bearer synthetic-owner-only")],
+            }
+        )
+
+        async def check():
+            response = await endpoint(
+                request,
+                request_id=None,
+                cursor=None,
+                scope="all",
+                model_id=None,
+                source_id=None,
+                state=None,
+                since=None,
+                until=None,
+            )
+            old_generation = response.body_iterator
+            self.service.close()
+            self.service.start()
+            first = await anext(old_generation)
+            self.assertIn("event: reconnect", first)
+            self.assertNotIn("event: snapshot", first)
+            await old_generation.aclose()
+            response._release()
+            self.assertEqual(self.service._coordinators, {})
+
+        asyncio.run(check())
+
+    def test_known_missing_selection_polls_once_without_reopening_history(self):
+        endpoint = next(
+            route.endpoint
+            for route in self.router.routes
+            if getattr(route, "path", None) == "/api/activity/events"
+        )
+        request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/admin/api/activity/events",
+                "headers": [(b"authorization", b"Bearer synthetic-owner-only")],
+            }
+        )
+
+        async def check():
+            response = await endpoint(
+                request,
+                request_id="missing-selected-request",
+                cursor="malformed-cursor",
+                scope="all",
+                model_id=None,
+                source_id=None,
+                state=None,
+                since=None,
+                until=None,
+            )
+            body = response.body_iterator
+            self.assertIn("resync_required", await anext(body))
+            self.assertIn(b"event: snapshot", await anext(body))
+
+            original_read = self.service.read
+            original_next_after = self.service._replay.next_after
+            read_count = 0
+            poll_read_complete = asyncio.Event()
+            next_after_calls = []
+
+            async def counted_read(operation, *, on_submitted=None):
+                nonlocal read_count
+                read_count += 1
+                result = await original_read(operation, on_submitted=on_submitted)
+                if read_count == 1:
+                    poll_read_complete.set()
+                return result
+
+            def counted_next_after(*args):
+                next_after_calls.append(True)
+                return original_next_after(*args)
+
+            with (
+                patch.object(self.service, "read", counted_read),
+                patch.object(self.service._replay, "next_after", counted_next_after),
+            ):
+                poll = asyncio.create_task(anext(body))
+                await asyncio.wait_for(poll_read_complete.wait(), 2)
+                await asyncio.sleep(0)
+                self.assertEqual(read_count, 1)
+                self.assertEqual(next_after_calls, [])
+                self.assertFalse(poll.done())
+                poll.cancel()
+                await asyncio.gather(poll, return_exceptions=True)
+
+            await body.aclose()
+            response._release()
+            self.assertEqual(self.service._coordinators, {})
+
+        asyncio.run(check())
+
+    def test_rechecks_authorization_after_slow_head_reads_before_snapshot(self):
+        handle = self.request(terminal=False)
+        endpoint = next(
+            route.endpoint
+            for route in self.router.routes
+            if getattr(route, "path", None) == "/api/activity/events"
+        )
+        request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/admin/api/activity/events",
+                "headers": [(b"authorization", b"Bearer synthetic-owner-only")],
+            }
+        )
+
+        async def check():
+            for phase in ("resync_bootstrap", "poll"):
+                with self.subTest(phase=phase):
+                    authorized = [True]
+                    lock_ref = [None]
+                    revoked_auth_lock_states = []
+
+                    def require_admin(
+                        _request,
+                        authorized=authorized,
+                        revoked_auth_lock_states=revoked_auth_lock_states,
+                        lock_ref=lock_ref,
+                    ):
+                        if not authorized[0]:
+                            revoked_auth_lock_states.append(lock_ref[0].locked())
+                            raise HTTPException(401, "revoked")
+
+                    self.service.require_admin = require_admin
+                    response = await endpoint(
+                        request,
+                        request_id=None,
+                        cursor="invalid-cursor"
+                        if phase == "resync_bootstrap"
+                        else None,
+                        scope="all",
+                        model_id=None,
+                        source_id=None,
+                        state=None,
+                        since=None,
+                        until=None,
+                    )
+                    body = response.body_iterator
+                    if phase == "resync_bootstrap":
+                        self.assertIn("resync_required", await anext(body))
+                    else:
+                        self.assertIn(b"event: snapshot", await anext(body))
+                        self.recorder.append_text(
+                            handle, "raw_output", "late metadata", invocation_id="1"
+                        )
+                        self.assertTrue(self.recorder.flush())
+
+                    lock_ref[0] = next(
+                        item["lock"] for item in self.service._coordinators.values()
+                    )
+                    original_read = self.service.read
+                    read_finished = asyncio.Event()
+                    return_read = asyncio.Event()
+
+                    async def blocked_read(
+                        operation,
+                        *,
+                        on_submitted=None,
+                        original_read=original_read,
+                        read_finished=read_finished,
+                        return_read=return_read,
+                    ):
+                        result = await original_read(
+                            operation, on_submitted=on_submitted
+                        )
+                        read_finished.set()
+                        await return_read.wait()
+                        return result
+
+                    with patch.object(self.service, "read", blocked_read):
+                        next_event = asyncio.create_task(anext(body))
+                        try:
+                            await asyncio.wait_for(read_finished.wait(), 2)
+                            authorized[0] = False
+                            return_read.set()
+                            event = await asyncio.wait_for(next_event, 2)
+                            self.assertIn("authorization_lost", event)
+                            self.assertNotIn("event: snapshot", str(event))
+                            self.assertEqual(revoked_auth_lock_states, [False])
+                        finally:
+                            return_read.set()
+                            if not next_event.done():
+                                next_event.cancel()
+                            await asyncio.gather(next_event, return_exceptions=True)
+                            await body.aclose()
+                            response._release()
+
+        asyncio.run(check())
 
     def test_snapshot_pins_lists_and_content_indexes_to_one_commit(self):
         handle = self.request(terminal=False)
@@ -474,6 +1048,7 @@ class ActivityRouteTests(unittest.TestCase):
             with self.assertRaises(ClientDisconnect):
                 await self.app(scope, receive, send)
             self.assertEqual(self.service._streams, set())
+            self.assertEqual(self.service._coordinators, {})
 
         asyncio.run(check())
 

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from activity_replay_test_helpers import replay_stream
 from fastapi import HTTPException, Request
 
 from omlx.activity.routes import ActivityAdmin, _MutationFence
@@ -271,7 +272,8 @@ def test_snapshot_auth_await_invalidates_source_and_sends_no_snapshot(tmp_path):
     service.require_admin = authorization
 
     async def check():
-        stream = service.snapshots(
+        stream = replay_stream(
+            service,
             request,
             SimpleNamespace(),
             None,
@@ -306,7 +308,8 @@ def test_poll_read_that_straddles_mutation_reconnects_without_publishing(tmp_pat
     service.read = stale_read
 
     async def check():
-        stream = service.snapshots(
+        stream = replay_stream(
+            service,
             request,
             reader,
             None,
@@ -316,7 +319,7 @@ def test_poll_read_that_straddles_mutation_reconnects_without_publishing(tmp_pat
             publication_stamp=stamp,
         )
         first = await anext(stream)
-        assert "event: snapshot" in first
+        assert b"event: snapshot" in first
         reconnect = await anext(stream)
         assert reconnect.startswith("event: reconnect")
         assert "stale" not in reconnect

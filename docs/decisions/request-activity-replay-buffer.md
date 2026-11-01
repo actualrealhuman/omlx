@@ -1,11 +1,10 @@
 # Bounded metadata replay storage
 
 The Activity replay buffer stores immutable, fully framed `snapshot` SSE bytes.
-It is currently an unused component: live routes still offer `snapshot_only`
-delivery. Route and browser integration must establish mutation, authorization
-and publication ordering before this buffer can change that contract.
+Admin live routes use it for bounded metadata replay. The browser's explicit
+cursor and duplicate handling remains a separate integration step.
 
-Each channel is keyed by a fixed SHA-256 digest of the eventual normalized
+Each channel is keyed by a fixed SHA-256 digest of the normalized
 selection, with opaque epoch/channel IDs and bounded sequence numbers. The
 buffer retains no HTTP requests, credentials, sessions, readers or content
 bodies. A short synchronous lock protects its metadata; it performs no database,
@@ -28,7 +27,35 @@ history without accumulating tombstones.
 
 Focused standard-library tests cover framing, deduplication, byte/count/lease
 caps, TTL and LRU eviction, invalid input atomicity, reset, overflow and replay
-gaps. They do not qualify live reconnects, browser behavior or inference latency.
+gaps. Route checks additionally cover committed-read/publication ordering,
+shared viewers, missing selections and lifecycle invalidation. These synthetic
+checks do not qualify real-browser reconnects or inference latency.
+
+## Route ordering and delivery
+
+The route uses `epoch:channel:sequence` cursors. `Last-Event-ID` takes precedence
+over the optional bounded `cursor` query. A missing, invalid, foreign, future or
+expired cursor produces `resync_required` before a newly read authoritative head.
+A caught-up new connection receives a current head to initialize its view.
+
+At most eight active channel coordinators hold loop-owned async locks. Each
+channel's initial and subsequent committed read plus sequence publication share
+that lock. Authorization, network delivery and sleeps happen outside it. Only
+active coordinators exist; response finalization releases their leases even if
+the body never starts. A different event loop is rejected while coordinators
+remain active; an idle rebind resets the epoch. Service restart invalidates both
+cached history and responses that have not started their body yet.
+
+Each viewer follows its own last-delivered cursor, including changes already
+published by another viewer. Contiguous history drains one frame at a time,
+without a per-viewer queue. A generator retains one outgoing metadata frame;
+reader/encoder work and ASGI transport transients, including the previous sent
+chunk, are separate from the encoded-cache budget. No total-RSS claim follows
+from that budget.
+
+A fresh missing selected request bypasses old selected history. Once a stream
+observes that absence, it uses fresh heads rather than historical detail frames.
+This does not revoke bytes already sent or make retention observation immediate.
 
 ## Publication fencing
 
@@ -46,4 +73,5 @@ generation. Source/writer identity checks additionally discard reads spanning a
 source switch. A stream validates its initial generation after reads and async
 authorization and before publishing snapshots or keepalives; invalidation ends
 the stream with `reconnect`. Bytes already handed to the network cannot be
-recalled. Replay route integration remains a separate required step.
+recalled. Revalidation occurs after reader and lock waits, immediately before
+each metadata frame or keepalive is published.

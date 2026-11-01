@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Focused standard-library tests for the unused Activity replay buffer."""
+"""Focused standard-library tests for the bounded Activity replay buffer."""
 
 from __future__ import annotations
 

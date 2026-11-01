@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 from .config import ActivitySettings
 from .images import IMAGE_FORMATS, MAX_PREVIEW_BYTES
 from .recorder import ActivityRecorder
+from .replay import ActivityReplayBuffer, ReplayBufferFullError, StaleLeaseError
 from .runtime import configure_recorder, get_recorder
 from .store import MAX_READ_BYTES, REPRESENTATIONS, STATES, ActivityReader
 
@@ -33,6 +34,27 @@ _MAX_READERS = 4
 _MAX_STREAMS = 8
 _MAX_EVENT_BYTES = 1024 * 1024
 _MAX_MUTATION_FENCES = 16
+_MAX_REPLAY_CURSOR = 128
+
+
+def _frame_cursor(frame):
+    """Read the bounded SSE id line without copying the remaining payload."""
+    line_end = frame.find(b"\n", 0, _MAX_REPLAY_CURSOR + 6)
+    if line_end < 0 or not frame.startswith(b"id: "):
+        raise ValueError("invalid Activity replay frame")
+    return frame[4:line_end].decode("ascii")
+
+
+def _activity_channel_digest(
+    selection, model_id, source_id, scope, state, since, until
+):
+    normalized = json.dumps(
+        [scope, model_id, source_id, state, since, until, selection],
+        ensure_ascii=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("ascii")
+    return hashlib.sha256(normalized).digest()
 
 
 class _MutationFence:
@@ -218,6 +240,11 @@ class ActivityAdmin:
         self._control_tasks = set()
         self._mutation_fences = _MutationFence()
         self._mutation_context = threading.local()
+        self._replay = ActivityReplayBuffer(max_leases=_MAX_STREAMS)
+        self._coordinator_lock = threading.RLock()
+        self._coordinators = {}
+        self._replay_loop = None
+        self._replay_stamp = None
 
     def start(self):
         with self._read_lock:
@@ -256,21 +283,26 @@ class ActivityAdmin:
         generation = self._mutation_fences.stamp()
         if generation is None:
             return None
-        stamp = (generation, *self._source_identity())
+        stamp = (self._generation, generation, *self._source_identity())
         return stamp if self.publication_valid(stamp) else None
 
     def publication_valid(self, stamp):
         if (
             stamp is None
-            or len(stamp) != 4
-            or not self._mutation_fences.valid(stamp[0])
+            or len(stamp) != 5
+            or stamp[0] != self._generation
+            or not self._mutation_fences.valid(stamp[1])
         ):
             return False
         try:
             identity = self._source_identity()
         except HTTPException:
             return False
-        return stamp[1:] == identity and self._mutation_fences.valid(stamp[0])
+        return (
+            stamp[2:] == identity
+            and stamp[0] == self._generation
+            and self._mutation_fences.valid(stamp[1])
+        )
 
     async def read(self, operation, *, on_submitted=None):
         # Only admin readers can wait for this isolated executor. Decode and
@@ -489,7 +521,7 @@ class ActivityAdmin:
         return {
             **health,
             "live_delivery": "committed_metadata_snapshots",
-            "replay": "snapshot_only",
+            "replay": "bounded_metadata_replay",
             "poll_seconds": self.poll_seconds,
         }
 
@@ -510,79 +542,112 @@ class ActivityAdmin:
 
         return release
 
-    async def snapshots(
+    def acquire_replay(self, channel_digest, publication_stamp):
+        """Lease a bounded replay channel and its ASGI-loop-owned lock."""
+        loop = asyncio.get_running_loop()
+        with self._coordinator_lock:
+            if self._replay_loop is not loop:
+                if self._coordinators:
+                    raise HTTPException(
+                        503, "Activity stream belongs to another event loop"
+                    )
+                self._replay.reset()
+                self._replay_loop = loop
+            if self._replay_stamp != publication_stamp:
+                self._replay.reset()
+                self._replay_stamp = publication_stamp
+            try:
+                lease = self._replay.acquire(channel_digest)
+            except ReplayBufferFullError as exc:
+                raise HTTPException(
+                    429,
+                    "Activity replay capacity reached",
+                    headers={"Retry-After": "1"},
+                ) from exc
+            coordinator = self._coordinators.get(channel_digest)
+            if coordinator is None:
+                coordinator = {"lock": asyncio.Lock(), "refs": 0}
+                self._coordinators[channel_digest] = coordinator
+            coordinator["refs"] += 1
+            return lease, coordinator["lock"]
+
+    def release_replay(self, channel_digest, lease):
+        """Release from a response finalizer, including non-ASGI threads."""
+        with self._coordinator_lock:
+            self._replay.release(lease)
+            coordinator = self._coordinators.get(channel_digest)
+            if coordinator is not None:
+                coordinator["refs"] -= 1
+                if coordinator["refs"] == 0:
+                    self._coordinators.pop(channel_digest, None)
+
+    def replay_payload(self, snapshot):
+        payload = json.dumps(
+            {**snapshot, "health": self.health()},
+            ensure_ascii=True,
+            separators=(",", ":"),
+        ).encode("ascii")
+        if len(payload) > _MAX_EVENT_BYTES:
+            raise HTTPException(503, "Activity snapshot exceeds the event size limit")
+        return payload
+
+    async def replay_snapshots(
         self,
         request,
         reader,
         selection,
         model_id,
         source_id,
-        initial,
-        scope="all",
-        state=None,
-        since=None,
-        until=None,
-        publication_stamp=None,
+        scope,
+        state,
+        since,
+        until,
+        publication_stamp,
+        lease,
+        channel_lock,
+        first_status,
+        first_frame,
+        cursor,
+        resync_reason="cursor_unavailable",
+        selected_missing=False,
     ):
-        epoch, sequence, previous = uuid.uuid4().hex, 0, None
-        generation = self._generation
-        publication_stamp = publication_stamp or self.publication_stamp()
+        """Deliver retained frames from one cursor, then sample at the poll rate."""
         started, last_sent = time.monotonic(), time.monotonic()
-        if not self.publication_valid(publication_stamp):
+        generation = publication_stamp[0]
+        selected_bootstrap_only = selected_missing
+
+        async def authorize():
+            try:
+                result = self.require_admin(request)
+                if inspect.isawaitable(result):
+                    await result
+                return True
+            except Exception:
+                return False
+
+        async def publication_error():
+            """Recheck identity and source after awaits, immediately before output."""
+            if not await authorize():
+                return "event: authorization_lost\ndata: {}\n\n"
+            if not self.publication_valid(publication_stamp):
+                return "event: reconnect\ndata: {}\n\n"
+            return None
+
+        if not await authorize():
+            yield "event: authorization_lost\ndata: {}\n\n"
+            return
+        if (
+            self._closed
+            or generation != self._generation
+            or not self.publication_valid(publication_stamp)
+        ):
             yield "event: reconnect\ndata: {}\n\n"
             return
-        if request.headers.get("last-event-id"):
-            yield 'event: resync_required\ndata: {"reason":"snapshot_only_reconnect"}\n\n'
-        snapshot = initial
-        while True:
-            if (
-                self._closed
-                or generation != self._generation
-                or not self.publication_valid(publication_stamp)
-            ):
-                yield "event: reconnect\ndata: {}\n\n"
-                return
-            try:
-                # Revalidate signed sessions/main keys throughout a long stream.
-                authorization = self.require_admin(request)
-                if inspect.isawaitable(authorization):
-                    await authorization
-            except Exception:
-                yield "event: authorization_lost\ndata: {}\n\n"
-                return
-            if not self.publication_valid(publication_stamp):
-                yield "event: reconnect\ndata: {}\n\n"
-                return
-            payload = json.dumps(
-                {**snapshot, "health": self.health()},
-                ensure_ascii=True,
-                separators=(",", ":"),
-            )
-            if len(payload) > _MAX_EVENT_BYTES:
-                yield 'event: unavailable\ndata: {"reason":"snapshot_size_limit"}\n\n'
-                return
-            signature = hashlib.sha256(payload.encode()).digest()
-            if signature != previous:
+
+        async def read_fresh_head():
+            async with channel_lock:
                 if not self.publication_valid(publication_stamp):
-                    yield "event: reconnect\ndata: {}\n\n"
-                    return
-                sequence += 1
-                yield f"id: {epoch}:{sequence}\nevent: snapshot\ndata: {payload}\n\n"
-                previous, last_sent = signature, time.monotonic()
-            elif time.monotonic() - last_sent >= 15:
-                if not self.publication_valid(publication_stamp):
-                    yield "event: reconnect\ndata: {}\n\n"
-                    return
-                yield ": keepalive\n\n"
-                last_sent = time.monotonic()
-            if time.monotonic() - started >= 1800:
-                yield "event: reconnect\ndata: {}\n\n"
-                return
-            await asyncio.sleep(self.poll_seconds)
-            if not self.publication_valid(publication_stamp):
-                yield "event: reconnect\ndata: {}\n\n"
-                return
-            try:
+                    raise StaleLeaseError("publication changed")
                 snapshot = await self.read(
                     lambda: reader.snapshot(
                         request_id=selection,
@@ -594,12 +659,209 @@ class ActivityAdmin:
                         until=until,
                     )
                 )
-            except HTTPException:
-                yield 'event: unavailable\ndata: {"reason":"history_unavailable"}\n\n'
+                if not self.publication_valid(publication_stamp):
+                    del snapshot
+                    raise StaleLeaseError("publication changed")
+                missing = selection is not None and snapshot.get("detail") is None
+                payload = self.replay_payload(snapshot)
+                observed = self._replay.observe(lease, payload)
+                frame, head_cursor = observed.frame, observed.cursor
+                del observed, payload, snapshot
+                return frame, head_cursor, missing
+
+        def read_failure():
+            if not self.publication_valid(publication_stamp):
+                return "event: reconnect\ndata: {}\n\n"
+            return 'event: unavailable\ndata: {"reason":"history_unavailable"}\n\n'
+
+        frame = first_frame
+        first_frame = None
+        replaying = first_status == "event"
+        if first_status == "resync":
+            # Drop the probe head before the marker and read a new framed head
+            # only after the client has reset its cursor/deduplication state.
+            frame = None
+            yield (
+                "event: resync_required\ndata: "
+                + json.dumps({"reason": resync_reason}, separators=(",", ":"))
+                + "\n\n"
+            )
+            if not await authorize():
+                yield "event: authorization_lost\ndata: {}\n\n"
                 return
             if not self.publication_valid(publication_stamp):
                 yield "event: reconnect\ndata: {}\n\n"
                 return
+            try:
+                frame, cursor, _missing = await read_fresh_head()
+            except (HTTPException, StaleLeaseError):
+                yield read_failure()
+                return
+            replaying = False
+
+        if frame is not None:
+            try:
+                cursor = _frame_cursor(frame)
+                error = await publication_error()
+                if error is not None:
+                    frame = None
+                    yield error
+                    return
+                yield frame
+                last_sent = time.monotonic()
+            finally:
+                frame = None
+
+        while True:
+            if self._closed or generation != self._generation:
+                yield "event: reconnect\ndata: {}\n\n"
+                return
+            if time.monotonic() - started >= 1800:
+                yield "event: reconnect\ndata: {}\n\n"
+                return
+
+            if not replaying:
+                await asyncio.sleep(self.poll_seconds)
+            if not await authorize():
+                yield "event: authorization_lost\ndata: {}\n\n"
+                return
+            if not self.publication_valid(publication_stamp):
+                yield "event: reconnect\ndata: {}\n\n"
+                return
+
+            try:
+                if replaying:
+                    async with channel_lock:
+                        if not self.publication_valid(publication_stamp):
+                            raise StaleLeaseError("publication changed")
+                        result = self._replay.next_after(lease, cursor)
+                    if result.status == "event":
+                        frame, cursor = result.frame, result.cursor
+                        del result
+                        error = await publication_error()
+                        if error is not None:
+                            frame = None
+                            yield error
+                            return
+                        yield frame
+                        frame = None
+                        last_sent = time.monotonic()
+                        continue
+                    if result.status == "caught_up":
+                        del result
+                        replaying = False
+                        continue
+                    del result
+                    yield 'event: resync_required\ndata: {"reason":"cursor_gap"}\n\n'
+                    if not await authorize():
+                        yield "event: authorization_lost\ndata: {}\n\n"
+                        return
+                    if not self.publication_valid(publication_stamp):
+                        yield "event: reconnect\ndata: {}\n\n"
+                        return
+                    try:
+                        frame, cursor, _missing = await read_fresh_head()
+                    except (HTTPException, StaleLeaseError):
+                        yield read_failure()
+                        return
+                    if not self.publication_valid(publication_stamp):
+                        frame = None
+                        yield "event: reconnect\ndata: {}\n\n"
+                        return
+                    if frame is not None:
+                        cursor = _frame_cursor(frame)
+                        error = await publication_error()
+                        if error is not None:
+                            frame = None
+                            yield error
+                            return
+                        yield frame
+                        frame = None
+                        last_sent = time.monotonic()
+                    replaying = False
+                    continue
+
+                frame, head_cursor, missing_selection = await read_fresh_head()
+            except (HTTPException, StaleLeaseError):
+                yield read_failure()
+                return
+
+            if missing_selection and not selected_bootstrap_only:
+                selected_bootstrap_only = True
+                frame = None
+                yield 'event: resync_required\ndata: {"reason":"selected_detail_missing"}\n\n'
+                if not await authorize():
+                    yield "event: authorization_lost\ndata: {}\n\n"
+                    return
+                if not self.publication_valid(publication_stamp):
+                    yield "event: reconnect\ndata: {}\n\n"
+                    return
+                try:
+                    frame, cursor, _missing = await read_fresh_head()
+                except (HTTPException, StaleLeaseError):
+                    yield read_failure()
+                    return
+                replaying = False
+            elif selected_bootstrap_only:
+                # Once selected detail is known missing, never walk retained
+                # history for that selection. Publish only a changed fresh head.
+                if head_cursor != cursor:
+                    cursor = head_cursor
+                else:
+                    frame = None
+                replaying = False
+            else:
+                frame = None
+                try:
+                    async with channel_lock:
+                        if not self.publication_valid(publication_stamp):
+                            raise StaleLeaseError("publication changed")
+                        result = self._replay.next_after(lease, cursor)
+                except StaleLeaseError:
+                    yield "event: reconnect\ndata: {}\n\n"
+                    return
+                if result.status == "event":
+                    frame, cursor = result.frame, result.cursor
+                    replaying = True
+                    del result
+                elif result.status == "resync":
+                    del result
+                    yield 'event: resync_required\ndata: {"reason":"cursor_gap"}\n\n'
+                    if not await authorize():
+                        yield "event: authorization_lost\ndata: {}\n\n"
+                        return
+                    if not self.publication_valid(publication_stamp):
+                        yield "event: reconnect\ndata: {}\n\n"
+                        return
+                    try:
+                        frame, cursor, _missing = await read_fresh_head()
+                    except (HTTPException, StaleLeaseError):
+                        yield read_failure()
+                        return
+                    replaying = False
+                else:
+                    del result
+                    cursor = head_cursor
+
+            if frame is not None:
+                try:
+                    cursor = _frame_cursor(frame)
+                    error = await publication_error()
+                    if error is not None:
+                        frame = None
+                        yield error
+                        return
+                    yield frame
+                    last_sent = time.monotonic()
+                finally:
+                    frame = None
+            elif time.monotonic() - last_sent >= 15:
+                error = await publication_error()
+                if error is not None:
+                    yield error
+                    return
+                yield ": keepalive\n\n"
+                last_sent = time.monotonic()
 
 
 def create_activity_router(
@@ -798,6 +1060,7 @@ def create_activity_router(
     async def events(
         request: Request,
         request_id: str | None = Query(None, max_length=128),
+        cursor: str | None = Query(None, max_length=_MAX_REPLAY_CURSOR),
         scope: Literal["all", "active", "recent"] = "all",
         model_id: str | None = Query(None, max_length=256),
         source_id: str | None = Query(None, max_length=256),
@@ -807,6 +1070,11 @@ def create_activity_router(
     ):
         _validate_activity_filters(state, since, until)
         release = service.reserve_stream()
+        channel_digest = _activity_channel_digest(
+            request_id, model_id, source_id, scope, state, since, until
+        )
+        lease = None
+        lock = None
         try:
             publication_stamp = service.publication_stamp()
             if publication_stamp is None:
@@ -815,41 +1083,104 @@ def create_activity_router(
                     "Activity history is changing; retry the request",
                     headers={"Retry-After": "1"},
                 )
+            lease, lock = service.acquire_replay(channel_digest, publication_stamp)
+            header_cursor = request.headers.get("last-event-id")
+            replay_cursor = header_cursor if header_cursor is not None else cursor
+            if replay_cursor is not None and (
+                not replay_cursor.isascii() or len(replay_cursor) > _MAX_REPLAY_CURSOR
+            ):
+                # Keep malformed opaque IDs untrusted; the bounded buffer maps
+                # them to a fresh-head resync without parsing or allocating by ID.
+                replay_cursor = "!invalid-cursor!"
             reader = service.reader()
-            initial = await service.read(
-                lambda: reader.snapshot(
-                    request_id=request_id,
-                    model_id=model_id,
-                    source_id=source_id,
-                    scope=scope,
-                    state=state,
-                    since=since,
-                    until=until,
+            async with lock:
+                if not service.publication_valid(publication_stamp):
+                    raise HTTPException(
+                        503,
+                        "Activity history changed; retry the request",
+                        headers={"Retry-After": "1"},
+                    )
+                # The committed initial read and sequence publication share the
+                # same per-channel lock as every poll.
+                initial = await service.read(
+                    lambda: reader.snapshot(
+                        request_id=request_id,
+                        model_id=model_id,
+                        source_id=source_id,
+                        scope=scope,
+                        state=state,
+                        since=since,
+                        until=until,
+                    )
                 )
-            )
-            if not service.publication_valid(publication_stamp):
-                raise HTTPException(
-                    503,
-                    "Activity history changed; retry the request",
-                    headers={"Retry-After": "1"},
+                if not service.publication_valid(publication_stamp):
+                    raise HTTPException(
+                        503,
+                        "Activity history changed; retry the request",
+                        headers={"Retry-After": "1"},
+                    )
+                payload = service.replay_payload(initial)
+                observed = service._replay.observe(lease, payload)
+                missing_selected = (
+                    request_id is not None and initial.get("detail") is None
                 )
+                head_frame = observed.frame
+                del observed, payload, initial
+                if replay_cursor is None:
+                    first_status, first_frame = "head", head_frame
+                elif missing_selected:
+                    first_status, first_frame = "resync", head_frame
+                else:
+                    replay = service._replay.next_after(lease, replay_cursor)
+                    if replay.status == "event":
+                        head_frame = None
+                        first_status, first_frame = "event", replay.frame
+                    elif replay.status == "caught_up":
+                        first_status, first_frame = "head", head_frame
+                    else:
+                        first_status, first_frame = "resync", head_frame
+                    del replay
+
+            finalized = False
+            finalizer_lock = threading.Lock()
+
+            def release_all():
+                nonlocal finalized
+                with finalizer_lock:
+                    if finalized:
+                        return
+                    finalized = True
+                if lease is not None:
+                    service.release_replay(channel_digest, lease)
+                release()
+
             return _StreamResponse(
-                service.snapshots(
+                service.replay_snapshots(
                     request,
                     reader,
                     request_id,
                     model_id,
                     source_id,
-                    initial,
                     scope,
                     state,
                     since,
                     until,
                     publication_stamp,
+                    lease,
+                    lock,
+                    first_status,
+                    first_frame,
+                    replay_cursor,
+                    "selected_detail_missing"
+                    if missing_selected and replay_cursor is not None
+                    else "cursor_unavailable",
+                    missing_selected,
                 ),
-                release,
+                release_all,
             )
         except BaseException:
+            if lease is not None:
+                service.release_replay(channel_digest, lease)
             release()
             raise
 
