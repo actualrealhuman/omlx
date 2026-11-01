@@ -10,7 +10,7 @@ const OUTLINE_PAGE_SIZE = 128, MAX_RAIL_BUCKETS = 256;
 let detail, mode = 'submitted', labels = {}, viewport = {row: 0, count: 100, columns: 100};
 let bytes = 0, busy = false, pending = false, loading = false, limited = false;
 let query = '', match = 0, follow = true;
-let searchCache = null;
+let searchCache = null, pendingSearch = null;
 let outlineOffset = 0, outlineManual = false, rail = [];
 
 function boundedText(value, limit) {
@@ -67,6 +67,29 @@ function render(reindex = false) {
         if (follow) viewport.row = Math.max(0, documentView.rows - Math.max(1, viewport.count - 20));
         else if (anchor) viewport.row = documentView.rowFor(anchor.key, anchor.offset);
         searchCache = null;
+    }
+    if (pendingSearch && !loading && !pending) {
+        const intent = pendingSearch;
+        pendingSearch = null;
+        if (intent.requestId === detail?.id && intent.query === query) {
+            match = intent.match;
+            let settled = documentView.search(query, match);
+            if (settled.count) {
+                const normalized = ((match % settled.count) + settled.count) % settled.count;
+                if (normalized !== match) {
+                    match = normalized;
+                    settled = documentView.search(query, match);
+                }
+                if (settled.target) {
+                    follow = false;
+                    outlineManual = false;
+                    viewport.row = documentView.rowFor(settled.target.key, settled.target.offset);
+                    const index = documentView.sections.findIndex(section => section.key === settled.target.key);
+                    if (index >= 0) outlineOffset = Math.floor(index / OUTLINE_PAGE_SIZE) * OUTLINE_PAGE_SIZE;
+                }
+            }
+            searchCache = settled;
+        }
     }
     const search = searchCache || (searchCache = documentView.search(query, match));
     const start = Math.max(0, viewport.row - 10);
@@ -126,12 +149,14 @@ async function sync() {
             loading = false; render(true);
         } while (pending);
     } catch (error) {
+        pendingSearch = null;
         loading = false;
         postMessage({type: 'error', message: error.message});
     } finally { busy = false; }
 }
 self.onmessage = ({data}) => {
     if (data.type === 'sync') {
+        if (detail && detail.id !== data.detail.id) pendingSearch = null;
         detail = data.detail; labels = data.labels || labels;
         sync();
     } else if (data.type === 'viewport') {
@@ -140,15 +165,18 @@ self.onmessage = ({data}) => {
         const moved = data.row !== undefined && data.row !== viewport.row;
         viewport = {...viewport, ...data}; follow = data.follow;
         if (follow && countChanged && !changed) viewport.row = Math.max(0, documentView.rows - Math.max(1, viewport.count - 20));
+        if (moved || data.follow === true || data.revealOutline) pendingSearch = null;
         if (moved || data.revealOutline) outlineManual = false;
         render(changed);
     } else if (data.type === 'mode') {
+        pendingSearch = null;
         mode = data.mode; viewport.row = 0; follow = false; outlineOffset = 0; outlineManual = false; render(true);
     } else if (data.type === 'outline-page') {
         outlineOffset = Math.max(0, Math.min(Math.floor(Math.max(0, data.offset || 0) / OUTLINE_PAGE_SIZE) * OUTLINE_PAGE_SIZE,
             Math.floor(Math.max(0, documentView.sections.length - 1) / OUTLINE_PAGE_SIZE) * OUTLINE_PAGE_SIZE));
         outlineManual = true; render();
     } else if (data.type === 'jump-section') {
+        pendingSearch = null;
         const section = documentView.sections.find(item => item.key === data.key);
         if (section) {
             follow = false; outlineManual = false;
@@ -156,8 +184,10 @@ self.onmessage = ({data}) => {
             viewport.row = section.start; render();
         }
     } else if (data.type === 'jump') {
+        pendingSearch = null;
         follow = false; outlineManual = false; viewport.row = Math.max(0, data.row); render();
     } else if (data.type === 'navigate') {
+        pendingSearch = null;
         const starts = documentView.sections.map(s => s.start);
         viewport.row = data.direction > 0 ? starts.find(row => row > viewport.row + 1) ?? Math.max(0, documentView.rows - 1)
             : starts.reverse().find(row => row < viewport.row - 1) ?? 0;
@@ -167,12 +197,14 @@ self.onmessage = ({data}) => {
         render();
     } else if (data.type === 'search') {
         query = data.query; match = data.match;
+        pendingSearch = null;
         let found = documentView.search(query, match);
+        if (query && loading) pendingSearch = {query, match, requestId: detail?.id};
         if (found.count && !found.target) {
             match = ((match % found.count) + found.count) % found.count;
             found = documentView.search(query, match);
         }
-        if (found.target) {
+        if (found.target && !loading) {
             follow = false; outlineManual = false; viewport.row = documentView.rowFor(found.target.key, found.target.offset);
             const index = documentView.sections.findIndex(section => section.key === found.target.key);
             if (index >= 0) outlineOffset = Math.floor(index / OUTLINE_PAGE_SIZE) * OUTLINE_PAGE_SIZE;

@@ -6,6 +6,28 @@ const vm = require('node:vm');
 const path = require('node:path');
 const {ActivityDocument, submittedSections} = require('../omlx_web/static/js/activity_document.js');
 
+function activityWorker(fetch) {
+    const outputs = [];
+    const context = {ActivityDocumentTools: {ActivityDocument, submittedSections},
+        ActivityOutputTools: require('../omlx_web/static/js/activity_output.js'),
+        importScripts() {}, TextDecoder, URLSearchParams, Blob, self: {}, postMessage: value => outputs.push(value), fetch};
+    vm.createContext(context);
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../omlx_web/static/js/activity_worker.js'), 'utf8'), context);
+    return {onmessage: data => context.self.onmessage({data}), outputs};
+}
+
+async function waitForSettledWorker(worker, from = worker.outputs.length) {
+    for (let attempt = 0; attempt < 100 && !worker.outputs.slice(from).some(value => value.type === 'render' && !value.loading); attempt++) {
+        await new Promise(resolve => setImmediate(resolve));
+    }
+    assert.ok(worker.outputs.slice(from).some(value => value.type === 'render' && !value.loading), 'worker must settle after the requested operation');
+    return worker.outputs.filter(value => value.type === 'render').at(-1);
+}
+
+function activityDetail(buffer, id = 'synthetic') {
+    return {id, finished_at: 1, representations: [{representation: 'submitted', invocation_id: '0', bytes: buffer.length}]};
+}
+
 test('huge single messages and lines remain navigable with a bounded viewport', () => {
     const body = 'abc '.repeat(500000) + 'unique-target';
     const doc = new ActivityDocument();
@@ -110,6 +132,155 @@ test('actual worker incrementally decodes split UTF-8 and searches retained cont
     const jsonRows = outputs.at(-1).rows.map(row => row.text).join('');
     assert.match(jsonRows, /"messages"/);
     assert.ok(!jsonRows.includes('answer 世界'));
+});
+
+test('actual worker reveals a far-tail submitted match entered before content arrives', async () => {
+    let release;
+    const delayed = new Promise(resolve => { release = resolve; });
+    const body = Buffer.from(JSON.stringify({messages: [{role: 'user', content: 'ordinary\n'.repeat(90) + 'late-target'}]}));
+    const worker = activityWorker(async () => delayed);
+    worker.onmessage({type: 'viewport', row: 0, count: 20, columns: 40, follow: false});
+    worker.onmessage({type: 'sync', detail: activityDetail(body)});
+    worker.onmessage({type: 'search', query: 'late-target', match: -1});
+    assert.equal(worker.outputs.at(-1).loading, true);
+    assert.equal(worker.outputs.at(-1).search.count, 0);
+    release({ok: true, arrayBuffer: async () => body});
+    const view = await waitForSettledWorker(worker);
+    assert.equal(view.search.count, 1);
+    assert.equal(view.search.match, 0, 'normalize requested ordinal only against the completed index');
+    assert.ok(view.row > 80);
+    assert.equal(view.row, view.search.marks[0]);
+    assert.ok(view.rows.some(line => line.text.includes('late-target')));
+});
+
+test('actual worker resolves a loading search after the complete request index settles', async () => {
+    let release;
+    const delayed = new Promise(resolve => { release = resolve; });
+    const outputs = [];
+    const submitted = Buffer.from(JSON.stringify({messages: [{role: 'user', content: 'needle'}]}));
+    const raw = Buffer.from('needle from output');
+    const context = {ActivityDocumentTools: {ActivityDocument, submittedSections},
+        ActivityOutputTools: require('../omlx_web/static/js/activity_output.js'),
+        importScripts() {}, TextDecoder, URLSearchParams, Blob, self: {}, postMessage: value => outputs.push(value),
+        fetch: async url => {
+            const params = new URL(url, 'http://test.invalid').searchParams, offset = Number(params.get('offset'));
+            const bytes = params.get('representation') === 'submitted' ? submitted : raw;
+            if (params.get('representation') === 'submitted') return delayed;
+            return {ok: true, arrayBuffer: async () => bytes.subarray(offset)};
+        }};
+    vm.createContext(context);
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../omlx_web/static/js/activity_worker.js'), 'utf8'), context);
+    context.self.onmessage({data: {type: 'viewport', row: 0, count: 20, columns: 40, follow: false}});
+    context.self.onmessage({data: {type: 'sync', detail: {id: 'delayed', representations: [
+        {representation: 'raw_output', invocation_id: '1', bytes: raw.length},
+        {representation: 'submitted', invocation_id: '0', bytes: submitted.length},
+    ]}}});
+    await new Promise(resolve => setImmediate(resolve));
+    context.self.onmessage({data: {type: 'search', query: 'needle', match: 0}});
+    // Layout feedback that reports the same row must leave the intent pending.
+    context.self.onmessage({data: {type: 'viewport', row: 0, count: 18, columns: 24, follow: false}});
+    release({ok: true, arrayBuffer: async () => submitted});
+    let view = await waitForSettledWorker({outputs});
+    assert.equal(view.search.count, 2, JSON.stringify({keys: view.outline.map(section => section.key), current: view.current, search: view.search, rows: view.rows.slice(0, 3)}));
+    assert.equal(view.search.match, 0);
+    assert.match(view.current.key, /^submitted:/, 'match zero follows final input-before-output order');
+    assert.equal(view.row, view.search.marks[0]);
+
+    // A completed intent is one-shot: later manual navigation survives live updates.
+    const manualRow = view.outline.find(section => section.role === 'raw_output').row + 1;
+    assert.notEqual(manualRow, view.search.marks[0]);
+    context.self.onmessage({data: {type: 'jump', row: manualRow}});
+    const appendedRaw = Buffer.from('needle from output needle later');
+    context.fetch = async url => {
+        const params = new URL(url, 'http://test.invalid').searchParams;
+        const bytes = params.get('representation') === 'submitted' ? submitted : appendedRaw;
+        return {ok: true, arrayBuffer: async () => bytes.subarray(Number(params.get('offset')))};
+    };
+    const beforeUpdate = outputs.length;
+    context.self.onmessage({data: {type: 'sync', detail: {id: 'delayed', representations: [
+        {representation: 'raw_output', invocation_id: '1', bytes: appendedRaw.length},
+        {representation: 'submitted', invocation_id: '0', bytes: submitted.length},
+    ]}}});
+    view = await waitForSettledWorker({outputs}, beforeUpdate);
+    assert.equal(view.row, manualRow, 'manual navigation survives later live updates');
+});
+
+test('actual worker cancels loading search intent on clear, mode change, navigation, and Follow', async () => {
+    const cases = [
+        ['query clear', worker => worker.onmessage({type: 'search', query: '', match: 0})],
+        ['mode change', worker => worker.onmessage({type: 'mode', mode: 'model'})],
+        ['manual navigation', worker => worker.onmessage({type: 'jump', row: 5})],
+        ['scroll movement', worker => worker.onmessage({type: 'viewport', row: 5, count: 20, columns: 40, follow: false})],
+        ['explicit Follow', worker => worker.onmessage({type: 'viewport', row: 0, count: 20, columns: 40, follow: true, revealOutline: true})],
+    ];
+    for (const [name, cancel] of cases) {
+        let release;
+        const delayed = new Promise(resolve => { release = resolve; });
+        const body = Buffer.from(JSON.stringify({messages: [{role: 'user', content: 'late-target'},
+            {role: 'assistant', content: 'trailing '.repeat(30)}]}));
+        const worker = activityWorker(async () => delayed);
+        worker.onmessage({type: 'viewport', row: 0, count: 20, columns: 40, follow: false});
+        worker.onmessage({type: 'sync', detail: activityDetail(body, name)});
+        await new Promise(resolve => setImmediate(resolve));
+        worker.onmessage({type: 'search', query: 'late-target', match: 0});
+        cancel(worker);
+        release({ok: true, arrayBuffer: async () => body});
+        const view = await waitForSettledWorker(worker);
+        assert.ok(view, `${name}: worker settled`);
+        assert.notEqual(view.row, view.search.marks[0], `${name}: canceled query must not move to its match`);
+    }
+});
+
+test('actual worker clears a no-match loading intent when the sync pass ends', async () => {
+    let release;
+    const delayed = new Promise(resolve => { release = resolve; });
+    let current = Buffer.from('ordinary\n'.repeat(30));
+    const worker = activityWorker(async url => {
+        const params = new URL(url, 'http://test.invalid').searchParams;
+        if (Number(params.get('offset')) === 0) return delayed;
+        return {ok: true, arrayBuffer: async () => current.subarray(Number(params.get('offset')))};
+    });
+    worker.onmessage({type: 'viewport', row: 0, count: 20, columns: 40, follow: false});
+    const detail = (bytes, id = 'synthetic') => ({id, finished_at: 1, representations: [{representation: 'raw_output', invocation_id: '1', bytes}]});
+    worker.onmessage({type: 'sync', detail: detail(current.length)});
+    await new Promise(resolve => setImmediate(resolve));
+    worker.onmessage({type: 'search', query: 'not-present', match: 0});
+    release({ok: true, arrayBuffer: async () => current});
+    let view = await waitForSettledWorker(worker);
+    assert.equal(view.search.count, 0);
+    assert.equal(view.row, 1);
+
+    current = Buffer.concat([current, Buffer.from(' not-present')]);
+    const beforeUpdate = worker.outputs.length;
+    worker.onmessage({type: 'sync', detail: detail(current.length)});
+    view = await waitForSettledWorker(worker, beforeUpdate);
+    assert.equal(view.search.count, 1);
+    assert.equal(view.row, 1, 'a loading query completed without a match must not jump on a later sync');
+    assert.notEqual(view.row, view.search.marks[0]);
+});
+
+test('actual worker drops pending search intent when content loading fails', async () => {
+    let reject;
+    const delayed = new Promise((_, fail) => { reject = fail; });
+    const raw = Buffer.from('needle');
+    const worker = activityWorker(async url => {
+        const params = new URL(url, 'http://test.invalid').searchParams;
+        if (params.get('representation') === 'submitted') return delayed;
+        return {ok: true, arrayBuffer: async () => raw};
+    });
+    worker.onmessage({type: 'viewport', row: 0, count: 20, columns: 40, follow: false});
+    worker.onmessage({type: 'sync', detail: {id: 'failed', representations: [
+        {representation: 'raw_output', invocation_id: '1', bytes: raw.length},
+        {representation: 'submitted', invocation_id: '0', bytes: 10},
+    ]}});
+    await new Promise(resolve => setImmediate(resolve));
+    worker.onmessage({type: 'search', query: 'needle', match: 0});
+    reject(new Error('synthetic content failure'));
+    for (let attempt = 0; attempt < 100 && !worker.outputs.some(value => value.type === 'error'); attempt++) await new Promise(resolve => setImmediate(resolve));
+    worker.onmessage({type: 'viewport', row: 0, count: 20, columns: 40, follow: false});
+    const view = worker.outputs.filter(value => value.type === 'render').at(-1);
+    assert.equal(view.search.count, 1);
+    assert.notEqual(view.row, view.search.marks[0], 'a later render must not apply the failed load’s pending search');
 });
 
 test('actual worker keeps a searched section anchor across width revisions', async () => {
