@@ -68,7 +68,8 @@ def api_failure(outcome="error"):
 
 
 def inference_request_id(http_request):
-    capture = getattr(http_request.state, "activity_capture", None)
+    state = getattr(http_request, "state", None)
+    capture = getattr(state, "activity_capture", None)
     return capture.handle.request_id if capture is not None else str(uuid.uuid4())
 
 
