@@ -19,7 +19,7 @@
     <div x-show="!health.enabled" class="activity-notice">{{ t('activity.capture_disabled') }}</div>
     <div x-show="health.stopping" class="activity-notice" role="status">{{ t('activity.capture_stopping') }}</div>
     <div x-show="health.error" class="activity-notice" role="status">{{ t('activity.capture_degraded') }}</div>
-    <div class="activity-workspace">
+    <div class="activity-workspace" :class="selected ? 'activity-has-selection' : ''">
         <aside class="activity-requests" :class="selected ? 'activity-mobile-hidden' : ''" aria-label="{{ t('activity.requests') }}">
             <div class="activity-filters">
                 <label><span>{{ t('activity.scope') }}</span><select x-model="scopeFilter" @change="filtersChanged()"><option value="all">{{ t('activity.scope_all') }}</option><option value="active">{{ t('activity.scope_active') }}</option><option value="recent">{{ t('activity.scope_recent') }}</option></select></label>

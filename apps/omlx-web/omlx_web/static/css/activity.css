@@ -172,8 +172,12 @@
     .activity-heading-actions { flex-direction:column; align-items:flex-end; gap:8px; }
     .activity-heading { align-items:flex-start; } .activity-heading h1 { font-size:24px; }
     .activity-workspace { display:flex; height:calc(100dvh - 245px); min-height:480px; }
+    .activity-workspace.activity-has-selection { height:auto; min-height:0; overflow:visible; }
     .activity-requests { width:100%; border:0; }
     .activity-mobile-hidden { display:none; } .activity-inspector { width:100%; }
+    .activity-workspace.activity-has-selection .activity-inspector { flex:0 0 auto; }
+    .activity-workspace.activity-has-selection .activity-detail { flex:0 0 auto; overflow:visible; }
+    .activity-workspace.activity-has-selection .activity-document-shell { height:clamp(264px,55dvh,600px); min-height:264px; flex:0 0 auto; }
     .activity-back { display:block; } .activity-detail-heading { padding:14px; } .activity-metrics { display:none; }
     .activity-view-controls,.activity-navigation { padding-left:10px; padding-right:10px; }
     .activity-view-controls > button:last-child { margin-left:0; } .activity-outline { width:125px; }
