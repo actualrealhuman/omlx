@@ -150,7 +150,8 @@ browser stress fixture retained 4,514,988 bytes and 1,004 messages, with giant
 unbroken text, JSON tool output and multilingual text. After the fix, a far-tail
 match remained visible across desktop/mobile/desktop reflow; settled height-only
 resizing retained follow mode, and ordinary scrolling still disabled it.
-Heap, frame-time and controlled inference-overhead measurements remain pending.
+Heap and frame-time measurements remain pending; inference-overhead evidence is
+limited to the scoped composed-source pilot below.
 The mobile and slider-semantics follow-ups also passed focused template and
 browser checks. Initial synthetic
 browser spot checks covered
@@ -158,9 +159,9 @@ desktop light/dark rendering, narrow-screen reselection, elapsed spans, retained
 image decoding, far-tail search, navigation, filters, paging, basic live following,
 preserved reading position during appends, and a complete synthetic text download.
 They do not
-establish comprehensive browser, serving-overhead, native-build or private-trial
-readiness. Those gates, source publication and catalog/agent-guide reconciliation
-remain open.
+establish comprehensive browser, broader inference-overhead, native-build or
+private-trial readiness. Those gates, source publication and catalog/agent-guide
+reconciliation remain open.
 
 The loading-time search snapshot separately passed 67 checks across the same
 three Node suites. A deferred-content replay against the exact previous source
@@ -171,6 +172,31 @@ completion without a later unsolicited jump. No new timer, queue or retained
 hit list is introduced. Browser confirmation of this follow-up remains pending;
 the deterministic worker result does not replace rendered-browser evidence.
 Clipboard transport and selection qualification also remain incomplete.
+
+A bounded backend observer-overhead pilot was run on composed source snapshot
+`40f860e1dd8e8e0b3a9bdccf3cb44ce7c81d6abf`. It used a warm local Qwen3-4B
+model, short synthetic text, one in-flight request, disabled KV/image cache
+retention and zero reported KV cache hits. It completed 40 paired measurements
+(10 per condition; 82 samples including two warmups). Capture-disabled baselines
+had no readers. Median paired decode loss and client TTFT change were:
+
+| Capture condition | Median paired decode loss | Median paired client TTFT change |
+| --- | ---: | ---: |
+| Capture enabled, no observer | 0.052% | -0.344% |
+| One healthy SSE reader | 0.140% | -0.656% |
+| Three healthy SSE readers | 0.104% | -4.286% |
+| One reader configured to stop reading the body | 0.019% | +1.365% |
+
+Baseline medians were 181.48–182.43 tokens/s and 51.05–53.24 ms client TTFT.
+Paired median absolute deviations were 0.061–0.113 percentage points for decode
+loss and 1.17–3.09 percentage points for TTFT change; these are descriptive
+variation measures, not confidence bounds. These results describe only this
+short text workload and composed source. They do not establish a target-performance
+pass or imply that capture accelerates inference. The configured stalled reader
+did not establish transport saturation. Browser CPU/heap/frame cost, larger inputs or outputs, prefix
+reuse, VLM, concurrent inference, stalled-writer behavior, and whole-app
+Release performance remain unqualified. This pilot does not replace focused
+source isolation or the other adoption and release gates below.
 
 ## Validation
 
@@ -504,7 +530,9 @@ when output arrives; lifecycle boundaries attempt immediate snapshots. There is
 no per-token SQLite write for invocation details. Queue refusal records a gap and
 does not erase existing protected request counters or cancel inference. Detailed
 terminal state is budgeted rather than promised lossless. The existing producer
-text path has its own content cadence; controlled serving overhead is unqualified.
+text path has its own content cadence; the scoped composed-source overhead pilot
+above does not isolate the cost of this cadence or qualify other serving
+workloads.
 See [the snapshot decision](../decisions/request-activity-invocation-snapshots.md).
 
 Known scheduler pauses and retries annotate the existing observed generation.
@@ -539,8 +567,8 @@ On SQLite builds with JSON functions, live summaries project only their allowed
 fields inside the read transaction, so Python does not decode rich admission
 options for each poll. Missing values, nulls, booleans and zeros remain distinct.
 Older SQLite builds use the existing bounded decode path. Detail reads retain
-their full options. This reduces materialized metadata in that path; serving
-CPU, process memory and inference overhead still require measurement.
+their full options. This reduces materialized metadata in that path; broader
+serving CPU, process memory and inference-overhead qualification remains pending.
 
 The inspector defaults to Entire request. Its Generation selector lists up to 256
 IDs from compact snapshots and retained content indexes, including content whose
