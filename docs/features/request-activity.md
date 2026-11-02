@@ -199,6 +199,32 @@ reuse, VLM, concurrent inference, stalled-writer behavior, and whole-app
 Release performance remain unqualified. This pilot does not replace focused
 source isolation or the other adoption and release gates below.
 
+Two extended profiles then passed on that same composed snapshot and local
+Qwen3-4B model: 42 requests per profile, including two warmups and 20 paired
+comparisons (10 with no observer, 10 with three healthy SSE readers). Measured
+inputs/outputs were 8,597/128 tokens for the longer-input profile and 59/512 for
+the longer-output profile. Paired token counts, cache acknowledgements and output
+hashes matched; explicit KV cache hits were zero. The model was already loaded,
+with uncached measured prefixes, rather than a cold model-startup comparison.
+
+| Profile | Enabled capture observers | Median paired decode loss | Median paired client TTFT change |
+| --- | --- | ---: | ---: |
+| Longer input | None | 0.053% | +0.257% |
+| Longer input | Three SSE readers | 0.312% | +1.637% |
+| Longer output | None | 0.008% | +0.505% |
+| Longer output | Three SSE readers | 0.047% | +0.018% |
+
+Longer-input baseline medians were 123.05–123.17 tokens/s and 1,727.96–1,853.25 ms
+client TTFT; longer-output baselines were 179.48–179.65 tokens/s and
+49.15–52.18 ms. Across these four comparisons, paired median absolute deviations
+were 0.033–0.131 percentage points for decode loss and 0.877–2.249 points for
+TTFT change. Individual TTFT changes ranged from -10.77% to +14.06%; medians do
+not bound every request. These results add evidence only for the named model,
+lengths, one-in-flight workload and backend readers. Warm prefix reuse, concurrent
+serving, larger contexts, stalled persistence, browser cost and whole-app Release
+performance remain separate qualification gates. No automatic target pass is
+inferred from the small medians.
+
 A separate two-request image smoke passed on the same composed snapshot
 `40f860e1dd8e8e0b3a9bdccf3cb44ce7c81d6abf`, using an already-local
 Gemma4Unified 12B model. Streaming and nonstreaming Chat each completed with one
