@@ -225,6 +225,32 @@ serving, larger contexts, stalled persistence, browser cost and whole-app Releas
 performance remain separate qualification gates. No automatic target pass is
 inferred from the small medians.
 
+Warm-prefix reuse was separately checked on that same artifact/model with a
+2 GiB RAM-only KV cache. Measured requests reused 1,536 tokens: 1,601 input
+with no observers and 1,602 with three SSE readers, each generating 128 tokens.
+Warm controls, seeds and measured requests had matching input/cache counts and
+acknowledgements; full-output warm controls and capture-off/on output hashes
+matched. Each pair used a separate capture-disabled primer and warm conditioner,
+then a one-token seed before each measured side. Uncached primer output was
+retained diagnostically and was not used as a warm-output equivalence control.
+
+| Warm-prefix cohort | Pairs | Median paired decode loss | Median paired client TTFT change |
+| --- | ---: | ---: | ---: |
+| No observers | 10 | -0.046% | -1.529% |
+| Three SSE readers | 10 | -0.164% | -1.319% |
+
+The no-observer cohort completed before a later test-client shutdown fault
+aborted its overall execution; that execution remains incomplete. The
+three-reader figures come from a separate, completed ten-pair confirmation
+with a corrected client shutdown path. Earlier partial three-reader data was
+not pooled with it. These are independently checked per-condition results.
+Paired decode-loss MADs were 0.152 and 0.134 percentage points; TTFT-change MADs
+were 2.457 and 2.803 points. Baseline median TTFT was 87.35 and 96.22 ms.
+Negative changes do not establish that capture accelerates inference. This
+supports the scoped warm capture comparison without establishing cached/uncached
+numerical identity, cross-model performance or a universal target pass.
+Concurrent serving, stalled persistence and browser resources remain open gates.
+
 A separate two-request image smoke passed on the same composed snapshot
 `40f860e1dd8e8e0b3a9bdccf3cb44ce7c81d6abf`, using an already-local
 Gemma4Unified 12B model. Streaming and nonstreaming Chat each completed with one
