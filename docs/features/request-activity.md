@@ -118,8 +118,17 @@ load a model. Disabling capture stops observation rather than inference.
 The four required text families (`/v1/completions`, `/v1/chat/completions`,
 `/v1/messages`, `/v1/responses`) have source hooks for both HTTP response modes.
 Production-route fixtures, synthetic engine output and mocked scheduler/core
-paths cover their contracts; full real-model endpoint/backend qualification is
-still required. VLM submitted images and lazy previews are implemented, with
+paths cover their contracts. An isolated Debug composition at
+`c51faebb1c00aff36d96368be326f63dfd163874` also passed eight short real-model
+requests using Qwen3-4B-Instruct-2507-oQ4e: each family in streaming and
+nonstreaming mode. Every record completed with one observed invocation and no
+capture gaps; submitted input, prepared input, token IDs, raw output and API
+response bytes were retained. Token-list lengths matched observed input counts,
+retained API bytes matched the client responses, and named-key attribution and
+admin-access denial passed. This is a short text smoke trial on a composition
+with other downstream features, not standalone adoption, long-context, VLM,
+performance or whole-feature qualification. That artifact predates the later
+inspector fixes. VLM submitted images and lazy previews are implemented, with
 actual model/media and broader rendered-browser qualification pending. The evidence
 matrix below distinguishes other engine paths from instrumented local text.
 
