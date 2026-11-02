@@ -249,7 +249,26 @@ were 2.457 and 2.803 points. Baseline median TTFT was 87.35 and 96.22 ms.
 Negative changes do not establish that capture accelerates inference. This
 supports the scoped warm capture comparison without establishing cached/uncached
 numerical identity, cross-model performance or a universal target pass.
-Concurrent serving, stalled persistence and browser resources remain open gates.
+Concurrent serving and browser resources remain open gates.
+
+A separate three-request failure check on the same composed snapshot and local
+Qwen3-4B model held an independent SQLite `BEGIN IMMEDIATE` transaction in an
+isolated temporary Activity database. A setup capture committed cleanly; the
+capture-disabled baseline and capture-enabled fault response both completed with
+18 input tokens, six output tokens, zero cache hits and identical output hashes.
+The fault response completed in 69.5 ms while the external write lock remained
+held. Activity subsequently reported unavailable persistence with the sanitized
+`Activity persistence suspended (OperationalError)` status. Observed lock hold
+was 361.4 ms, below the three-second bound; owned-process and temporary-data
+cleanup completed successfully.
+
+An initial three-response attempt checked health before SQLite's 250 ms timeout
+could expire and remained incomplete. The corrected check waited at most 1.5
+seconds for the asynchronous health transition, preserving the response, lock
+overlap and error checks. This qualifies continued short-request serving during
+this lock-induced writer failure. It does not qualify sustained writer stalls,
+queue saturation, actual disk exhaustion, recovery of the same writer, durability
+of the interrupted capture or performance under persistence failure.
 
 A separate two-request image smoke passed on the same composed snapshot
 `40f860e1dd8e8e0b3a9bdccf3cb44ce7c81d6abf`, using an already-local
