@@ -249,7 +249,8 @@ were 2.457 and 2.803 points. Baseline median TTFT was 87.35 and 96.22 ms.
 Negative changes do not establish that capture accelerates inference. This
 supports the scoped warm capture comparison without establishing cached/uncached
 numerical identity, cross-model performance or a universal target pass.
-Concurrent serving and browser resources remain open gates.
+Browser resources remain an open gate. Concurrent capture fidelity was checked
+separately as described below.
 
 A separate three-request failure check on the same composed snapshot and local
 Qwen3-4B model held an independent SQLite `BEGIN IMMEDIATE` transaction in an
@@ -269,6 +270,39 @@ overlap and error checks. This qualifies continued short-request serving during
 this lock-induced writer failure. It does not qualify sustained writer stalls,
 queue saturation, actual disk exhaustion, recovery of the same writer, durability
 of the interrupted capture or performance under persistence failure.
+
+A separate concurrent capture-fidelity check completed 82 requests on that same
+composed snapshot and local Qwen3-4B model: two warmups and 20 paired batches,
+with two requests per capture-off/on side. Each measured request used 1,104 input
+tokens, generated 512 tokens and reported zero cache hits. Every batch supplied
+a scheduler snapshot with both response request IDs generating and making
+positive token progress; capture-on rows also matched their Activity IDs.
+Capture-disabled batches had no SSE readers. Enabled batches had either none or
+three confirmed healthy readers. Both sides used the same 20 bounded admin polls
+at 150 ms intervals, additional to the SSE-reader workload.
+
+All 40 captured concurrent responses matched their own client streams exactly,
+including comments and separators: 18,619–19,879 bytes per response. Submitted
+and prepared inputs retained each request's own marker without its paired
+request's marker, prepared token-ID counts matched client input counts, and
+observed input/output counts matched usage. Each record completed with one
+invocation and zero gaps. Extra fidelity reads occurred after both responses
+finished and are excluded from serving throughput. Owned cleanup succeeded.
+
+| Concurrent cohort | Batch pairs | Median paired batch throughput loss | Median paired mean-client TTFT change |
+| --- | ---: | ---: | ---: |
+| No SSE readers | 10 | -0.215% | +0.497% |
+| Three SSE readers | 10 | +0.126% | +0.213% |
+
+Throughput-loss MADs were 0.652 and 0.306 percentage points; TTFT-change MADs
+were 2.806 and 1.084 points. These are descriptive measurements for this workload,
+not a universal target pass or evidence that capture accelerates generation.
+An earlier cross-run output-hash comparison stopped after six requests and
+remains incomplete. A separate six-request capture-off/off control also produced
+different hashes for both requests; the cause remains unproven. In the completed
+fidelity check, 18 of 40 off/on output comparisons differed. Cross-run numerical
+identity is unqualified; per-request retained-byte fidelity is the checked claim.
+This does not establish simultaneous GPU-kernel execution or browser cost.
 
 A separate two-request image smoke passed on the same composed snapshot
 `40f860e1dd8e8e0b3a9bdccf3cb44ce7c81d6abf`, using an already-local
