@@ -4,17 +4,18 @@ Feature ID: `request-activity`
 
 ## Behavior and use
 
-Activity is being implemented as an opt-in observer for current requests and
-bounded recent context history. The current source contains the capture/storage
-foundation, settings persistence, request lifecycle and initial engine hooks.
+Activity is an opt-in observer for current requests and bounded recent context
+history. The current source implements capture/storage, settings persistence,
+request lifecycle and engine hooks.
 The four generation API families capture accepted semantic input and their API
 response stream when explicitly enabled. Local scheduler/core hooks additionally
 capture prepared input/tokens and producer output. Admin read endpoints and
 snapshot-based live delivery feed a top-level Activity browser tab. The initial
 inspector has submitted/prepared views, an outline, a semantic rail, literal
-search, follow-output and copy/download. This is not a complete feature or an
-independently qualified adoption snapshot; initial synthetic browser spot checks
-have passed, while broader browser and real-model qualification remain pending.
+search, follow-output and copy/download. Scoped synthetic-browser, text/image
+model and concurrent-capture qualification is recorded below. Final browser and
+resource checks, canonical Release verification and independent adoption
+qualification remain pending.
 
 The foundation uses one background SQLite writer and separately bounded content
 and lifecycle metadata. Producer methods enqueue immutable CPU observations;
@@ -68,6 +69,9 @@ memory configurations may need a smaller active limit or a larger memory budget.
 - Availability: local focused implementation in progress; no public source
   snapshot is offered for adoption yet.
 - Discovery branch: `feature/request-activity`.
+- Complete focused source snapshot, including the required follow-ups and scoped
+  qualification notes: `3822a75d06042b7169e10ca9947c461282ee1578`.
+  This documentation tip does not replace the tested production references below.
 - Implementation snapshot for local qualification:
   `7fe132c12c3890bf1d744f70a0073e29db05d103`. This is a source reference,
   not a release, installation or public-availability claim.
