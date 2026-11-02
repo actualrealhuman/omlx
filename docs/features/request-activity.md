@@ -128,9 +128,10 @@ retained API bytes matched the client responses, and named-key attribution and
 admin-access denial passed. This is a short text smoke trial on a composition
 with other downstream features, not standalone adoption, long-context, VLM,
 performance or whole-feature qualification. That artifact predates the later
-inspector fixes. VLM submitted images and lazy previews are implemented, with
-actual model/media and broader rendered-browser qualification pending. The evidence
-matrix below distinguishes other engine paths from instrumented local text.
+inspector fixes. VLM submitted images and lazy previews are implemented; a
+separate scoped image smoke is described below. Broader model/media and
+rendered-browser qualification remain pending. The evidence matrix below
+distinguishes other engine paths from instrumented local text.
 
 The current implementation snapshot passed 1,828 Python checks and 18 subtests,
 with one existing unbuilt native-extension skip. This includes the pinned-reader
@@ -197,6 +198,24 @@ did not establish transport saturation. Browser CPU/heap/frame cost, larger inpu
 reuse, VLM, concurrent inference, stalled-writer behavior, and whole-app
 Release performance remain unqualified. This pilot does not replace focused
 source isolation or the other adoption and release gates below.
+
+A separate two-request image smoke passed on the same composed snapshot
+`40f860e1dd8e8e0b3a9bdccf3cb44ce7c81d6abf`, using an already-local
+Gemma4Unified 12B model. Streaming and nonstreaming Chat each completed with one
+observed invocation, 307 observed input tokens, 16 generated tokens and zero
+capture gaps. Both records identified the resolved local VLM backend and retained
+the normalized submitted image reference. An authorized lazy attachment read
+returned the original 181-byte PNG exactly, with PNG MIME type, no-store and
+sandbox CSP headers. Retained API responses matched the client wire bytes in
+both modes (706 bytes JSON and 1,799 bytes SSE).
+
+This is a tiny synthetic-image smoke, not image-recognition quality, other image
+formats/API families, VLM performance, prepared-media reconstruction or complete
+browser qualification. The image-to-engine path was source-audited; Activity does
+not expose a vision-specific execution counter. Larger image/pixel budgets,
+prepared-image/token fidelity and rendered preview behavior remain separate
+gates. This evidence supports retaining the implemented image feature without
+claiming comprehensive VLM support.
 
 ## Validation
 
