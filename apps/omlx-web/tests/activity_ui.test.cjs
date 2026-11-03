@@ -54,6 +54,8 @@ test('inspector resynchronizes, ignores old selections and stops all work when h
     streams.at(-1).events.snapshot({data: snapshot({id: 'first', version: '1', representations: []})});
     const oldWorker = workers.at(-1);
     assert.ok(oldWorker.messages.some(message => message.type === 'sync'));
+    assert.equal(oldWorker.messages.filter(message => message.type === 'viewport').at(-1).preserveAnchor, false,
+        'the first measured viewport must honor a saved position before the worker is ready');
     app.$el = {dataset: {}}; // A row/button event scope is not the component root.
     app.select('second');
     assert.equal(oldWorker.terminated, true);
@@ -62,6 +64,8 @@ test('inspector resynchronizes, ignores old selections and stops all work when h
     const current = streams.at(-1);
     current.events.snapshot({data: snapshot({id: 'second', version: '2', representations: []})});
     assert.equal(workers.at(-1).url, '/worker.js', 'reselection uses the stable component root');
+    assert.equal(workers.at(-1).messages.filter(message => message.type === 'viewport').at(-1).preserveAnchor, false,
+        'a replacement worker must honor the selected request position during initial restore');
     workers.at(-1).onmessage({data: {type: 'render', rows: [], outline: [], total: 1000, row: 200, loading: false, limited: false, search: {count: 0, marks: []}}});
     assert.equal(app.$refs.contextViewport.scrollTop, 4400);
     await app.activate(false);
@@ -70,6 +74,10 @@ test('inspector resynchronizes, ignores old selections and stops all work when h
     await app.activate(true);
     assert.equal(app.selected, 'second');
     assert.equal(app.row, 200);
+    streams.at(-1).events.snapshot({data: snapshot({id: 'second', version: '2', representations: []})});
+    const resumedViewport = workers.at(-1).messages.filter(message => message.type === 'viewport').at(-1);
+    assert.equal(resumedViewport.row, 200, 'initial layout measurement must pass the saved row to a new worker');
+    assert.equal(resumedViewport.preserveAnchor, false, 'a new worker cannot preserve an anchor it has not indexed yet');
     await app.activate(false);
 });
 
@@ -519,6 +527,39 @@ test('reading away from the tail disables follow and keeps a stable viewport', a
     await app.activate(false);
 });
 
+test('scroll before resize measurement cannot replace the semantic viewport row', async () => {
+    for (const timing of ['before-scroll', 'before-frame']) {
+        const {app, streams, workers, context} = harness();
+        await app.activate(true);
+        streams.at(-1).events.snapshot({data: JSON.stringify({active: [], recent: [], health: {}, detail: {id: 'first', version: '1', representations: []}})});
+        const worker = workers.at(-1), viewport = app.$refs.contextViewport;
+        let frame;
+        context.requestAnimationFrame = callback => { frame = callback; return 9; };
+        context.cancelAnimationFrame = () => {};
+        const initial = worker.messages.filter(message => message.type === 'viewport').at(-1);
+        const targetRow = 41465;
+        worker.onmessage({data: {type: 'render', layoutRevision: initial.layoutRevision, rows: [], outline: [], total: 41484,
+            row: targetRow, current: {key: 'tail-match', ordinal: 1005}, loading: false, search: {count: 1, match: 0, marks: [targetRow]}}});
+        assert.equal(viewport.scrollTop, 912230);
+
+        if (timing === 'before-frame') app.onScroll();
+        viewport.clientWidth = 375;
+        viewport.clientHeight = 464;
+        // The old spacer is still 912648px high, so the browser clamps scrollTop
+        // to 912184px before ResizeObserver reports the new viewport dimensions.
+        viewport.scrollTop = 912184;
+        if (timing === 'before-scroll') app.onScroll();
+        if (frame) frame();
+
+        assert.equal(app.row, targetRow, `${timing}: stale physical position must not replace the search anchor`);
+        const resized = worker.messages.filter(message => message.type === 'viewport').at(-1);
+        assert.equal(resized.row, targetRow, `${timing}: resize measurement keeps the semantic row`);
+        assert.notEqual(resized.layoutRevision, initial.layoutRevision);
+        assert.equal(resized.columns, 41);
+        await app.activate(false);
+    }
+});
+
 test('resize renders reject stale rows and ignore physical scroll feedback until the new layout is applied', async () => {
     const {app, streams, workers, context} = harness(activitySourceOverride);
     await app.activate(true);
@@ -539,6 +580,7 @@ test('resize renders reject stale rows and ignore physical scroll feedback until
     app.measure();
     const resizedViewport = worker.messages.filter(message => message.type === 'viewport').at(-1);
     const resizedRevision = resizedViewport.layoutRevision ?? 0;
+    assert.equal(resizedViewport.preserveAnchor, true, 'layout-only resize asks the worker to keep its canonical anchor');
     viewport.scrollTop = 912164; // Browser retains the old physical position as wrapping changes.
     app.onScroll();
     callback(); // A queued old-layout RAF must not reinterpret that pixel offset.
@@ -612,6 +654,7 @@ test('outline paging is a worker command and invocation replacement clears prior
 
 test('extremely tall documents stay within browser element-height limits', () => {
     const {app} = harness();
+    app.measure();
     app.total = 10000000; app.visibleRows = 30; app.row = 9000000;
     assert.equal(app.scrollHeight(), 4400000);
     const pixels = app.scrollPixels(app.row);

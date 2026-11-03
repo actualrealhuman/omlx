@@ -162,8 +162,9 @@ self.onmessage = ({data}) => {
     } else if (data.type === 'viewport') {
         const changed = data.columns !== viewport.columns;
         const countChanged = data.count !== viewport.count;
-        const moved = data.row !== undefined && data.row !== viewport.row;
-        viewport = {...viewport, ...data}; follow = data.follow;
+        const moved = !data.preserveAnchor && data.row !== undefined && data.row !== viewport.row;
+        const row = data.preserveAnchor ? viewport.row : data.row ?? viewport.row;
+        viewport = {...viewport, ...data, row}; follow = data.follow;
         if (follow && countChanged && !changed) viewport.row = Math.max(0, documentView.rows - Math.max(1, viewport.count - 20));
         if (moved || data.follow === true || data.revealOutline) pendingSearch = null;
         if (moved || data.revealOutline) outlineManual = false;

@@ -319,6 +319,53 @@ test('actual worker keeps a searched section anchor across width revisions', asy
     assert.equal(outputs.at(-1).row, 10, 'manual scrolling still selects the requested row');
 });
 
+test('actual worker preserves its semantic anchor across coalesced layout viewports', async () => {
+    const body = Buffer.from(JSON.stringify({messages: Array.from({length: 5}, (_, index) => ({
+        role: index % 2 ? 'assistant' : 'user',
+        content: index === 4 ? 'tail-target ' + 'word '.repeat(80) : `message-${index}`,
+    }))}));
+    const fetch = async url => {
+        const params = new URL(url, 'http://test.invalid').searchParams, offset = Number(params.get('offset'));
+        return {ok: true, arrayBuffer: async () => body.subarray(offset, offset + 65536)};
+    };
+    async function exercise() {
+        const worker = activityWorker(fetch);
+        worker.onmessage({type: 'viewport', row: 0, count: 45, columns: 80, follow: false, preserveAnchor: false, layoutRevision: 0});
+        worker.onmessage({type: 'sync', detail: activityDetail(body)});
+        await waitForSettledWorker(worker);
+        worker.onmessage({type: 'search', query: 'tail-target', match: 0});
+        const found = worker.outputs.at(-1);
+        assert.equal(found.search.count, 1);
+        assert.equal(found.current.key, 'submitted:0:message-4');
+        const expectedKey = found.current.key, expectedOrdinal = found.current.ordinal;
+        const staleUiRow = found.row; // UI has not received the first reflow acknowledgement.
+        const layouts = [
+            {columns: 24, count: 45, layoutRevision: 1}, // Width reflow.
+            {columns: 24, count: 60, layoutRevision: 2}, // Same-width height notification before ack.
+            {columns: 48, count: 60, layoutRevision: 3}, // Another width notification before ack.
+        ];
+        const snapshots = [];
+        for (const layout of layouts) {
+            worker.onmessage({type: 'viewport', row: staleUiRow, follow: false, preserveAnchor: true, ...layout});
+            const view = worker.outputs.at(-1);
+            snapshots.push({key: view.current.key, ordinal: view.current.ordinal, row: view.row, mark: view.search.marks[0]});
+        }
+        worker.onmessage({type: 'viewport', row: 0, count: 60, columns: 48, follow: false, preserveAnchor: false, layoutRevision: 4});
+        const userMove = worker.outputs.at(-1);
+        return {expectedKey, expectedOrdinal, snapshots, userMove};
+    }
+
+    const fixed = await exercise();
+    for (const view of fixed.snapshots) {
+        assert.equal(view.key, fixed.expectedKey);
+        assert.equal(view.ordinal, fixed.expectedOrdinal);
+        assert.equal(view.row, view.mark);
+    }
+    assert.equal(fixed.userMove.current.key, 'submitted:0:message-0', 'explicit user viewport movement remains authoritative');
+    assert.equal(fixed.userMove.current.ordinal, 1);
+
+});
+
 test('worker pages the complete outline and keeps aggregate rail and stable-key navigation bounded', async () => {
     const outputs = [], totalMessages = 4105;
     let submitted = JSON.stringify({messages: Array.from({length: totalMessages}, (_, i) => ({role: i % 2 ? 'assistant' : 'user',

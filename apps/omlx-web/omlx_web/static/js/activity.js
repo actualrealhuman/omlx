@@ -23,6 +23,7 @@
         let invocationGeneration = 0;
         let generation = 0, activation = 0, pageGeneration = 0, loadedVersion = '', stopped = true, lastFacets = 0, exportSequence = 0, programmaticScrollRow = null;
         let layoutRevision = 0, pendingLayoutRevision = null;
+        let measuredWidth = 0, measuredHeight = 0;
         let resumeCursor = '', appliedCursor = null, streamChannel = '', freshHeadRetried = false;
         const positions = new Map();
         const label = key => root.t(`activity.${key}`);
@@ -490,10 +491,13 @@
             measure() {
                 const el = this.$refs.contextViewport;
                 if (!el?.clientWidth) return;
+                const width = el.clientWidth, height = el.clientHeight;
                 const canvas = document.createElement('canvas'), context = canvas.getContext('2d');
                 context.font = getComputedStyle(el).font;
-                const columns = Math.max(24, Math.min(240, Math.floor((el.clientWidth - 40) / context.measureText('M').width)));
-                const visibleRows = Math.ceil(el.clientHeight / ROW_HEIGHT);
+                const columns = Math.max(24, Math.min(240, Math.floor((width - 40) / context.measureText('M').width)));
+                const visibleRows = Math.ceil(height / ROW_HEIGHT);
+                measuredWidth = width;
+                measuredHeight = height;
                 if ((columns !== this.columns || visibleRows !== this.visibleRows) && this.viewReady) {
                     layoutRevision++;
                     pendingLayoutRevision = layoutRevision;
@@ -501,18 +505,32 @@
                 }
                 this.columns = columns;
                 this.visibleRows = visibleRows;
-                this.viewport();
+                // Layout notifications can arrive before the prior worker
+                // reflow is acknowledged. Only the worker knows its current
+                // semantic anchor while those requests are in flight.
+                this.viewport(false, this.viewReady);
             },
-            viewport(revealOutline = false) {
-                worker?.postMessage({type: 'viewport', row: this.row, count: this.visibleRows + 20, columns: this.columns, follow: this.follow, revealOutline, layoutRevision});
+            viewport(revealOutline = false, preserveAnchor = false) {
+                worker?.postMessage({type: 'viewport', row: this.row, count: this.visibleRows + 20, columns: this.columns, follow: this.follow, revealOutline, preserveAnchor, layoutRevision});
             },
             onScroll() {
+                const el = this.$refs.contextViewport;
+                if (el && (el.clientWidth !== measuredWidth || el.clientHeight !== measuredHeight)) {
+                    this.measure();
+                    return;
+                }
                 if (pendingLayoutRevision !== null) return;
                 const scrollLayoutRevision = layoutRevision;
                 cancelAnimationFrame(frame);
                 frame = requestAnimationFrame(() => {
+                    frame = null;
                     if (pendingLayoutRevision !== null || scrollLayoutRevision !== layoutRevision) return;
-                    const physical = this.$refs.contextViewport.scrollTop / ROW_HEIGHT;
+                    const current = this.$refs.contextViewport;
+                    if (current && (current.clientWidth !== measuredWidth || current.clientHeight !== measuredHeight)) {
+                        this.measure();
+                        return;
+                    }
+                    const physical = current.scrollTop / ROW_HEIGHT;
                     const next = this.total <= 200000 ? Math.floor(physical) : Math.round(
                         physical / Math.max(1, 200000 - this.visibleRows) * Math.max(0, this.total - this.visibleRows));
                     if (programmaticScrollRow !== null && Math.abs(next - programmaticScrollRow) <= 1) { programmaticScrollRow = null; return; }
