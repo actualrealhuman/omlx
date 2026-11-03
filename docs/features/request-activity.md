@@ -2,1108 +2,134 @@
 
 Feature ID: `request-activity`
 
-## Behavior and use
+## Current status
 
-Activity is an opt-in observer for current requests and bounded recent context
-history. The current source implements capture/storage, settings persistence,
-request lifecycle and engine hooks.
-The four generation API families capture accepted semantic input and their API
-response stream when explicitly enabled. Local scheduler/core hooks additionally
-capture prepared input/tokens and producer output. Admin read endpoints and
-snapshot-based live delivery feed a top-level Activity browser tab. The initial
-inspector has submitted/prepared views, an outline, a semantic rail, literal
-search, follow-output and copy/download. Scoped synthetic-browser, text/image
-model and concurrent-capture qualification is recorded below, including bounded
-Chromium browser resource measurements. The built-in Chromium browser is the
-local acceptance baseline; independent adoption qualification remains pending. Native artifacts require separate, source-matched
-canonical Release validation before installation.
+**Status: Experimental.** Activity is an opt-in observer for active requests
+and bounded recent request history. The focused source snapshot is complete at
+`3458d61ffb97dc915e283806b7397145cedca168`, based on stable `v0.7.1`
+(`bd1e9b112474862ebed550a9c83b4316038a1d74`). The discovery branch is
+[`feature/request-activity`](https://github.com/actualrealhuman/omlx/tree/feature/request-activity).
+Verify that the exact source revision is available there before adoption;
+this recipe alone does not establish public availability. The current implementation
+has been exercised in a composed local build and the built-in Chromium browser.
+It has not been independently adopted and qualified from this recipe.
 
-The foundation uses one background SQLite writer and separately bounded content
-and lifecycle metadata. Producer methods enqueue immutable CPU observations;
-encoding, compression and persistence happen on the worker. Queue saturation
-records incomplete capture while preserving request terminal status. A disabled
-recorder with no history creates neither a database nor a worker.
-Existing history uses a maintenance worker so retention and deletion still apply
-when capture is off.
+| Evidence | Revision and result | Scope |
+| --- | --- | --- |
+| Backend and storage checks | `7fe132c12c3890bf1d744f70a0073e29db05d103`: 1,828 Python checks and 18 subtests passed; one existing native-extension skip | Earlier focused backend snapshot; not a result for the later UI/source snapshot or an independent adoption. |
+| Current focused web checks | `3458d61ffb97dc915e283806b7397145cedca168`: 60 Node checks passed | Deterministic web behavior checks on the current feature source; not full app or cross-browser qualification. |
+| Built-in Chromium | Current implementation exercised in synthetic and local application flows | Browser behavior and bounded inspector/resource probes; user-trial issues below remain reported, not diagnosed. |
+| Composed model/observer trials | `40f860e1dd8e8e0b3a9bdccf3cb44ce7c81d6abf`: extended local text, image, persistence-failure, overhead, and concurrent-capture exercises | Composed build and specific local workloads; not independent adoption or universal performance evidence. The strict C1 cross-run output-hash equality check failed: it stopped after six requests, and separate capture-off/off controls also differed; cause is unknown. The separate C2 per-request fidelity check passed: each retained response matched its own client stream. It does not establish cross-run output identity. |
 
-Request identity begins before model loading/preflight. Engine invocations have
-separate identifiers under the request. Streaming completion waits for the body
-and observed invocation terminal states, with partial output retained on
-interruption. Named credentials use opaque IDs and historical label snapshots;
-legacy IDs are persisted when capture is enabled without writing unrelated
-runtime overrides back into saved settings. Normal authentication remains the
-authority; credentials and HTTP authentication headers are not copied from
-authentication into Activity records.
+The evidence above is intentionally scoped. Backend checks and model trials
+refer to their stated, different revisions; none are claims against an
+independent adoption or a universal workload. For the dated historical record
+of detailed validation, see the [original recipe at focused commit
+`6efc59a882daddae60af3dd7dac105ea2f00015c`](https://github.com/actualrealhuman/omlx/blob/6efc59a882daddae60af3dd7dac105ea2f00015c/docs/features/request-activity.md).
+That record preserves intermediate results and superseded pending statements;
+it is historical evidence, not current acceptance status. Native artifacts
+require a separate source-matched Release validation by the adopter.
 
-New records retain the bounded requested model separately from the current
-serving/filter model. A resolution marker is set only when the serving-model
-hook supplies an ID, including same-name resolution. Unresolved/default choices
-and older rows without this evidence remain distinguishable; historical aliases
-are not reconstructed. Current and paged list cards expose request ID, endpoint,
-model attribution, observed input/generated token counts, elapsed receipt span,
-source and capture status without reading context bodies. Unknown counts remain
-unavailable rather than zero; older rows keep their known model name.
+## Behavior and defaults
 
-List rows and the selected inspector share one visible-only receipt clock,
-which stops on hiding, authorization loss or when no loaded unfinished records
-remain. Live ticks use monotonic browser time after the initial elapsed
-estimate is anchored to receipt. Terminal spans use their saved finish time.
-This is observation time rather than decoding latency.
+The four generation API families—`/v1/completions`, `/v1/chat/completions`,
+`/v1/messages`, and `/v1/responses`—can record accepted semantic input and API
+response bytes. Scheduler and engine hooks additionally record prepared input,
+token IDs, producer output, and request/invocation lifecycle. The admin Activity
+tab provides request lists and an inspector with submitted/prepared views,
+search, navigation, live following, and copy/download controls. Inline images
+are retained within limits and previewed lazily.
 
-Defaults: disabled capture, 1,000 terminal requests, seven days, and a 5 GiB
-physical storage budget. Counts and budgets are configurable; 1,000 is not a
-hard ceiling. Internal safety defaults include a 64 MiB request cap, a 16 MiB
-attachment cap, 128 MiB observer memory, a 16 MiB content queue and 1,024 active
-capture slots. Supported inline originals have bounded image retention and
-lazy previews; effective queue limits can be lower than the attachment cap. Captured
-content is distinct from aggregate serving statistics and reusable KV caches.
+Capture is disabled by default. Administrators can enable capture from Activity
+settings; existing history remains readable while capture is off. Opening the
+tab does not load a model. The admin session or main API key grants observer
+access; named inference keys identify request sources but do not grant observer
+access. Normal authentication remains authoritative, and credentials or
+authentication headers are not copied into Activity records.
 
-Each active capture reserves 16 KiB of protected request metadata independently
-of content. Settings require the pending-content limit plus all configured
-active metadata slots to fit the observer memory budget. A worst-case Unicode/
-scalar fixture includes retained requested/serving names and a worker metadata
-copy; this structural check does not measure full process RSS. Tight custom
-memory configurations may need a smaller active limit or a larger memory budget.
+Retention defaults are 1,000 terminal requests, seven days, and a 5 GiB physical
+storage budget. These are configurable; 1,000 is not a hard ceiling. Internal
+safety limits include 64 MiB per request, 16 MiB per attachment, 128 MiB
+observer memory, a 16 MiB content queue, and 1,024 active capture slots.
+Effective queue limits may be lower than attachment limits. One background
+SQLite writer handles persistence; a disabled recorder with no history creates
+neither a database nor a writer. Existing history can still be maintained while
+capture is off.
 
-## Source and adoption boundary
+Request IDs are created before model loading/preflight, with separate IDs for
+engine invocations. Streaming completion waits for the response body and
+observed invocation terminal states; interrupted requests retain partial
+output. Requested model and serving/filter model attribution remain separate.
+Unknown token counts remain unavailable rather than being displayed as zero.
+Elapsed spans describe observed receipt time, not decoding latency.
 
-- Availability: local focused implementation with scoped qualification; no public source
-  snapshot is offered for adoption yet.
-- Discovery branch: `feature/request-activity`.
-- Complete focused production snapshot, including the required follow-ups:
-  `3458d61ffb97dc915e283806b7397145cedca168`. The resize/layout follow-up and
-  its browser qualification are described below. Earlier backend and model
-  qualification references remain distinct from this UI follow-up.
-- Implementation snapshot for local qualification:
-  `7fe132c12c3890bf1d744f70a0073e29db05d103`. This is a source reference,
-  not a release, installation or public-availability claim.
-- Required fixture-isolation follow-up:
-  `8cebc095cdc4361baa2827982d1d140cff6526c0`. It resets shared settings in
-  two route-only test fixtures so composed suites cannot inherit unrelated
-  background policy services. Production behavior is unchanged.
-- Qualification source snapshot:
-  `4b2f9e0e4f3a7828e6698cd805166eb18ecc3b54`. This includes that fixture
-  follow-up, the isolated OS file-limit regression, the inspector resize fix
-  and loading-time search intent handling.
-  Backend production code is unchanged from the implementation snapshot above.
-  The inspector preserves semantic reading anchors across width changes,
-  rejects stale layout renders and deferred scroll callbacks, and retains
-  tail-following across height-only changes. A search entered while retained
-  content loads waits for the complete current index, then jumps once using
-  the final match ordering. Newer navigation, Follow, mode/query changes or a
-  failed load cancel that intent; later output does not repeatedly pull the
-  reader back to a match.
-- Baseline: stable `v0.7.1`, full commit
-  `bd1e9b112474862ebed550a9c83b4316038a1d74`.
-- Current boundary: `omlx/activity/`, Activity settings and credential IDs in
-  `omlx/settings.py`, generation endpoint/startup/auth hooks in `omlx/server.py`,
-  input/output/lifecycle and dispatch hooks in `omlx/engine_core.py`,
-  `omlx/scheduler.py`, `omlx/engine_pool.py`, `omlx/request.py` and
-  `omlx/engine/batched.py`, the admin router inclusion,
-  the Activity web assets/templates and dashboard links, plus server Activity
-  tests and focused web tests.
-- Foundation dependencies: Python standard library only. Server and UI wiring
-  use the application's existing packages. No downstream scheduling controls,
-  browser chat storage, extra database package or hosted service is required.
-  Full runtime/composed-build isolation qualification remains pending.
+## Adoption recipe
 
-Apply the complete focused change from the baseline through the complete
-production snapshot in an isolated target checkout. Later replay or UI commits depend on
-the earlier capture, storage and integration work; they are not standalone
-features. Preserve the package, shared hooks, web assets, translations and tests
-together. Port shared-file conflicts against the selected target deliberately;
-do not import a personal integration branch as a prerequisite. No generated app
-or native binary accompanies this source.
+Apply the complete focused change from the stated baseline through the exact
+production snapshot in an isolated target checkout. Preserve the Activity
+package, shared hooks, settings, API and UI wiring, translations, and tests as a
+unit. Later commits build on the capture, storage, and integration foundation;
+they are not independent features. Resolve shared-file conflicts against the
+chosen target deliberately. Do not use a personal integration branch as a
+prerequisite. No generated app or native binary is part of this source feature.
 
-Capture starts disabled. An administrator opens Activity's capture/settings
-control and enables it; existing history remains readable with capture disabled.
-The admin session or main API key grants observer access, while named inference
-keys identify sources without granting that access. Opening Activity does not
-load a model. Disabling capture stops observation rather than inference.
+Implementation boundary includes `omlx/activity/`; Activity settings and
+credential IDs in `omlx/settings.py`; generation endpoint, startup, and
+authentication hooks in `omlx/server.py`; request, scheduler, engine-pool,
+engine-core, and batched-engine hooks; admin router inclusion; Activity web
+assets/templates and dashboard links; and the related server and web tests.
 
-The four required text families (`/v1/completions`, `/v1/chat/completions`,
-`/v1/messages`, `/v1/responses`) have source hooks for both HTTP response modes.
-Production-route fixtures, synthetic engine output and mocked scheduler/core
-paths cover their contracts. An isolated Debug composition at
-`c51faebb1c00aff36d96368be326f63dfd163874` also passed eight short real-model
-requests using Qwen3-4B-Instruct-2507-oQ4e: each family in streaming and
-nonstreaming mode. Every record completed with one observed invocation and no
-capture gaps; submitted input, prepared input, token IDs, raw output and API
-response bytes were retained. Token-list lengths matched observed input counts,
-retained API bytes matched the client responses, and named-key attribution and
-admin-access denial passed. This is a short text smoke trial on a composition
-with other downstream features, not standalone adoption, long-context, VLM,
-performance or whole-feature qualification. That artifact predates the later
-inspector fixes. VLM submitted images and lazy previews are implemented; a
-separate scoped image smoke is described below. Broader model/media and
-rendered-browser qualification remain pending. The evidence matrix below
-distinguishes other engine paths from instrumented local text.
+The foundation uses the Python standard library. Server and UI integration use
+the target application's existing packages. No extra database package,
+downstream scheduling controls, browser chat storage, or hosted service is
+required. Capture remains off until enabled.
 
-The current implementation snapshot passed 1,828 Python checks and 18 subtests,
-with one existing unbuilt native-extension skip. This includes the pinned-reader
-storage regression and related API, scheduler/core, authentication, streaming and
-dashboard checks. The fixture-isolation follow-up separately passed all 15
-affected route cases; this is targeted fixture validation, not a new full-suite
-or production qualification result. The OS file-limit regression separately
-passed after a real SQLite `SQLITE_IOERR_WRITE` (778), sanitized writer suspension,
-capture refusal and fresh-recorder recovery with an independent `quick_check`
-and content round-trip. This is per-file OS-limit evidence, not actual disk
-exhaustion or a new full-suite result. The JavaScript and regression snapshot at
-`7b7037bfa02545d0be57270e29f22f91827a5d17` passed 70 standalone Node checks;
-that is historical evidence. The resize-fix snapshot separately passed 62 checks
-across the inspector, document and output Node suites, including an exact
-pre-fix reproduction and stale-render/deferred-scroll regressions. An in-app
-browser stress fixture retained 4,514,988 bytes and 1,004 messages, with giant
-unbroken text, JSON tool output and multilingual text. After the fix, a far-tail
-match remained visible across desktop/mobile/desktop reflow; settled height-only
-resizing retained follow mode, and ordinary scrolling still disabled it.
-Heap and frame-time measurements remain pending; inference-overhead evidence is
-limited to the scoped composed-source pilot below.
-The mobile and slider-semantics follow-ups also passed focused template and
-browser checks. Initial synthetic
-browser spot checks covered
-desktop light/dark rendering, narrow-screen reselection, elapsed spans, retained
-image decoding, far-tail search, navigation, filters, paging, basic live following,
-preserved reading position during appends, and a complete synthetic text download.
-They do not
-establish comprehensive browser, broader inference-overhead, native-build or
-private-trial readiness. Those gates, source publication and catalog/agent-guide
-reconciliation remain open.
-
-The loading-time search snapshot separately passed 67 checks across the same
-three Node suites. A deferred-content replay against the exact previous source
-reported one match while leaving the reader at row 1 with the target at row 91;
-the changed worker moved to row 91. Regressions cover final input/output ordering,
-width/height feedback, cancellation by newer navigation, errors and no-match
-completion without a later unsolicited jump. No new timer, queue or retained
-hit list is introduced. Browser confirmation of this follow-up remains pending;
-the deterministic worker result does not replace rendered-browser evidence.
-Clipboard transport and selection qualification also remain incomplete.
-
-A bounded backend observer-overhead pilot was run on composed source snapshot
-`40f860e1dd8e8e0b3a9bdccf3cb44ce7c81d6abf`. It used a warm local Qwen3-4B
-model, short synthetic text, one in-flight request, disabled KV/image cache
-retention and zero reported KV cache hits. It completed 40 paired measurements
-(10 per condition; 82 samples including two warmups). Capture-disabled baselines
-had no readers. Median paired decode loss and client TTFT change were:
-
-| Capture condition | Median paired decode loss | Median paired client TTFT change |
-| --- | ---: | ---: |
-| Capture enabled, no observer | 0.052% | -0.344% |
-| One healthy SSE reader | 0.140% | -0.656% |
-| Three healthy SSE readers | 0.104% | -4.286% |
-| One reader configured to stop reading the body | 0.019% | +1.365% |
-
-Baseline medians were 181.48–182.43 tokens/s and 51.05–53.24 ms client TTFT.
-Paired median absolute deviations were 0.061–0.113 percentage points for decode
-loss and 1.17–3.09 percentage points for TTFT change; these are descriptive
-variation measures, not confidence bounds. These results describe only this
-short text workload and composed source. They do not establish a target-performance
-pass or imply that capture accelerates inference. The configured stalled reader
-did not establish transport saturation. Browser CPU/heap/frame cost, larger inputs or outputs, prefix
-reuse, VLM, concurrent inference, stalled-writer behavior, and whole-app
-Release performance remain unqualified. This pilot does not replace focused
-source isolation or the other adoption and release gates below.
-
-Two extended profiles then passed on that same composed snapshot and local
-Qwen3-4B model: 42 requests per profile, including two warmups and 20 paired
-comparisons (10 with no observer, 10 with three healthy SSE readers). Measured
-inputs/outputs were 8,597/128 tokens for the longer-input profile and 59/512 for
-the longer-output profile. Paired token counts, cache acknowledgements and output
-hashes matched; explicit KV cache hits were zero. The model was already loaded,
-with uncached measured prefixes, rather than a cold model-startup comparison.
-
-| Profile | Enabled capture observers | Median paired decode loss | Median paired client TTFT change |
-| --- | --- | ---: | ---: |
-| Longer input | None | 0.053% | +0.257% |
-| Longer input | Three SSE readers | 0.312% | +1.637% |
-| Longer output | None | 0.008% | +0.505% |
-| Longer output | Three SSE readers | 0.047% | +0.018% |
-
-Longer-input baseline medians were 123.05–123.17 tokens/s and 1,727.96–1,853.25 ms
-client TTFT; longer-output baselines were 179.48–179.65 tokens/s and
-49.15–52.18 ms. Across these four comparisons, paired median absolute deviations
-were 0.033–0.131 percentage points for decode loss and 0.877–2.249 points for
-TTFT change. Individual TTFT changes ranged from -10.77% to +14.06%; medians do
-not bound every request. These results add evidence only for the named model,
-lengths, one-in-flight workload and backend readers. Warm prefix reuse, concurrent
-serving, larger contexts, stalled persistence, browser cost and whole-app Release
-performance remain separate qualification gates. No automatic target pass is
-inferred from the small medians.
-
-Warm-prefix reuse was separately checked on that same artifact/model with a
-2 GiB RAM-only KV cache. Measured requests reused 1,536 tokens: 1,601 input
-with no observers and 1,602 with three SSE readers, each generating 128 tokens.
-Warm controls, seeds and measured requests had matching input/cache counts and
-acknowledgements; full-output warm controls and capture-off/on output hashes
-matched. Each pair used a separate capture-disabled primer and warm conditioner,
-then a one-token seed before each measured side. Uncached primer output was
-retained diagnostically and was not used as a warm-output equivalence control.
-
-| Warm-prefix cohort | Pairs | Median paired decode loss | Median paired client TTFT change |
-| --- | ---: | ---: | ---: |
-| No observers | 10 | -0.046% | -1.529% |
-| Three SSE readers | 10 | -0.164% | -1.319% |
-
-The no-observer cohort completed before a later test-client shutdown fault
-aborted its overall execution; that execution remains incomplete. The
-three-reader figures come from a separate, completed ten-pair confirmation
-with a corrected client shutdown path. Earlier partial three-reader data was
-not pooled with it. These are independently checked per-condition results.
-Paired decode-loss MADs were 0.152 and 0.134 percentage points; TTFT-change MADs
-were 2.457 and 2.803 points. Baseline median TTFT was 87.35 and 96.22 ms.
-Negative changes do not establish that capture accelerates inference. This
-supports the scoped warm capture comparison without establishing cached/uncached
-numerical identity, cross-model performance or a universal target pass.
-Browser resources remain an open gate. Concurrent capture fidelity was checked
-separately as described below.
-
-A separate three-request failure check on the same composed snapshot and local
-Qwen3-4B model held an independent SQLite `BEGIN IMMEDIATE` transaction in an
-isolated temporary Activity database. A setup capture committed cleanly; the
-capture-disabled baseline and capture-enabled fault response both completed with
-18 input tokens, six output tokens, zero cache hits and identical output hashes.
-The fault response completed in 69.5 ms while the external write lock remained
-held. Activity subsequently reported unavailable persistence with the sanitized
-`Activity persistence suspended (OperationalError)` status. Observed lock hold
-was 361.4 ms, below the three-second bound; owned-process and temporary-data
-cleanup completed successfully.
-
-An initial three-response attempt checked health before SQLite's 250 ms timeout
-could expire and remained incomplete. The corrected check waited at most 1.5
-seconds for the asynchronous health transition, preserving the response, lock
-overlap and error checks. This qualifies continued short-request serving during
-this lock-induced writer failure. It does not qualify sustained writer stalls,
-queue saturation, actual disk exhaustion, recovery of the same writer, durability
-of the interrupted capture or performance under persistence failure.
-
-A separate concurrent capture-fidelity check completed 82 requests on that same
-composed snapshot and local Qwen3-4B model: two warmups and 20 paired batches,
-with two requests per capture-off/on side. Each measured request used 1,104 input
-tokens, generated 512 tokens and reported zero cache hits. Every batch supplied
-a scheduler snapshot with both response request IDs generating and making
-positive token progress; capture-on rows also matched their Activity IDs.
-Capture-disabled batches had no SSE readers. Enabled batches had either none or
-three confirmed healthy readers. Both sides used the same 20 bounded admin polls
-at 150 ms intervals, additional to the SSE-reader workload.
-
-All 40 captured concurrent responses matched their own client streams exactly,
-including comments and separators: 18,619–19,879 bytes per response. Submitted
-and prepared inputs retained each request's own marker without its paired
-request's marker, prepared token-ID counts matched client input counts, and
-observed input/output counts matched usage. Each record completed with one
-invocation and zero gaps. Extra fidelity reads occurred after both responses
-finished and are excluded from serving throughput. Owned cleanup succeeded.
-
-| Concurrent cohort | Batch pairs | Median paired batch throughput loss | Median paired mean-client TTFT change |
-| --- | ---: | ---: | ---: |
-| No SSE readers | 10 | -0.215% | +0.497% |
-| Three SSE readers | 10 | +0.126% | +0.213% |
-
-Throughput-loss MADs were 0.652 and 0.306 percentage points; TTFT-change MADs
-were 2.806 and 1.084 points. These are descriptive measurements for this workload,
-not a universal target pass or evidence that capture accelerates generation.
-An earlier cross-run output-hash comparison stopped after six requests and
-remains incomplete. A separate six-request capture-off/off control also produced
-different hashes for both requests; the cause remains unproven. In the completed
-fidelity check, 18 of 40 off/on output comparisons differed. Cross-run numerical
-identity is unqualified; per-request retained-byte fidelity is the checked claim.
-This does not establish simultaneous GPU-kernel execution or browser cost.
-
-A separate two-request image smoke passed on the same composed snapshot
-`40f860e1dd8e8e0b3a9bdccf3cb44ce7c81d6abf`, using an already-local
-Gemma4Unified 12B model. Streaming and nonstreaming Chat each completed with one
-observed invocation, 307 observed input tokens, 16 generated tokens and zero
-capture gaps. Both records identified the resolved local VLM backend and retained
-the normalized submitted image reference. An authorized lazy attachment read
-returned the original 181-byte PNG exactly, with PNG MIME type, no-store and
-sandbox CSP headers. Retained API responses matched the client wire bytes in
-both modes (706 bytes JSON and 1,799 bytes SSE).
-
-This is a tiny synthetic-image smoke, not image-recognition quality, other image
-formats/API families, VLM performance, prepared-media reconstruction or complete
-browser qualification. The image-to-engine path was source-audited; Activity does
-not expose a vision-specific execution counter. Larger image/pixel budgets,
-prepared-image/token fidelity and rendered preview behavior remain separate
-gates. This evidence supports retaining the implemented image feature without
-claiming comprehensive VLM support.
-
-## Validation
-
-Run CPU-only foundation checks from the repository root:
+For a local source review, verify the pins and inspect the complete baseline
+diff before adoption:
 
 ```sh
-python -m unittest discover -s tests -p test_activity.py -v
-python -m unittest discover -s tests -p test_activity_file_limit.py -v
+git diff --check bd1e9b112474862ebed550a9c83b4316038a1d74..3458d61ffb97dc915e283806b7397145cedca168
+git diff --stat bd1e9b112474862ebed550a9c83b4316038a1d74..3458d61ffb97dc915e283806b7397145cedca168
+git diff bd1e9b112474862ebed550a9c83b4316038a1d74..3458d61ffb97dc915e283806b7397145cedca168
 ```
 
-They exercise actual recorder/storage behavior, including disabled resources,
-settings round-trip, source/model filtering, pagination, compressed Unicode
-ranges, large text/token snapshots, concurrent producers, saturated/stalled
-writers, request limits, lifecycle capacity, clear/delete fences, terminal
-retention, partial shutdown/restart and corrupt/newer store preservation.
-`tests/test_activity_pinned_reader.py` holds a real independent SQLite read
-transaction while bounded incompressible output competes with wide Unicode
-metadata under a small storage budget. It checks visible storage gaps without
-worker suspension, retained terminal metadata and continued capture after the
-reader is released. It does not establish an unconditional instantaneous sidecar
-ceiling while checkpointing is blocked.
-`tests/test_activity_file_limit.py` uses a bounded child process with a disposable
-database and a child-only soft `RLIMIT_FSIZE`. It ignores `SIGXFSZ`, observes a
-real SQLite write error without injecting one, checks sanitized suspension and
-ordinary capture refusal, then restores the limit and verifies a fresh writer
-on the same database. The parent also owns temporary cleanup if the child times
-out. Unsupported platforms skip explicitly. This is an OS per-file size failure,
-typically `EFBIG` through SQLite, not a full-filesystem `ENOSPC` test; it does not
-promise durability for the interrupted request or recovery of the same writer.
-These checks do not qualify inference integration, browser UI, real models or
-performance. Run relevant subsystem tests after their hooks are implemented.
-`tests/test_activity_runtime.py` exercises endpoint validation/auth ordering,
-semantic snapshots, stream finalization, disabled behavior and credential
-migration. `tests/test_activity_engine.py` exercises actual scheduler/core hook
-paths with mock models, including prepared-token reuse, producer output,
-deferred cancellation and failed insertion. Those need the normal test runtime;
-shared test imports may initialize Metal even though no real model is loaded.
-`tests/test_activity_snapshot.py` checks the actual four request schemas,
-explicit/null/extra fields, large-media text survival, nested references, plain
-file/tool data, immutable ownership, Unicode/chunk/size/depth boundaries,
-disabled behavior and clear/delete/disable/failure reservation races. It also
-checks that JSON encoding executes on the writer thread.
-`tests/test_activity_images.py` covers actual request schemas and PNG/JPEG/WebP
-original-byte fidelity/provenance, text-first budgets, disabled retention/no
-fetches, repeated references, malformed/animated/oversized containers, no codec
-work, bounded authorized streaming/session expiry, clear/delete races,
-transactional migration rollback and physical/count/age retention.
-`tests/test_activity_metrics.py` checks multiple invocations, cumulative-counter
-idempotence/regression, unavailable counts, capture-off fences, scalar evidence
-through queue loss and safe admission-option filtering. The engine integration
-check invokes the actual prefill callback without re-tokenizing prepared input.
-`tests/test_activity_invocations.py` checks structured multi-invocation counts,
-frozen/bounded options, coalescing, observation-ended state, resource admission,
-writer failure, clear/delete/off fences and transactional v1/v2 migration. Actual
-core fixtures additionally check default/overridden parameters without loading
-a model or retaining grammar objects.
-`tests/test_activity_api_paths.py` reuses the four production APIRoute objects,
-original schemas/authentication and exception/response formatters in an isolated
-in-memory app. It replaces engine resolution/generation and explicitly emulates
-observer callbacks; it does not qualify real engine preprocessing, scheduling,
-app lifespan, full middleware composition or real model execution. Cases cover
-both response modes, named/main/x-api-key/anonymous-opt-in sources, invalid auth/
-JSON/schema exclusion, accepted preflight rejection, multiple completion prompts,
-capture-off behavior and generation failures with partial producer output.
-`tests/test_activity_routes.py` covers actual admin authorization, bounded reads,
-pagination/filtering, snapshot consistency, reconnect/session revalidation,
-reader cancellation and stream admission. `tests/test_activity_transport.py`
-covers handled exceptions, exact/split UTF-8 ASGI body fragments, failed sends
-and responses whose iterators never begin.
-`tests/test_activity_controls.py` covers live disable/resume without engine
-cancellation, atomic section-only persistence, stale versions, invalid settings,
-save failures, disabled-history maintenance, clear/delete fences, shared-lock
-ownership after caller cancellation, slow-writer replacement guards, and physical-
-budget reduction/reclamation.
-`tests/test_activity_dashboard.py` checks parent identity correlation for actual
-waiting/prefill/generation row construction. Web tests compile the Alpine
-expressions and render the real dashboard template. Run the standalone behavior
-checks with:
+Run focused Activity tests from the repository root, then validate the
+disabled/no-history behavior, capture enable/disable, retention, authenticated
+read access, each supported API family in streaming and non-streaming modes,
+and relevant scheduler/engine interactions. These are adopter validation
+steps, not results claimed by this recipe. Test the exact source and target
+revisions used, record any dirty-tree fingerprint, and report untested scope.
+Independently verify public source availability before treating this recipe as
+publicly usable.
 
 ```sh
-node --test apps/omlx-web/tests/activity_document.test.cjs apps/omlx-web/tests/activity_ui.test.cjs
+python -m pytest tests/test_activity.py tests/test_activity_routes.py \
+  tests/test_activity_api_paths.py tests/test_activity_runtime.py \
+  tests/test_activity_engine.py tests/test_activity_writer.py \
+  tests/test_activity_snapshot.py
+node --test apps/omlx-web/tests/activity_document.test.cjs \
+  apps/omlx-web/tests/activity_ui.test.cjs \
+  apps/omlx-web/tests/activity_output.test.cjs
 ```
 
-These exercise large single messages, long lines, sparse indexing, Unicode/range
-boundaries, complete literal search of loaded retained text, bounded match/DOM
-metadata, stable character anchors, reader suspension, stale-response exclusion,
-URL navigation and browser-height limits. Synthetic checks do not substitute for
-actual light/dark/mobile browser review.
-
-## Admin read interface
-
-The existing `/admin/api/activity` dashboard summary is preserved. New endpoints
-under that prefix require the existing admin session or main API key; named
-inference keys do not grant access:
-
-| Endpoint | Data |
-| --- | --- |
-| `/status` | Capture health and Activity settings, without local paths |
-| `/requests` | Metadata-only keyset pages; active/recent, model, source, state and time filters |
-| `/facets` | Bounded model and historical credential-label choices |
-| `/requests/{id}` | Metadata, bounded invocation details/options, retained representation indexes and version |
-| `/requests/{id}/content` | Bounded raw byte ranges for a representation/invocation |
-| `/requests/{id}/invocations/{invocation_id}` | One bounded invocation snapshot and admission options; no context BLOB reads |
-| `/requests/{id}/attachments/{attachment_id}` | Lazy, bounded-streamed original PNG/JPEG/WebP bytes |
-| `/events` | Committed metadata snapshots with selected-request indexes and compact invocation summaries |
-
-Content is never embedded in list or live snapshot responses. Content ranges
-use UTF-8 byte offsets and `application/octet-stream`; the response supplies
-offset/next-offset/total-byte headers. Consumers reading sequential ranges must
-use an incremental decoder rather than decode incomplete character fragments
-independently. Reads use separate short-lived SQLite snapshots and do not create
-a missing database. Existing history can be inspected with capture disabled.
-
-Live delivery polls committed metadata at 500 ms, with a maximum of eight
-viewers. A dedicated two-thread reader pool admits at most four outstanding
-jobs, including work for disconnected callers. No browser queue or reader is
-on the inference producer path. List and selected-content indexes in each live
-snapshot come from one committed read transaction.
-
-Live snapshots and history pages accept the same `scope` (`all`, `active` or
-`recent`), model/source, state and received-time (`since`/`until`, Unix seconds)
-filters. The inspector exposes scope, terminal outcome and a local-time received
-range alongside model/source. Invalid or reversed time ranges prevent live-feed
-and history-page requests. Changing filters clears old list pages and fences late responses;
-selecting a request under unchanged filters preserves the browsed page/cursor.
-The global active badge is hidden for a filtered population.
-
-Selected detail remains independent of list filters. A nullable
-`selected_outside_filters` flag is evaluated from that exact request row in the
-same read transaction; it does not infer exclusion from absence on the first
-page. An outside-filter hint appears in the selected inspector, including mobile.
-Missing/deleted selection remains distinct from a filtered selection.
-
-The first data event is a `snapshot` with an opaque epoch/channel/sequence ID.
-Reconnect accepts `Last-Event-ID`, or an optional `cursor` query when creating a
-new EventSource; the header wins. Valid retained history replays contiguously,
-one metadata frame at a time. Invalid, foreign, future or missing history yields
-`resync_required` before a fresh snapshot. A caught-up new connection receives
-the current head. Clients fetch new text ranges from retained content. Session
-authorization is rechecked throughout a stream; `authorization_lost`,
-`unavailable` and `reconnect` are explicit terminal stream events. Data responses
-are marked no-store. Replay contains sampled replacement metadata, rather than
-a lossless inference event log or recovered context content.
-
-The replay cache in `omlx/activity/replay.py` retains at most 2 MiB/128 events
-globally, 64 events and 1 MiB plus framing per channel, 16 channels and eight
-active leases. Events expire after 30 seconds and inactive channels after 60
-seconds, with earlier eviction under pressure. These bounds do not promise a
-minimum replay window or total process RSS. Active channel locks serialize each
-committed read through publication; each viewer follows its own cursor. A fresh
-missing selection bypasses historical selected detail. Service/source changes
-invalidate old reads and replay identities. The browser carries its last applied
-cursor across unchanged-channel network reconnects, compares uint64 sequences
-without floating-point conversion, and ignores duplicates or older frames.
-`resync_required` starts a fresh baseline on the same stream. Selection/filter,
-control, authorization and hidden-inspector rebuilds use a fresh head; history
-pagination has its own independent cursor. Malformed or unannounced foreign
-identities permit one delayed fresh-head retry per consecutive failure. Run
-buffer checks with
-`python -m unittest discover -s tests -p test_activity_replay.py -v`. See the
-[buffer decision](../decisions/request-activity-replay-buffer.md) for bounds and
-failure semantics.
-
-Live snapshot publication is fenced across Activity settings, clear and delete
-operations until their actual recorder writes finish, including writes whose
-HTTP caller times out or disconnects. Reads spanning a mutation or source/writer
-switch are discarded and the stream reconnects. The bounded fence fails closed
-on an ambiguous or cancelled writer Future. Focused synthetic cases are in
-`tests/test_activity_publication_fence.py`; these do not qualify replay delivery.
-
-## Submitted snapshot and media normalization
-
-Submitted input is frozen once before preprocessing into a bounded immutable
-semantic tree. The API admission walk does no JSON encoding, media decoding,
-network fetching or model work. It preserves explicitly set fields and extras
-from the validated request; unused defaults remain absent. JSON encoding and
-compression run on the Activity writer, in bounded chunks even for long escaped
-strings. Prepared model-input observation remains a separate representation.
-
-Recognized inline image/audio/video/file payload fields become ordered
-`_omlx_activity_attachment` references before queue admission. Small surrounding
-text therefore survives media that would have overflowed a whole-JSON snapshot.
-Plain text documents and ordinary tool-result JSON fields named `data` stay
-text. References include source position, kind, encoded size and explicit
-submitted-unvalidated provenance. Image references point to the detail attachment
-index for retained/not-retained status and reasons. Other media remains explicit
-not-retained references. None proves engine acceptance.
-External references are bounded metadata and are never fetched by Activity.
-
-The snapshot walk has memory/byte limits, an 8,192-node and 32-level traversal
-bound, and at most 128 detailed media references. Omitted values or tails leave
-explicit markers and capture gaps. Strings are shared only as immutable values
-with their storage charged; request/Pydantic objects and mutable containers do
-not cross to the writer. Queue space is reserved before walking and held through
-clear/delete/disable or worker failure until the in-flight snapshot releases it.
-This prevents deleted requests from being resurrected and avoids negative queue
-accounting after a persistence failure. These are bounded structural controls,
-not a completed throughput/overhead qualification.
-
-The readable submitted view shows ordered attachment references. Submitted JSON under
-More evidence exposes the retained normalized structure, including fields that
-the readable message layout does not display. Copy/download reflects the chosen
-view. The page explicitly labels normalized attachment payloads.
-
-### Original image previews
-
-When capture and `retain_images` are enabled, inline PNG, JPEG and WebP
-originals are candidates after submitted text has won admission. Image decoding
-from base64, bounded container/header checks and persistence run on the Activity
-writer. No image codec, metadata decompression, pixel buffers, network fetches,
-PIL objects, device arrays or inference preprocessing are used by the observer.
-The reference is a submitted original, independently container-checked by
-Activity; it is not an assertion that inference validated, accepted or used it.
-Checks identify expected containers and dimensions, reject animation and cap
-traversal at 4,096 chunks/segments. PNG chunk CRCs are checked; JPEG/WebP checks
-are structural headers, not full codec validation. A browser can still reject
-a malformed file; the inspector reports that as unavailable.
-
-Original previews have hard 16 MiB file, 16,384-side and 16 Mi-pixel ceilings,
-as well as configured per-attachment/request/queue bounds. Queue reservations
-include the immutable encoded string, base64/byte/SQLite temporaries and a
-conservative per-image allowance. With the default 16 MiB queue, even an
-otherwise valid image can be omitted well below 16 MiB. Omission reasons remain
-visible and do not discard surrounding text. Audio/video/documents, remote
-fetches, processed-image reconstructions and cross-request deduplication are
-outside this preview slice.
-
-Detail indexes contain bounded metadata only, including original dimensions,
-size, availability, provenance and omission reasons. Open Attachments to load
-one original at a time through the admin-only byte endpoint. Request changes,
-expiry, session loss and hiding Activity remove mounted images. No arbitrary
-submitted URL is assigned to an image element. Streams share the eight-viewer
-limit with SSE, read at most 64 KiB per short database transaction, recheck admin
-authority between chunks, and stop after 60 seconds or missing/deleted data.
-Responses use inert allowlisted image MIME types, no-store/nosniff and fixed
-filenames; image bodies are never put in list/SSE snapshots.
-
-Schema 2 transactionally adds request-owned attachment rows to schema 1. Reads
-can still inspect schema-1 text before migration. Unsupported newer schemas
-remain untouched. Originals and references cascade with clear/delete and
-count/age/byte retention. Original byte lengths contribute to captured bytes
-and per-request limits; SQLite page capacity and physical sidecars both enter
-pre-write admission. Existing v1 binaries preserve/refuse the newer store;
-rolling an app back must not downgrade or replace that history.
-
-## Live controls
-
-Capture settings on Activity apply without restarting inference. The configurable
-1,000-record/seven-day/5-GiB defaults remain unchanged. Turning capture off closes
-active records as `capture_stopped`, preserves partial content and records the
-reason; it neither cancels inference nor invents a successful request completion.
-Turning it back on captures only newly admitted requests. Retention reductions
-apply promptly; completed history is removed first. If an active store cannot
-fit a reduced byte allowance, its captures stop and become eligible for retention.
-
-`PUT /admin/api/activity/settings` accepts `enabled`, `max_requests`,
-`max_age_days`, `max_storage_bytes`, and `retain_images`; unknown fields, nulls and inconsistent
-limits are rejected. Send `X-Activity-Action: settings` and optionally `If-Match`
-with the `config_version` from status to reject stale saves. Only the Activity
-section is saved, preserving stored values versus unrelated runtime overrides.
-Credential-ID migration uses the same serialized settings-save boundary.
-
-`DELETE /admin/api/activity/requests/{id}` requires JSON `{"confirm":"delete"}`
-and `X-Activity-Action: delete`. `POST /admin/api/activity/clear` requires JSON
-`{"confirm":"clear"}` and `X-Activity-Action: clear`. The browser asks for local
-confirmation with the exact scope. These remove Activity data and fence late
-writes; they do not clear chat history/KV caches or cancel inference. Clearing
-also stops capture of requests already admitted, while later requests can still
-be captured. No forensic erasure is promised.
-
-Mutations require the existing admin authority, an explicit action header and
-bounded control admission. A task retains the shared settings-save lock through
-its worker result even if the HTTP caller disconnects. On a failed or timed-out
-response, reload settings/history before deciding whether to retry; a save can
-have succeeded even if its later live application did not finish. The API
-reports that saved/live distinction explicitly. `retain_images` controls future
-submitted snapshots; changing it neither deletes existing originals nor revokes
-already admitted image work. A replacement writer cannot
-start while the previous writer is still stopping.
-
-## Observed execution evidence
-
-Metadata includes scalar counts for observed scheduler invocations, admitted
-input token IDs and increases in each invocation's cumulative generated-token
-counter. Repeated output snapshots do not add tokens twice. A regressing
-counter records a capture gap; no count is derived from character or byte length.
-Absent counters stay unknown, including in terminal invocation events. Counts
-can remain available when bounded payload capture drops token/text evidence;
-retained-representation flags distinguish that case.
-
-The existing scheduler prefill callback supplies the Prefilling label where
-observed. First observed token/text times use monotonic elapsed time since
-Activity receipt, persisted as durations. They describe producer updates and
-are not HTTP first-byte latency or a measurement of GPU execution time.
-
-Invocation events retain the scalar sampling subset for raw evidence inspection.
-Structured details now appear in `invocations` on the request-detail endpoint:
-independent engine ID mapping, observed model ID at admission, phase/outcome,
-prepared count/text availability, generated count, first token/text offsets,
-admission/prepared/prefill/end offsets and finish reason. Time offsets use the
-request receipt as their common monotonic origin. A finished observation with no
-retained engine terminal update becomes `observation_ended`, preserving the last
-observed phase without inventing an engine outcome. Missing or stale detailed
-snapshots remain possible; request-wide protected counters are separate.
-
-Admission options cover named CPU scalars in `SamplingParams`, bounded stop lists,
-and booleans for grammar/logits-observer presence. Objects are never copied or
-serialized. Stop strings retain at most 32 entries and 1,024 combined characters;
-stop token IDs retain at most 32 entries. Invalid/oversized known values are
-listed in `omitted_option_fields`. Options describe core admission, not final
-scheduler/kernel configuration, later SpecPrefill defaults, compiled grammar
-content or all optional-engine parameters. Actual defaults and overrides are
-observed without re-tokenization. Universal pre-parser output and later sparse/
-requeue/attention transformations remain qualification work.
-
-Schema 3 transactionally adds request-owned invocation rows to schemas 1/2. Older
-history remains readable before migration; newer schemas are preserved/refused.
-Each of at most 256 rows has at most 16 KiB of JSON. Updates are immutable, encoded
-and merged only on the worker, and share the byte/item/request capture budgets.
-A conservative 128 KiB queue reservation covers each snapshot and writer merge
-buffers; live observer state reserves 2 KiB against total observer memory until the
-observer object is released, including after clear/off/persistence failure.
-New capture/content/submitted-snapshot admission includes those live reservations.
-When global memory cannot admit another observer, it records an explicit gap.
-Request-size admission conservatively counts all accepted update traffic even
-though storage keeps only the latest row. Stored captured-byte totals count the
-resident row, adjusted transactionally on replacement. Retention/deletion cascade.
-
-Live output snapshots coalesce to at most one per 500 ms per invocation, sampled
-when output arrives; lifecycle boundaries attempt immediate snapshots. There is
-no per-token SQLite write for invocation details. Queue refusal records a gap and
-does not erase existing protected request counters or cancel inference. Detailed
-terminal state is budgeted rather than promised lossless. The existing producer
-text path has its own content cadence; the scoped composed-source overhead pilot
-above does not isolate the cost of this cadence or qualify other serving
-workloads.
-See [the snapshot decision](../decisions/request-activity-invocation-snapshots.md).
-
-Known scheduler pauses and retries annotate the existing observed generation.
-Reasons are bounded to prefill eviction, memory requeue, generation overflow,
-cache recovery, batch-reset requeue and bounded memory retry. A repeated pause
-within one outstanding cycle is idempotent. Resume is observed at successful
-admission/insertion or actual prefill advancement, including packed companions;
-queue membership and eviction callback completion do not count as resumed work.
-Annotation failures are ignored by scheduling, and disabled/unobserved requests
-add no progress maps or scans. Existing scheduler decisions and caches are unchanged.
-
-Details and compact summaries retain the last known phase, observed pause/resume
-counts, a fixed reason and receipt-relative monotonic timing. Terminal completion
-closes the paused flag without inventing a resume. Stopped observation exposes a
-last-observed pause with current state unknown. The selector and selected-generation
-readout scope these facts to that generation, so a paused sibling never labels
-the entire request as paused. Retry keeps the same invocation ID; repeated prompt
-preparation still reports its existing capture gap rather than fabricating a new
-effective context. Fixed observer/snapshot resource fixtures and synthetic scheduler
-transition checks cover this source boundary; real-backend qualification remains.
-
-SSE includes only compact phase/count/timing summaries and declares
-`invocation_options_included:false`; full detail declares it true. Engine IDs,
-stop strings and option payloads are excluded from SSE/list delivery. Detail reads
-use the same short transaction as request/index metadata, without reading content
-BLOBs, and have a fixed 256-row/16 KiB-per-row ceiling. A single-invocation
-endpoint reads at most one row under the same admin authority, isolated read
-admission and no-store policy. Unknown, noncanonical or missing IDs return 404;
-retained history remains readable with capture disabled.
-
-On SQLite builds with JSON functions, live summaries project only their allowed
-fields inside the read transaction, so Python does not decode rich admission
-options for each poll. Missing values, nulls, booleans and zeros remain distinct.
-Older SQLite builds use the existing bounded decode path. Detail reads retain
-their full options. This reduces materialized metadata in that path; broader
-serving CPU, process memory and inference-overhead qualification remains pending.
-
-The inspector defaults to Entire request. Its Generation selector lists up to 256
-IDs from compact snapshots and retained content indexes, including content whose
-rich snapshot was dropped. Selecting a generation recreates the bounded reader
-worker with only that invocation's prepared input, producer output and token-ID
-indexes, leaving the request-wide counters above unchanged. Search, navigation,
-copy and export then cover that filtered evidence. Submitted input and API wire
-are request-wide; choosing those views returns to Entire request. Returning
-explicitly restores the previous full-request position/mode/follow preference.
-Session reading positions retain the invocation selection. Downloads include
-the generation ID in their filename.
-
-The inspector header copies the full request ID or a canonical Activity link.
-Each message/section heading can copy its complete retained worker text,
-including content outside the mounted viewport; missing section keys fail
-explicitly. Whole-view copy/download remains available. Clipboard failures fall
-back to a text download. Pending exports retain request/view/generation identity
-and stop on selection changes, hiding, deletion or lost authorization. Ordinary
-live metadata updates do not cancel same-view copies. Old-mode worker renders
-cannot replace the current view. Rendered-browser clipboard behavior is still
-unqualified.
-
-Admission options load only when expanded, through one single-invocation read;
-there is no options polling or retained multi-invocation options cache. One
-bounded detail stays mounted, with explicit missing/error/retry and omitted-field
-labels and inert text rendering. Changing request/generation, collapsing, hiding,
-authorization loss or removal invalidates/aborts that detail read. Live scalar
-summaries take precedence over loaded detail for counts/phases. Deferred exports
-and scroll restoration are fenced when selection changes. Expanded panels scroll
-within bounded heights, while a minimum context height and inspector overflow
-keep content reachable on short screens. On mobile, selected detail expands with
-normal page scrolling; the virtualized reader keeps a separate viewport between
-264 and 600 CSS pixels, using 55% of the dynamic viewport height within those
-bounds. The inspector itself adds no nested scroll area in this layout. List-only
-mobile scrolling and desktop sizing are unchanged. Synthetic browser checks at
-390 by 844 and 375 by 667 CSS pixels verified 464- and 367-pixel readers, no
-horizontal page overflow, evidence expansion and back/reselection. Broader touch,
-keyboard, text-selection and accessibility qualification remains pending.
-
-The controller checks selection isolation, restored reading position, lazy reads,
-stale results, hidden/auth/deletion fences and invalid IDs; the exact filtered
-payload is also exercised through the actual reader worker and exported. Real
-route checks reject unauthenticated/inference-only keys, deny context/attachment
-table reads during the single-row query, and cover disabled/deleted history and
-malformed IDs. Template expressions/rendering pass; browser visual/runtime review
-is still required.
-
-## Writer collection and payload coalescing
-
-A normal data wake has a 50 ms collection window on the existing worker thread.
-Flush, clear, delete, settings changes and shutdown signal a separate urgent event
-to bypass that delay. They still wait for an already running SQLite operation;
-this is not an absolute I/O deadline. Decode/API producers only offer immutable
-observations and never wait for the collection window, compression or storage.
-
-The worker plans each window of at most 64 queued pieces once and joins matching
-`raw_output` or `api_response` pieces up to a conservative 64 KiB encoded bound.
-The key includes capture handle/epoch, representation, invocation and payload
-type. Independent channels may interleave in the queue, but each channel keeps
-its byte order. Semantic/event/token/image/invocation chunks and mixed payload
-types in the same channel are merge barriers. Large pieces use the existing
-bounded encoder. SQLite sequence numbers describe stored chunks, not one-to-one
-producer callbacks or global cross-channel causal order.
-
-Planned singleton descriptors prevent repeated scans of the same unique channels.
-A deterministic 256-channel case reproduced 42,848 representation-property reads
-before this planning rule; its regression bound is now fewer than 3,072, without
-using elapsed-time assertions. This is a planner-work check, not a serving benchmark.
-
-Original byte/item/request reservations remain charged while a group is in
-flight. A separate conservative 320 KiB scratch reservation covers merge/encoding/
-compression buffers; new capture, content, submitted-snapshot and invocation
-admission include it in the memory ledger. Without scratch capacity, ordinary
-writes proceed without merging. Clear/delete and persistence failure do not
-release buffer credits while a valid write still owns them. `writer_scratch_bytes`
-in capture health exposes the current buffer reservation. Prepared descriptors
-are slotted/weak-referenceable and retain a separate 2 KiB credit each after the
-buffer reservation ends; at most 64 exist per window. `prepared_group_bytes`
-exposes those credits. They share the 320 KiB reservation while planning/merging
-and remain included in every ingress memory guard afterward. A prepared group
-rechecks buffer capacity before joining; if capacity has gone, it writes its
-original pieces without replanning, new split descriptors or content loss.
-Queue and memory settings,
-request-byte admission, retained logical-byte totals and capture defaults are
-unchanged.
-
-This coalesces payloads before existing storage admission, rather than placing
-pruning, vacuum or checkpoint calls inside a long outer transaction. Existing
-physical/page-budget and terminal metadata rules still apply. Changed active
-phase/count metadata can commit even when another payload is queued. Terminal
-metadata and capture removal still wait for the request's queued payloads to
-drain; this does not promise a deadline during a blocked storage operation.
-Twenty-two deterministic
-writer checks cover interleaved channel/request/invocation isolation, byte/item/
-type limits, semantic barriers, no-memory fallback, urgent controls/shutdown,
-in-flight clear, scratch-aware admission, prepared-capacity changes, descriptor
-size/weak-reference lifetime, failed-writer reference release and active metadata
-freshness with its paired terminal drain barrier.
-A refused combined write records a gap for that group; gap counts do not count
-producer pieces. A small burst fixture reduces ten pieces to two actual writes with identical
-retained bytes. This establishes fewer writes in that fixture, not measured
-inference overhead, high-cardinality CPU cost or a serving-throughput guarantee.
-See [the writer decision](../decisions/request-activity-writer-coalescing.md).
-
-## API body observation boundary
-
-With the Activity transport middleware present, `api_response` is captured once
-from HTTP body messages at its ASGI send boundary. This includes handled
-preflight exceptions whose response is constructed after the endpoint raises.
-The endpoint wrapper supplies body capture only when no transport observer is
-present, preserving direct-use behavior without duplicate capture. Both valid
-JSON and streamed production routes are checked byte-for-byte against client
-responses in the isolated protocol fixture.
-
-These are outgoing body attempts at the observation layer, not proof of client
-receipt or a physical/compressed network trace. A failed send preserves observed
-bytes but reports interrupted transport. Existing bounds, capture-off/delete
-fences and protected lifecycle rules remain. Auth failures and malformed schema/
-JSON bodies never create a capture in the first place.
-
-Starlette's outer unhandled-error response can bypass user middleware after it
-has finalized the failed request. That body's evidence remains unavailable; the
-observer does not reopen terminal/deleted captures to append it. The production
-outer error handler preserves an existing Activity request ID in its response
-header for correlation. Sanitized generic 500 content and capture-off behavior
-remain unchanged. Handled errors and streamed formatter failures have actual
-wire evidence; this is not a promise that every framework-generated response is
-visible. See [the body-observation decision](../decisions/request-activity-api-body-observation.md).
-
-## Backend and evidence coverage
-
-The inspector's expandable Evidence coverage panel separates resolved engine
-identity from recorded execution signals. Resolution records only a bounded set
-of known kinds: local batched text, batched VLM, local diffusion, distributed,
-Splash and other/unknown. An unresolved or historical record stays unclassified.
-Multiple resolutions retain distinct kinds in order without retaining engine
-objects, addresses, local paths or arbitrary class names. Unknown subclasses do
-not inherit a claim to a known implementation merely from their class hierarchy.
-This observation is made after normal resolution; model selection and lease
-behavior are unchanged.
-
-Detail metadata includes `coverage.backend_kinds`, the resolution source, whether
-the shared scheduler was observed, and states for submitted input, prepared text,
-admitted token IDs, producer output, API wire and original images. `retained`
-means at least that representation exists, not that it is complete. Known scalar
-observations with no retained payload are `observed_not_retained`; otherwise the
-state is `not_observed` (no recorded signal, not proof the engine never had it).
-Capture gaps, browser projection limits and normal lifecycle indicators remain
-separate. No backend identity implies universal pre-parser output or a fully
-reconstructed attended context.
-
-| Resolved implementation | Evidence boundary |
-| --- | --- |
-| Local batched text | Shared-core prepared-input/IDs and producer hooks; exact retained fields still determine availability |
-| Local batched VLM | Normal shared-core path can observe IDs/output; preprocessing can leave token IDs without prepared text, and no embedding/KV reconstruction is implied |
-| Local diffusion | Separate generation path; submitted/API wire where captured, with no shared-core guarantee |
-| Distributed | RPC paths can bypass local core; partial chat may use a local fallback, which must be established from actual scheduler signals |
-| Splash | Native proxy path; submitted/API wire where captured, with no local-core guarantee; plain completions remain unsupported |
-| Other/unresolved | No inferred backend capability; retained evidence is still inspectable |
-
-`tests/test_activity_coverage.py` checks actual class dispatch through normal
-leased/unleased resolution with no model load, bounded immutable metadata,
-unknown subclasses, proxy identity alongside local-core evidence, VLM ID-only
-input and content loss versus unavailable signals. These fixtures qualify the
-classification/recording contract; real backend execution, all endpoint modes
-and full composition still require qualification. The panel's controller and real
-template have local behavior/render checks; comprehensive browser review remains
-pending. Duration, count and representation-provenance explanations live in this
-disclosure, while capture gaps and projection availability stay visible outside it.
-
-## Internal work and background scope
-
-Only the four generation endpoints create ordinary Activity records. The
-inspected admin throughput/context/accuracy/tuning entry points run outside
-those observed routes; no benchmark prompts are intentionally archived by
-Activity. This is a source-audited boundary, not real benchmark qualification.
-Known GPU keep-warm upkeep detaches the initiating Activity context when its
-long-lived task is created during lazy model loading. Other context variables
-are preserved, and the foreground capture is restored even after an exception.
-No GPU work or timer behavior is changed by this detachment.
-
-`tests/test_activity_scope.py` exercises the actual task-creation method with
-its GPU loop replaced by a synthetic coroutine, plus nested/error restoration.
-Optional engines, future internal callers and additional background tasks still
-need explicit coverage. Internal work must not inherit a user's capture merely
-because it runs in a task descended from that API request.
-
-## API errors and request outcomes
-
-A completed HTTP200 stream is not necessarily successful inference. The four
-API formatters and JSON/SSE keepalive handlers signal a terminal semantic
-failure separately when they actually surface one. Activity retains an
-`api_failure_outcome` and `api_failure_source: api_formatter` in protected
-metadata, even if the content queue cannot retain the error body. It combines
-that signal with existing engine and transport outcomes; later HTTP completion
-cannot erase it, and finalization still waits for observed engine invocations.
-No response-body parsing, error-message copying or additional engine cancellation
-occurs on the inference path.
-
-On these instrumented paths, guard rejections remain rejected, request/mid-prefill
-aborts are signaled cancelled, and formatter/terminal tool failures are errors.
-Existing outcome precedence still reconciles independently observed engine and
-transport failures. A recovered tool-marker quotation in prose does not signal
-failure. Signals are request-scoped, idempotent and fenced by capture disable,
-clear/delete and terminal finalization. Ordinary HTTP exceptions and unhandled
-iterator errors keep their existing status/transport observation paths.
-
-`tests/test_activity_failures.py` first reproduced all four formatter errors
-being recorded as completed under HTTP200. It now checks the actual formatters
-inside the observer/ASGI transport, completed/no observed invocation variants,
-actual JSON grace and JSON/SSE keepalive classification, outstanding engine work,
-content-capture refusal, disabled/closed scopes, terminal tool failure versus
-recovered prose and concurrent success/failure isolation. These synthetic checks
-qualify that integration boundary, not every backend's abort or full endpoint
-behavior. Real-model qualification of these formatter-failure paths and native lifecycle
-qualification remain pending.
-
-## Resize ordering and scoped Chromium qualification
-
-Production follow-up `3458d61ffb97dc915e283806b7397145cedca168` addresses two
-resize event orders. A taller viewport can clamp the old physical scroll position
-before `ResizeObserver` runs. The inspector checks measured dimensions before
-interpreting scroll events and their deferred callbacks. Consecutive layout-only
-notifications preserve the worker's current semantic anchor rather than sending
-an unacknowledged row back as a new navigation request. Explicit user scrolling
-still moves the viewport, and a new worker still restores its saved position.
-This uses constant additional state and avoids canvas measurement for unchanged
-viewport dimensions on ordinary scroll events.
-
-The focused document/inspector Node suites pass 60 checks, including the
-pre-measurement clamp and consecutive layout notifications with stale rows.
-An actual synthetic Chromium browser check first reproduced a searched section
-moving from ordinal 1005 to 1004 after request switching and a width/height
-roundtrip. A dimension-only guard was insufficient when duplicate notifications
-arrived before acknowledgement; the final layout protocol preserves ordinal
-1005 across that exact sequence. Subsequent Page Up changes the reading position,
-and live tail-follow survives a height change and disengages on user scroll.
-
-The fixture has 1,004 messages, a newline-free 4 MiB string, a 256 KiB tool result,
-Unicode text and a tiny retained PNG. Earlier scoped browser checks confirmed
-loading-time partial-search labels followed by the completed far-tail match,
-4,195,255 literal matches with bounded rendering, full-view copying, and a dragged
-selection remaining intact during live appends. Those checks are not a full
-clipboard, accessibility or readable-output audit.
-
-For the follow-up, a 30-second mixed search/reflow sample recorded 3,492 frames,
-9.7 ms p95 frame intervals, a 58.4 ms maximum interval, no observed long tasks,
-and implementation-reported used JS heap between 31,898,059 and 57,086,982 bytes.
-The full page had 6,859–7,405 DOM elements across the sampled states; only the
-bounded reader window renders context text. The browser user agent reported
-Chromium major 156. Normal page instrumentation was used; these numbers are
-scoped observations, not total CPU utilization, leak-freedom proof, a standalone
-Chrome qualification or a universal performance target pass. External-browser
-coverage is limited to the supplementary desktop spot checks below. The selected production code is unchanged from the source above;
-older model/native checks retain their separate exact source references.
-
-The browser qualification baseline is the built-in Chromium browser in its
-separate testing profile. Supplementary Safari 27.2 desktop spot checks covered
-the real dashboard, far-tail retained search, request-ID and message-section
-copying, adjacent message navigation and live list metadata updates. Safari's
-selected live reader, attachment interactions and responsive/resource behavior
-are not qualified; they are outside the local acceptance baseline. These spot
-checks do not establish general Safari compatibility.
-
-## Browser inspector
-
-The Activity tab opens independently of capture being enabled. The list reads
-metadata; selecting a request loads its bounded retained ranges in a dedicated
-browser worker. Submitted input shares a readable view with structured API output. Model input
-shows observed prepared text followed by producer output. When supported API wire
-is unavailable, the submitted view retains a separately labeled producer fallback.
-Input token IDs, producer text, original API wire and invocation events remain
-distinct evidence choices.
-Unavailable representations and capture gaps are labeled.
-The reader worker is addressed through the stable inspector component root,
-including when request selection originates from a nested list/button scope.
-Elapsed spans match loaded request IDs across framework proxy wrappers. Metadata
-and status foregrounds use Activity-scoped theme mixes; representative light/dark
-contrast checks passed, without implying a complete accessibility audit.
-
-The worker keeps full retained text for literal, case-sensitive search and
-copy/download, with a 64 MiB per-selection preview ceiling. Search and exports
-are explicitly partial during loading or at that ceiling. No prompt bodies are
-written to browser localStorage. At most 20 request reading positions persist
-in memory during the page session; subscriptions, worker reads and timers stop
-when Activity or the browser page is hidden.
-
-Sparse line checkpoints subdivide huge messages, newline-free lines and runs
-of combining characters. Only a bounded viewport is mounted, with at most 200
-text rows per worker response. A bounded physical scroll axis avoids browser
-maximum element-height limits for very tall documents. The semantic rail,
-outline and search target logical message/character anchors. Live appends retain
-that anchor unless Follow output is selected. The outline pages through the
-whole worker index with at most 128 metadata-only entries at once. Paging does
-not scroll the document; selecting an entry resolves its stable key against the
-current index. Scrolling, rail jumps, search and previous/next navigation reveal
-the corresponding outline page; live appends preserve a manually browsed page.
-A Message/block ordinal names the current position in the full section index,
-which also includes tool definitions, options and raw evidence blocks.
-The semantic rail declares a vertical slider with a current section label.
-Home and End move to first input and followed output; Up and Down navigate
-sections. Synthetic browser checks verified those keys, a visible focus outline,
-and keyboard opening/selection in the message outline. This does not qualify
-all screen-reader or touch behavior; the scoped live text-selection check above
-does not cover every browser selection gesture.
-
-The rail covers all indexed rows with at most 256 aggregate segments. Grouped
-segments report their section range/count and mixed roles explicitly; previews
-are bounded to 128 characters. Full bodies and sparse line indexes stay in the
-worker. Search rail marks remain capped at 500, with full match counts retained.
-Synthetic checks cover over 4,100 sections and a 2 MiB section without full
-bodies in outline/rail updates. The scoped rendered stress checks above do not
-qualify arbitrary documents or every browser engine.
-
-Observed dashboard waiting/prefill/generation rows link to the parent Activity
-request. Links support modified clicks and browser history. Uncorrelated or
-synthetic aggregate rows remain unlinked. Interface strings use locale keys;
-new non-English entries currently use the repository's English fallback.
-
-## Readable API output
-
-The inspector worker projects captured JSON/SSE from the four generation API
-families into separate answer, API-exposed reasoning, refusal, error and tool-call
-sections. It consumes the formatter output that was actually retained, without
-re-running a model's thinking/tool parser or changing inference capture. Raw
-producer text and API wire evidence remain available unchanged. Models/backends
-that do not expose reasoning or tools in the API do not acquire invented ones.
-The Structured API output evidence choice shows this projection without input.
-
-Choice, Anthropic block and Responses output-item indexes remain separate.
-Fragmented tool arguments append to their own call; initial empty Anthropic tool
-input is replaced by the argument deltas. Responses item-done and terminal full
-snapshots replace earlier deltas, avoiding duplicate reasoning/answers/calls and
-preserving authoritative final text. Responses sequence duplicates/reordering
-and gaps are flagged. Unknown blocks/events, malformed envelopes, missing starts,
-interruption and hard limits are explicitly partial. A captured terminal envelope
-means protocol termination was observed; it does not mean inference succeeded or
-that capture had no gaps. API errors appear in their own inert text section.
-
-Parsing runs only in the selected inspector's dedicated browser worker. It is
-incremental across fetched ranges and UTF-8 decoder boundaries. It supports JSON
-keepalive whitespace, SSE comments, CRLF and multiline data fields. Per-projection
-limits are 1 Mi-character SSE events/lines, 16 Mi-character JSON bodies and output
-text, 4,096 sections, and JSON structural limits of 32,768 punctuation/nodes and
-64 levels before native parsing. Tool names/IDs/namespaces are bounded at 256
-characters; truncation is explicitly partial. These are additional to the aggregate 64 MiB
-selection fetch limit. Hitting them stops/coarsens this readable projection; it
-does not discard the retained wire or throttle inference. Search/copy/download
-operate on the selected view, visibly partial for incomplete projections, capture
-gaps or loading/size limits. The API wire choice supports inspection of fields
-that the readable projection does not map, including signatures and usage.
-
-`tests/test_activity_output.py` feeds the actual four production streaming
-formatters' synthetic-engine output, actual response builders and formatter error
-paths through the browser parser at multiple fragment sizes. These checks cover
-formatting, not full authenticated endpoint execution or real-model behavior.
-`activity_output.test.cjs` covers fragmented/multiple calls and choices, block
-ordering, final replacement, errors/partial/unknown data, sequences and resource
-limits. The actual worker harness additionally checks a long Unicode response,
-far-tail search, complete selected exports, input/output ordering and preservation
-of model/raw/JSON evidence modes. Rendered readable-output projection across all
-API families remains unqualified.
-
-## Limitations and remaining work
-
-- Qualify real-browser reconnect and backpressure behavior against the bounded
-  sequenced replay routes and browser cursor handling. Synthetic route checks
-  cover initial/poll serialization, independent
-  channels, shared-head delivery, source changes, session revocation during reads,
-  missing selected detail and restart invalidation.
-- Qualify invocation selection/options in a real browser and detailed snapshots
-  under load. Final backend options, richer cache evidence and broader
-  backend/endpoint qualification remain beyond the eight short text cases
-  described above. Backend resolution/evidence labels are implemented; they are
-  not qualification badges. Other engines and extended generation paths still
-  rely on mock-model checks rather than real-model validation.
-- `raw_output` currently means engine-producer text before API formatting.
-  Engines with their own native parsers may already have transformed it;
-  universal pre-parser raw generation is not yet qualified.
-- Broader external-browser, inspector, navigation, dashboard-link and live-control
-  interactions remain outside the scoped built-in-browser qualification. Qualify larger
-  original-image previews and browser pixel budgets;
-  supported retained images use lazy previews and unsupported media remain inert.
-- Qualify physical-budget behavior under disk-full conditions, pinned SQLite
-  readers, reclamation/migration and very large histories. Current page limits
-  conservatively reserve part of the budget for WAL/sidecars; configured disk
-  bytes are not a promise of equal logical content capacity.
-  The focused pinned-reader case now passes; it does not replace sustained,
-  multi-request, disk-full or large-history qualification.
-- Expand the scoped hot-path, worker-memory and output-fidelity trials to
-  additional cancellations, endpoint modes and optional engines. Recorded trials
-  do not establish universal performance or cross-run numerical identity.
-- Require source-matched canonical Release evidence before installation;
-  independent focused-source adoption remains a separate qualification gate.
-- The bounded semantic walk runs once before preprocessing. Qualify its overhead
-  with concurrent requests, large structures and actual model serving; the current
-  checks prove structural caps and handoff behavior, not serving performance.
-- A small retained PNG was decoded through the actual preview route in the
-  browser. Browser pixel-decoder memory, repeated
-  large-image throughput and native restart/long-running viewer lifecycle remain
-  to be qualified. The first source slice now includes supported inline previews.
-- Actual rendered-browser validation, text selection and message-copy interaction
-  across virtualized windows, paged outline/aggregate rail navigation and
-  deep-link history polish remain to be qualified.
-  Native browser Find sees only mounted text; use the inspector search instead.
-
-No source publication, packaged binary, compatibility guarantee or upstream
-submission is implied by this in-progress recipe.
+## Known issues and limitations
+
+Reported interaction issues have not been independently reproduced in a focused
+investigation; causes are unconfirmed:
+
+- Following output may not remain pinned after manually scrolling to the
+  bottom.
+- Copy, download, and the message/block counter may flicker during updates.
+- Switching representation or scope may show unavailable content until the
+  request is selected again.
+- The scroll rail may move in visible steps and may not consistently reach its
+  endpoints.
+
+Qualification is limited to the built-in Chromium browser and documented
+synthetic/local scenarios. Safari and older operating systems, actual disk
+exhaustion, broad browser coverage, arbitrary models/media, long contexts,
+concurrent production load, sustained persistence stalls, universal
+performance, and independently composed builds remain outside the established
+scope. Short composed-build model and performance trials are descriptive only;
+they do not imply that Activity accelerates inference or passes a general
+performance target.
