@@ -32,8 +32,13 @@ addition.
 | [Recover a hidden menu-bar icon without blocking startup](features/nonblocking-menubar-warning.md) | `nonblocking-menubar-warning` | Topic |
 | [Hierarchical allowances and interactive control panel](features/inference-allowances.md) | `inference-allowances` | Bundle component |
 | [Choose reusable KV and image retention per request](features/request-cache-policy.md) | `request-cache-policy` | Topic |
+| [Observe active requests and bounded request history](features/request-activity.md) | `request-activity` | Experimental topic |
 
 **Topic** means a public focused branch or commit exists at the linked revision.
+**Experimental topic** means a focused source snapshot is fixed for evaluation;
+verify exact source availability before adoption, and treat independent target
+qualification as pending. It does not imply compatibility with a new upstream
+revision.
 **Prepared topic (local)** means a focused local source branch and recipe are
 prepared, but public publication is pending. Qualification status is separate
 and stated in each recipe; prepared source is not automatically ready to ship.
@@ -68,7 +73,7 @@ For the coupled inference components, the [source map](inference-adoption-map.md
 names the actual runtime/configuration boundaries and extraction order. It
 distinguishes runtime bypass switches from source independence.
 
-The catalog covers the 18 registered additions, the two historical entries and
+The catalog covers the 19 registered additions, the two historical entries and
 the inference bundle. It is not an attribution claim for every branch or
 upstream subsystem in this fork. Native custom kernels are upstream build
 components, not a new downstream feature supplied by these recipes.
