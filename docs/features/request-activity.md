@@ -14,8 +14,8 @@ snapshot-based live delivery feed a top-level Activity browser tab. The initial
 inspector has submitted/prepared views, an outline, a semantic rail, literal
 search, follow-output and copy/download. Scoped synthetic-browser, text/image
 model and concurrent-capture qualification is recorded below, including bounded
-Chromium browser resource measurements. Safari and independent adoption
-qualification remain pending. Native artifacts require separate, source-matched
+Chromium browser resource measurements. The built-in Chromium browser is the
+local acceptance baseline; independent adoption qualification remains pending. Native artifacts require separate, source-matched
 canonical Release validation before installation.
 
 The foundation uses one background SQLite writer and separately bounded content
@@ -951,9 +951,17 @@ The full page had 6,859–7,405 DOM elements across the sampled states; only the
 bounded reader window renders context text. The browser user agent reported
 Chromium major 156. Normal page instrumentation was used; these numbers are
 scoped observations, not total CPU utilization, leak-freedom proof, a standalone
-Chrome qualification or a universal performance target pass. Safari remains
-unqualified. The selected production code is unchanged from the source above;
+Chrome qualification or a universal performance target pass. External-browser
+coverage is limited to the supplementary desktop spot checks below. The selected production code is unchanged from the source above;
 older model/native checks retain their separate exact source references.
+
+The browser qualification baseline is the built-in Chromium browser in its
+separate testing profile. Supplementary Safari 27.2 desktop spot checks covered
+the real dashboard, far-tail retained search, request-ID and message-section
+copying, adjacent message navigation and live list metadata updates. Safari's
+selected live reader, attachment interactions and responsive/resource behavior
+are not qualified; they are outside the local acceptance baseline. These spot
+checks do not establish general Safari compatibility.
 
 ## Browser inspector
 
@@ -1070,8 +1078,8 @@ API families remains unqualified.
 - `raw_output` currently means engine-producer text before API formatting.
   Engines with their own native parsers may already have transformed it;
   universal pre-parser raw generation is not yet qualified.
-- Expand the scoped Chromium qualification to Safari and broader inspector,
-  navigation, dashboard-link and live-control interactions. Qualify larger
+- Broader external-browser, inspector, navigation, dashboard-link and live-control
+  interactions remain outside the scoped built-in-browser qualification. Qualify larger
   original-image previews and browser pixel budgets;
   supported retained images use lazy previews and unsupported media remain inert.
 - Qualify physical-budget behavior under disk-full conditions, pinned SQLite
