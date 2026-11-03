@@ -13,9 +13,10 @@ capture prepared input/tokens and producer output. Admin read endpoints and
 snapshot-based live delivery feed a top-level Activity browser tab. The initial
 inspector has submitted/prepared views, an outline, a semantic rail, literal
 search, follow-output and copy/download. Scoped synthetic-browser, text/image
-model and concurrent-capture qualification is recorded below. Final browser and
-resource checks, canonical Release verification and independent adoption
-qualification remain pending.
+model and concurrent-capture qualification is recorded below, including bounded
+Chromium browser resource measurements. Safari and independent adoption
+qualification remain pending. Native artifacts require separate, source-matched
+canonical Release validation before installation.
 
 The foundation uses one background SQLite writer and separately bounded content
 and lifecycle metadata. Producer methods enqueue immutable CPU observations;
@@ -66,12 +67,13 @@ memory configurations may need a smaller active limit or a larger memory budget.
 
 ## Source and adoption boundary
 
-- Availability: local focused implementation in progress; no public source
+- Availability: local focused implementation with scoped qualification; no public source
   snapshot is offered for adoption yet.
 - Discovery branch: `feature/request-activity`.
-- Complete focused source snapshot, including the required follow-ups and scoped
-  qualification notes: `3822a75d06042b7169e10ca9947c461282ee1578`.
-  This documentation tip does not replace the tested production references below.
+- Complete focused production snapshot, including the required follow-ups:
+  `3458d61ffb97dc915e283806b7397145cedca168`. The resize/layout follow-up and
+  its browser qualification are described below. Earlier backend and model
+  qualification references remain distinct from this UI follow-up.
 - Implementation snapshot for local qualification:
   `7fe132c12c3890bf1d744f70a0073e29db05d103`. This is a source reference,
   not a release, installation or public-availability claim.
@@ -105,8 +107,8 @@ memory configurations may need a smaller active limit or a larger memory budget.
   browser chat storage, extra database package or hosted service is required.
   Full runtime/composed-build isolation qualification remains pending.
 
-Apply the complete focused change from the baseline through the qualification
-source snapshot in an isolated target checkout. Later replay or UI commits depend on
+Apply the complete focused change from the baseline through the complete
+production snapshot in an isolated target checkout. Later replay or UI commits depend on
 the earlier capture, storage and integration work; they are not standalone
 features. Preserve the package, shared hooks, web assets, translations and tests
 together. Port shared-file conflicts against the selected target deliberately;
@@ -911,7 +913,47 @@ actual JSON grace and JSON/SSE keepalive classification, outstanding engine work
 content-capture refusal, disabled/closed scopes, terminal tool failure versus
 recovered prose and concurrent success/failure isolation. These synthetic checks
 qualify that integration boundary, not every backend's abort or full endpoint
-behavior. Real-model and native lifecycle qualification remain pending.
+behavior. Real-model qualification of these formatter-failure paths and native lifecycle
+qualification remain pending.
+
+## Resize ordering and scoped Chromium qualification
+
+Production follow-up `3458d61ffb97dc915e283806b7397145cedca168` addresses two
+resize event orders. A taller viewport can clamp the old physical scroll position
+before `ResizeObserver` runs. The inspector checks measured dimensions before
+interpreting scroll events and their deferred callbacks. Consecutive layout-only
+notifications preserve the worker's current semantic anchor rather than sending
+an unacknowledged row back as a new navigation request. Explicit user scrolling
+still moves the viewport, and a new worker still restores its saved position.
+This uses constant additional state and avoids canvas measurement for unchanged
+viewport dimensions on ordinary scroll events.
+
+The focused document/inspector Node suites pass 60 checks, including the
+pre-measurement clamp and consecutive layout notifications with stale rows.
+An actual synthetic Chromium browser check first reproduced a searched section
+moving from ordinal 1005 to 1004 after request switching and a width/height
+roundtrip. A dimension-only guard was insufficient when duplicate notifications
+arrived before acknowledgement; the final layout protocol preserves ordinal
+1005 across that exact sequence. Subsequent Page Up changes the reading position,
+and live tail-follow survives a height change and disengages on user scroll.
+
+The fixture has 1,004 messages, a newline-free 4 MiB string, a 256 KiB tool result,
+Unicode text and a tiny retained PNG. Earlier scoped browser checks confirmed
+loading-time partial-search labels followed by the completed far-tail match,
+4,195,255 literal matches with bounded rendering, full-view copying, and a dragged
+selection remaining intact during live appends. Those checks are not a full
+clipboard, accessibility or readable-output audit.
+
+For the follow-up, a 30-second mixed search/reflow sample recorded 3,492 frames,
+9.7 ms p95 frame intervals, a 58.4 ms maximum interval, no observed long tasks,
+and implementation-reported used JS heap between 31,898,059 and 57,086,982 bytes.
+The full page had 6,859–7,405 DOM elements across the sampled states; only the
+bounded reader window renders context text. The browser user agent reported
+Chromium major 156. Normal page instrumentation was used; these numbers are
+scoped observations, not total CPU utilization, leak-freedom proof, a standalone
+Chrome qualification or a universal performance target pass. Safari remains
+unqualified. The selected production code is unchanged from the source above;
+older model/native checks retain their separate exact source references.
 
 ## Browser inspector
 
@@ -952,14 +994,16 @@ The semantic rail declares a vertical slider with a current section label.
 Home and End move to first input and followed output; Up and Down navigate
 sections. Synthetic browser checks verified those keys, a visible focus outline,
 and keyboard opening/selection in the message outline. This does not qualify
-all screen-reader, touch or text-selection behavior.
+all screen-reader or touch behavior; the scoped live text-selection check above
+does not cover every browser selection gesture.
 
 The rail covers all indexed rows with at most 256 aggregate segments. Grouped
 segments report their section range/count and mixed roles explicitly; previews
 are bounded to 128 characters. Full bodies and sparse line indexes stay in the
 worker. Search rail marks remain capped at 500, with full match counts retained.
 Synthetic checks cover over 4,100 sections and a 2 MiB section without full
-bodies in outline/rail updates; rendered-browser interaction remains unqualified.
+bodies in outline/rail updates. The scoped rendered stress checks above do not
+qualify arbitrary documents or every browser engine.
 
 Observed dashboard waiting/prefill/generation rows link to the parent Activity
 request. Links support modified clicks and browser history. Uncorrelated or
@@ -1007,7 +1051,8 @@ formatting, not full authenticated endpoint execution or real-model behavior.
 ordering, final replacement, errors/partial/unknown data, sequences and resource
 limits. The actual worker harness additionally checks a long Unicode response,
 far-tail search, complete selected exports, input/output ordering and preservation
-of model/raw/JSON evidence modes. Rendered-browser behavior remains unqualified.
+of model/raw/JSON evidence modes. Rendered readable-output projection across all
+API families remains unqualified.
 
 ## Limitations and remaining work
 
@@ -1025,8 +1070,8 @@ of model/raw/JSON evidence modes. Rendered-browser behavior remains unqualified.
 - `raw_output` currently means engine-producer text before API formatting.
   Engines with their own native parsers may already have transformed it;
   universal pre-parser raw generation is not yet qualified.
-- Complete browser qualification of the inspector, navigation, dashboard links
-  and live controls beyond the initial synthetic spot checks. Qualify larger
+- Expand the scoped Chromium qualification to Safari and broader inspector,
+  navigation, dashboard-link and live-control interactions. Qualify larger
   original-image previews and browser pixel budgets;
   supported retained images use lazy previews and unsupported media remain inert.
 - Qualify physical-budget behavior under disk-full conditions, pinned SQLite
@@ -1035,9 +1080,11 @@ of model/raw/JSON evidence modes. Rendered-browser behavior remains unqualified.
   bytes are not a promise of equal logical content capacity.
   The focused pinned-reader case now passes; it does not replace sustained,
   multi-request, disk-full or large-history qualification.
-- Qualify hot-path overhead, worker memory, faithful raw/parsed output,
-  cancellations, all required API modes and optional-engine boundaries.
-- Validate a fully composed private build separately from the focused source.
+- Expand the scoped hot-path, worker-memory and output-fidelity trials to
+  additional cancellations, endpoint modes and optional engines. Recorded trials
+  do not establish universal performance or cross-run numerical identity.
+- Require source-matched canonical Release evidence before installation;
+  independent focused-source adoption remains a separate qualification gate.
 - The bounded semantic walk runs once before preprocessing. Qualify its overhead
   with concurrent requests, large structures and actual model serving; the current
   checks prove structural caps and handoff behavior, not serving performance.
